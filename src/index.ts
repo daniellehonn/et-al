@@ -1302,6 +1302,12 @@ function renderApp(appName: string): string {
     aside.meta{width:230px;flex:none;padding:30px 22px;border-left:1px solid rgba(30,41,59,.08);background:#f7f9fb;display:flex;flex-direction:column;gap:22px}
     .meta-label{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:#9aa6b3;margin-bottom:6px}
     .meta-value{display:flex;align-items:center;gap:8px;font-size:13px}
+    .meta-edit{width:100%;font-family:inherit;font-size:13px;color:#1e2530;background:#fff;border:1px solid rgba(30,41,59,.12);border-radius:7px;padding:6px 8px;outline:none;cursor:pointer}
+    .meta-edit:hover{border-color:rgba(30,41,59,.28)}
+    .meta-edit:focus{border-color:#7c93ab;box-shadow:0 0 0 3px rgba(124,147,171,.14)}
+    .title-edit{width:100%;margin:0 0 12px;font-size:27px;font-weight:700;letter-spacing:-.015em;line-height:1.2;font-family:inherit;color:#1e2530;background:transparent;border:1px solid transparent;border-radius:8px;padding:2px 6px;margin-left:-7px;outline:none}
+    .title-edit:hover{border-color:rgba(30,41,59,.14)}
+    .title-edit:focus{background:#fff;border-color:#7c93ab;box-shadow:0 0 0 3px rgba(124,147,171,.14)}
     .tag-pill{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:#4a5563;background:#e9eef4;padding:4px 9px;border-radius:20px}
     .linked-row{display:flex;gap:8px;align-items:center;font-size:12.5px;color:#4a5563;background:none;border:0;padding:0;cursor:pointer;text-align:left}
     .linked-row:hover{color:#1e2530}
@@ -1475,6 +1481,7 @@ function renderApp(appName: string): string {
       return pad2(d.getDate()) + '·' + pad2(d.getMonth() + 1);
     }
     function pad2(n) { return String(n).padStart(2, '0'); }
+    function isoDate(ts) { var d = new Date(ts * 1000); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
     function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
     function clock(ts) { var d = new Date(ts * 1000); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
     function formatDue(ts) {
@@ -2004,29 +2011,57 @@ function renderApp(appName: string): string {
 
     function renderSidebarMeta(item) {
       var tags = item.tags || [], related = item.related || [];
-      var parent = item.parent_id ? state.items.find(function(c) { return c.id === item.parent_id; }) : null;
       var backlinks = state.backlinks || [];
       var overdue = item.due_date && item.due_date < Date.now() / 1000 && item.status !== 'done';
-      var si = getSpaceInfo(item);
+
+      // Every field the model lets you change is editable here. Writes go out on
+      // change; nothing is staged, so there is no save button to forget.
+      function select(field, options, current) {
+        return '<select class="meta-edit" data-field="' + field + '">' + options.map(function (o) {
+          return '<option value="' + esc(o.value) + '"' + (o.value === current ? ' selected' : '') + '>' + esc(o.label) + '</option>';
+        }).join('') + '</select>';
+      }
+      function field(label, control) {
+        return '<div><div class="meta-label">' + label + '</div>' + control + '</div>';
+      }
+
+      var spaceOptions = [{ value: 'identity', label: '◈ Identity' }]
+        .concat(SPACE_KEYS.map(function (k) { return { value: k, label: SPACES[k].label }; }))
+        .concat([{ value: '', label: '— Unsorted —' }]);
+      var typeOptions = TYPE_KEYS.map(function (k) { return { value: k, label: TYPES[k].label }; });
+      var statusOptions = SCHEMA.statuses.map(function (k) { return { value: k, label: k }; });
+
+      // "Traces to" — the parent that puts this item under an identity or a goal.
+      var anchors = state.items.filter(function (c) {
+        return c.id !== item.id && (c.space === 'identity' || c.type === 'goal' || c.type === 'page');
+      });
+      var parentOptions = [{ value: '', label: '— none —' }].concat(anchors.map(function (c) {
+        return { value: c.id, label: (c.space === 'identity' ? '◈ ' : '') + c.title };
+      }));
+      var parentKnown = !item.parent_id || anchors.some(function (c) { return c.id === item.parent_id; });
+      if (!parentKnown) parentOptions.push({ value: item.parent_id, label: '(current parent)' });
+
       return '<aside class="meta">' +
-        (item.parent_id ? '<div><div class="meta-label">Parent</div>' +
-          '<button class="linked-row" data-open="' + esc(item.parent_id) + '"><span class="num">↑</span>' +
-          esc(parent ? parent.title : item.parent_id) + '</button></div>' : '') +
-        '<div><div class="meta-label">Space</div><div class="meta-value"><span class="dot" style="background:' + si.dot + '"></span>' + esc(si.label) + '</div></div>' +
-        '<div><div class="meta-label">Type</div><div class="meta-value">' + esc(TYPES[typeOf(item)].label) + '</div></div>' +
-        '<div><div class="meta-label">Status</div><div class="meta-value">' + esc(item.status) + '</div></div>' +
-        (item.due_date ? '<div><div class="meta-label">Due</div><div class="meta-value" style="color:' + (overdue ? '#b4776f' : '#4a5563') + ';font-family:IBM Plex Mono,monospace;font-size:11px">' + esc(formatDue(item.due_date)) + '</div></div>' : '') +
-        (tags.length ? '<div><div class="meta-label">Tags</div><div style="display:flex;flex-wrap:wrap;gap:6px">' +
-          tags.map(function (tag) { return '<span class="tag-pill">' + esc(tag) + '</span>'; }).join('') + '</div></div>' : '') +
-        (related.length ? '<div><div class="meta-label">Linked →</div><div style="display:flex;flex-direction:column;gap:7px">' +
+        field('Traces to ↑', select('parent_id', parentOptions, item.parent_id || '') +
+          (item.parent_id ? '<button class="linked-row" data-open="' + esc(item.parent_id) + '" style="margin-top:6px">' +
+            '<span class="num">↑</span>open parent</button>' : '')) +
+        field('Space', select('space', spaceOptions, item.space || '')) +
+        field('Type', select('type', typeOptions, typeOf(item))) +
+        field('Status', select('status', statusOptions, item.status)) +
+        field('Due', '<input class="meta-edit" type="date" data-field="due_date" value="' +
+          esc(item.due_date ? isoDate(item.due_date) : '') + '">' +
+          (overdue ? '<div class="meta-label" style="color:#b4776f;margin-top:5px">overdue</div>' : '')) +
+        field('Tags', '<input class="meta-edit" data-field="tags" value="' + esc(tags.join(', ')) +
+          '" placeholder="comma, separated">') +
+        (related.length ? field('Linked →', '<div style="display:flex;flex-direction:column;gap:7px">' +
           related.map(function (id) {
             var target = state.items.find(function (candidate) { return candidate.id === id; });
             return '<button class="linked-row" data-open="' + esc(id) + '"><span class="num">→</span>' + esc(target ? target.title : id) + '</button>';
-          }).join('') + '</div></div>' : '') +
-        (backlinks.length ? '<div><div class="meta-label">Backlinks ←</div><div style="display:flex;flex-direction:column;gap:7px">' +
-          backlinks.map(function(bl) {
+          }).join('') + '</div>') : '') +
+        (backlinks.length ? field('Backlinks ←', '<div style="display:flex;flex-direction:column;gap:7px">' +
+          backlinks.map(function (bl) {
             return '<button class="linked-row" data-open="' + esc(bl.id) + '"><span class="num">←</span>' + esc(bl.title) + '</button>';
-          }).join('') + '</div></div>' : '') +
+          }).join('') + '</div>') : '') +
       '</aside>';
     }
 
@@ -2043,7 +2078,7 @@ function renderApp(appName: string): string {
         ? '<textarea class="editor" id="editor">' + esc(item.content || '') + '</textarea>'
         : '<div class="prose">' + renderProse(item.content) + '</div>';
       return '<div class="detail"><div class="detail-main">' + detailHead(item) +
-        '<h1 class="detail-title">' + esc(item.title) + '</h1>' +
+        '<input class="title-edit" data-field="title" value="' + esc(item.title) + '">' +
         '<div class="meta-line">' + esc(TYPES[type].label) + ' · N°' + num(item) + ' · Edited ' + stamp(item.updated_at) + '</div>' +
         bodyHtml +
         renderSubtasks(item) +
@@ -2164,6 +2199,20 @@ function renderApp(appName: string): string {
       });
       var back = document.getElementById('back');
       if (back) back.onclick = goHome;
+      document.querySelectorAll('[data-field]').forEach(function (element) {
+        var field = element.dataset.field;
+        // Selects and dates commit on change; free text commits on blur or Enter,
+        // so a re-render never yanks the cursor mid-word.
+        if (element.tagName === 'SELECT' || element.type === 'date') {
+          element.onchange = function () { commitField(field, element.value); };
+          return;
+        }
+        element.onblur = function () { commitField(field, element.value); };
+        element.onkeydown = function (event) {
+          if (event.key === 'Enter') { event.preventDefault(); element.blur(); }
+          if (event.key === 'Escape') { element.value = String(activeItem()[field] || ''); element.blur(); }
+        };
+      });
       document.querySelectorAll('[data-act]').forEach(function (element) {
         element.onclick = function () { itemAction(element.dataset.act); };
       });
@@ -2180,6 +2229,36 @@ function renderApp(appName: string): string {
       };
       bindCapture();
       bindUnlock();
+    }
+
+    // One field, one PATCH. Empty string means "clear it" for the nullable fields.
+    function commitField(field, raw) {
+      var item = activeItem();
+      if (!item) return;
+      var value = raw;
+      if (field === 'tags') {
+        value = raw.split(',').map(function (t) { return t.trim(); }).filter(Boolean);
+        if (value.join(',') === (item.tags || []).join(',')) return;
+      } else if (field === 'due_date') {
+        value = raw ? Math.floor(new Date(raw + 'T00:00:00').getTime() / 1000) : null;
+        if (value === (item.due_date || null)) return;
+      } else if (field === 'space') {
+        value = raw || null;
+        if (value === (item.space || null)) return;
+      } else if (field === 'parent_id') {
+        value = raw || null;
+        if (value === (item.parent_id || null)) return;
+        if (value === item.id) { toast('An item cannot be its own parent'); render(); return; }
+      } else if (field === 'title') {
+        value = raw.trim();
+        if (!value) { toast('Title cannot be empty'); render(); return; }
+        if (value === item.title) return;
+      } else if (value === item[field]) return;
+
+      var updates = {};
+      updates[field] = value;
+      patchItem(item.id, updates);
+      toast(field.replace('_', ' ') + ' updated');
     }
 
     function itemAction(action) {
