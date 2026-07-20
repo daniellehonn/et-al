@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
+    "predeploy": "git diff --quiet HEAD || (echo '\\nRefusing to deploy: working tree is dirty. Commit first, or the deployed schema will not match HEAD.\\n' && exit 1)",
     "deploy": "wrangler deploy",
     "db:create": "wrangler d1 create et-al",
     "db:migrate:local": "wrangler d1 migrations apply et-al --local",
