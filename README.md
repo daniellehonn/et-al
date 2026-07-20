@@ -11,18 +11,22 @@ This is intentionally not a Notion or Obsidian clone. The core idea is a private
 - Claude/Codex can eventually read, write, sort, and review items through MCP
 - the UI stays small enough to keep using after the novelty wears off
 
-## Current Shape (v4 — R2 vault)
+## Current Shape (v5 — nested R2 vault)
 
-The system is now an **Obsidian-style markdown vault** (see
+The system is an **Obsidian-style markdown vault with nested folders** (see
 [`docs/architecture-r2.md`](docs/architecture-r2.md)):
 
 - Cloudflare Worker backend
-- **R2 bucket (`VAULT`) is the source of truth** — one markdown file per page,
-  with YAML frontmatter and `[[Title]]` wikilinks
-- **D1 is a derived, rebuildable index** (titles, link graph, FTS). Losing it is
-  recoverable via `POST /api/reindex`; the bucket always wins
+- **R2 bucket (`VAULT`) is the source of truth** — a directory tree of markdown
+  files. **Folders are spaces/subspaces** (nest freely); a page's space is the
+  folder it lives in. Each folder may hold an optional `_space.md` (metadata +
+  overview note)
+- **D1 is a derived, rebuildable index** (space tree, titles, link graph, FTS).
+  Losing it is recoverable via `POST /api/reindex`; the bucket always wins
+- **Three distinct structures:** folder = area, `parent:` link = goal breakdown,
+  inline `[[wikilink]]` = lateral reference
 - **Notion-style block editor** with `/` slash commands, `[[` page autocomplete,
-  and seamless live backlinks ("Linked mentions")
+  a folder tree nav, breadcrumbs, and seamless live backlinks + goal-children
 - REST API for browser/mobile usage
 - Streamable HTTP MCP endpoint for AI agents
 
@@ -54,17 +58,19 @@ URL: https://et-al.daniellehonnn.workers.dev/mcp
 Authorization: Bearer <ET_AL_API_KEY>
 ```
 
-Available tools (v4, operating over the vault):
+Available tools (v5, operating over the nested vault):
 
-- `get_schema` — canonical enums + link semantics
-- `list_pages`
+- `get_schema` — canonical enums + the three structures (folder / parent / wikilink)
+- `list_spaces` — the full folder tree with page counts
+- `get_space` / `create_space` / `update_space` / `delete_space` — folders + `_space.md`
+- `list_pages` — filter by `space_path` (+`recursive` for subtrees), type, status, parent
 - `get_page`
-- `create_page`
-- `update_page` — renaming rewrites `[[old title]]` in every linking page
+- `create_page` — into a `space_path`; `parent` is the goal it breaks down
+- `update_page` — moving `space_path` moves the file; renaming rewrites `[[old title]]` everywhere
 - `delete_page`
 - `search_pages`
 - `get_backlinks` — who links here, with context + parent/inline kind
-- `get_children` — pages whose `parent` link resolves here
+- `get_children` — pages whose `parent` goal-link resolves here
 - `list_unresolved_links` — `[[titles]]` with no page yet (growth edges)
 - `reindex_vault` — rebuild the D1 index from the R2 bucket
 
@@ -120,10 +126,15 @@ curl -X POST -H "x-api-key: $ET_AL_API_KEY" https://<worker>/api/migrate-from-d1
 curl -X POST -H "x-api-key: $ET_AL_API_KEY" https://<worker>/api/reindex
 ```
 
-`migrate-from-d1` writes one markdown file per legacy item (converting
+`migrate-from-d1` writes one markdown file per legacy item into the matching
+top-level folder (`work→career`, `ideas→projects`, and the old `identity` items
+fold into `life/` — re-file them anywhere once it's all folders), converting
 `related`/`parent_id` UUIDs into `[[Title]]` links and any `metadata.checklist`
-into `- [ ]` task lines). It is safe to re-run. Once the vault looks right, the
+into `- [ ]` task lines. It is safe to re-run. Once the vault looks right, the
 `items` table can be dropped.
+
+Note: the current index migration is `0006_nested_spaces.sql` (schema v5). Apply
+migrations through 0006 before deploying the v5 worker.
 
 Then open the local Worker URL shown by Wrangler.
 

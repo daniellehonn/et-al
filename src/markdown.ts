@@ -3,25 +3,28 @@
 // directly with `node --experimental-strip-types`. The R2 vault stores exactly
 // what these functions emit; the D1 index is derived from what they parse.
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const TYPE_KEYS = ["page", "goal", "idea", "task", "link"] as const;
-export const SPACE_KEYS = ["identity", "school", "career", "learning", "projects", "life", "saved"] as const;
 export const STATUS_KEYS = ["active", "paused", "done", "archived", "inbox"] as const;
-export const UNSORTED = "unsorted";
+// Spaces are folders now, not a fixed enum. These are only the *seed* top-level
+// folders a fresh vault starts with; the user can nest and add freely, and the
+// folder tree in R2 is the source of truth (there is no space enum to drift).
+export const SEED_SPACES = ["career", "school", "life", "learning"] as const;
+// The reserved filename that carries a folder's metadata + overview note.
+export const SPACE_FILE = "_space.md";
 
 export type ItemType = (typeof TYPE_KEYS)[number];
-export type ItemSpace = (typeof SPACE_KEYS)[number];
 export type ItemStatus = (typeof STATUS_KEYS)[number];
 
 export interface Frontmatter {
   id: string;
   title: string;
   type: ItemType;
-  space: ItemSpace | null;
+  // No `space` field: a page's space IS the folder it lives in (its R2 key path).
   status: ItemStatus;
   tags: string[];
-  parent: string | null; // the linked title, e.g. "Creative AI-native dev identity"
+  parent: string | null; // the parent goal's title (goal breakdown), e.g. "Land a summer internship"
   due: number | null; // unix seconds
   created_at: number;
   updated_at: number;
@@ -31,6 +34,25 @@ export interface Frontmatter {
 export interface ParsedPage {
   frontmatter: Frontmatter;
   body: string;
+}
+
+// A folder's metadata + overview note, stored at `{spacePath}/_space.md`.
+// Optional: a folder still exists if it merely contains pages.
+export interface SpaceMeta {
+  id: string;
+  name: string;          // display name (folder segment is the slug)
+  color: string | null;  // nav accent
+  icon: string | null;   // emoji/glyph
+  description: string | null;
+  sort: number | null;   // nav ordering
+  created_at: number;
+  updated_at: number;
+  extra: Record<string, string>;
+}
+
+export interface ParsedSpace {
+  meta: SpaceMeta;
+  body: string; // the space's overview note
 }
 
 export interface WikiLink {
@@ -58,10 +80,57 @@ export function slugify(title: string): string {
   return base || "untitled";
 }
 
-export function pageKey(space: ItemSpace | null, title: string, disambig?: string): string {
-  const folder = space ?? UNSORTED;
+// A folder segment slug (for a space/subspace name). Same rules as slugify.
+export function segify(name: string): string {
+  return slugify(name);
+}
+
+// Normalize a space path: strip slashes, drop any trailing _space.md, collapse
+// empties. "" = the vault root (a page can live at the top level).
+export function normalizeSpacePath(path: string | null | undefined): string {
+  if (!path) return "";
+  return String(path)
+    .replace(/\\/g, "/")
+    .split("/")
+    .map((s) => s.trim())
+    .filter((s) => s && s !== SPACE_FILE)
+    .join("/");
+}
+
+export function pageKey(spacePath: string | null, title: string, disambig?: string): string {
+  const folder = normalizeSpacePath(spacePath);
   const slug = slugify(title) + (disambig ? `-${disambig}` : "");
-  return `${folder}/${slug}.md`;
+  return folder ? `${folder}/${slug}.md` : `${slug}.md`;
+}
+
+export function spaceFileKey(spacePath: string | null): string {
+  const folder = normalizeSpacePath(spacePath);
+  return folder ? `${folder}/${SPACE_FILE}` : SPACE_FILE;
+}
+
+export function isSpaceFile(key: string): boolean {
+  return key === SPACE_FILE || key.endsWith(`/${SPACE_FILE}`);
+}
+
+// The folder a given object key lives in (its space path). "" = root.
+export function spacePathOf(key: string): string {
+  const idx = key.lastIndexOf("/");
+  return idx === -1 ? "" : key.slice(0, idx);
+}
+
+// The immediate parent folder of a space path, or null at the top level.
+export function parentSpacePath(spacePath: string): string | null {
+  const norm = normalizeSpacePath(spacePath);
+  if (!norm) return null;
+  const idx = norm.lastIndexOf("/");
+  return idx === -1 ? "" : norm.slice(0, idx);
+}
+
+// The last segment (the folder's own slug), e.g. "career/internships" -> "internships".
+export function spaceLeaf(spacePath: string): string {
+  const norm = normalizeSpacePath(spacePath);
+  const idx = norm.lastIndexOf("/");
+  return idx === -1 ? norm : norm.slice(idx + 1);
 }
 
 // --------------------------------------------------------------------------
@@ -118,7 +187,10 @@ export function rewriteWikiLink(text: string, fromTitle: string, toTitle: string
 // --------------------------------------------------------------------------
 
 const KNOWN_KEYS = new Set([
-  "id", "title", "type", "space", "status", "tags", "parent", "due", "created", "updated",
+  "id", "title", "type", "status", "tags", "parent", "due", "created", "updated",
+]);
+const SPACE_KNOWN_KEYS = new Set([
+  "id", "name", "color", "icon", "description", "sort", "created", "updated",
 ]);
 
 function parseInlineArray(value: string): string[] {
@@ -174,17 +246,12 @@ export function parsePage(raw: string): ParsedPage {
 
   const now = Math.floor(Date.now() / 1000);
   const rawType = stripQuotes(fmMap.type ?? "");
-  const rawSpace = stripQuotes(fmMap.space ?? "");
   const rawStatus = stripQuotes(fmMap.status ?? "");
 
   const frontmatter: Frontmatter = {
     id: stripQuotes(fmMap.id ?? "") || crypto.randomUUID(),
     title: stripQuotes(fmMap.title ?? "") || "Untitled",
     type: (TYPE_KEYS as readonly string[]).includes(rawType) ? (rawType as ItemType) : "page",
-    space:
-      rawSpace && rawSpace !== UNSORTED && (SPACE_KEYS as readonly string[]).includes(rawSpace)
-        ? (rawSpace as ItemSpace)
-        : null,
     status: (STATUS_KEYS as readonly string[]).includes(rawStatus) ? (rawStatus as ItemStatus) : "inbox",
     tags: fmMap.tags ? parseInlineArray(fmMap.tags) : [],
     parent: parentTitleFrom(fmMap.parent),
@@ -197,6 +264,63 @@ export function parsePage(raw: string): ParsedPage {
   return { frontmatter, body: body.replace(/^\n+/, "") };
 }
 
+// Split a raw markdown file into its frontmatter map, extra (unknown) keys, and body.
+function splitFrontmatter(raw: string, known: Set<string>): {
+  fmMap: Record<string, string>; extra: Record<string, string>; body: string;
+} {
+  const fmMap: Record<string, string> = {};
+  const extra: Record<string, string> = {};
+  let body = raw;
+  const fmMatch = raw.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (fmMatch) {
+    body = raw.slice(fmMatch[0].length);
+    for (const line of fmMatch[1].split("\n")) {
+      if (!line.trim() || /^\s*#/.test(line)) continue;
+      const idx = line.indexOf(":");
+      if (idx === -1) continue;
+      const key = line.slice(0, idx).trim();
+      const value = line.slice(idx + 1).trim();
+      if (known.has(key)) fmMap[key] = value;
+      else extra[key] = value;
+    }
+  }
+  return { fmMap, extra, body: body.replace(/^\n+/, "") };
+}
+
+export function parseSpaceFile(raw: string, fallbackName?: string): ParsedSpace {
+  const { fmMap, extra, body } = splitFrontmatter(raw, SPACE_KNOWN_KEYS);
+  const now = Math.floor(Date.now() / 1000);
+  const meta: SpaceMeta = {
+    id: stripQuotes(fmMap.id ?? "") || crypto.randomUUID(),
+    name: stripQuotes(fmMap.name ?? "") || fallbackName || "Untitled space",
+    color: fmMap.color != null ? stripQuotes(fmMap.color) : null,
+    icon: fmMap.icon != null ? stripQuotes(fmMap.icon) : null,
+    description: fmMap.description != null ? stripQuotes(fmMap.description) : null,
+    sort: fmMap.sort != null && /^-?\d+$/.test(stripQuotes(fmMap.sort)) ? parseInt(stripQuotes(fmMap.sort), 10) : null,
+    created_at: fmMap.created != null ? (toEpoch(fmMap.created) ?? now) : now,
+    updated_at: fmMap.updated != null ? (toEpoch(fmMap.updated) ?? now) : now,
+    extra,
+  };
+  return { meta, body };
+}
+
+export function serializeSpaceFile(space: ParsedSpace): string {
+  const m = space.meta;
+  const lines: string[] = ["---"];
+  lines.push(`id: ${m.id}`);
+  lines.push(`name: ${yamlScalar(m.name)}`);
+  if (m.color) lines.push(`color: ${yamlScalar(m.color)}`);
+  if (m.icon) lines.push(`icon: ${yamlScalar(m.icon)}`);
+  if (m.description) lines.push(`description: ${yamlScalar(m.description)}`);
+  if (m.sort != null) lines.push(`sort: ${m.sort}`);
+  lines.push(`created: ${isoOf(m.created_at)}`);
+  lines.push(`updated: ${isoOf(m.updated_at)}`);
+  for (const [key, value] of Object.entries(m.extra)) lines.push(`${key}: ${value}`);
+  lines.push("---");
+  const body = space.body.replace(/^\n+/, "").replace(/\n+$/, "");
+  return lines.join("\n") + "\n\n" + body + "\n";
+}
+
 function isoOf(epoch: number): string {
   return new Date(epoch * 1000).toISOString();
 }
@@ -207,7 +331,6 @@ export function serializePage(page: ParsedPage): string {
   lines.push(`id: ${fm.id}`);
   lines.push(`title: ${yamlScalar(fm.title)}`);
   lines.push(`type: ${fm.type}`);
-  if (fm.space) lines.push(`space: ${fm.space}`);
   lines.push(`status: ${fm.status}`);
   if (fm.tags.length) lines.push(`tags: [${fm.tags.map(yamlScalar).join(", ")}]`);
   if (fm.parent) lines.push(`parent: "[[${fm.parent}]]"`);

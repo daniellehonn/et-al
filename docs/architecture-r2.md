@@ -1,9 +1,28 @@
-# et al. — R2 Vault Architecture (v4)
+# et al. — R2 Vault Architecture (v5)
 
-This supersedes the D1-as-source-of-truth model. The system is now an
+This supersedes the D1-as-source-of-truth model. The system is an
 **Obsidian-style markdown vault** stored in an **R2 bucket**, with **D1 demoted
 to a disposable, rebuildable index**. Pages are Notion-style block documents that
 serialize to markdown; links are `[[wikilinks]]`; backlinks are seamless.
+
+## What changed in v5 (nested spaces)
+
+The identity layer is **gone**. Spaces are now **real folders** in the vault and
+**nest without limit** — the folder tree *is* the model, so there is no space
+enum to drift (the entire "invalid space / views disagree" class of bugs is
+designed out). Three structures, each with a distinct, non-overlapping meaning:
+
+| Structure | Means | Drives |
+|---|---|---|
+| **folder** (the R2 key path) | *area / place* — where a page lives | the nav tree, `list_pages` |
+| **`parent:` link** (frontmatter) | *goal breakdown* — a goal owns its subtasks/notes/pages; may cross folders | `get_children`, the goal view |
+| **inline `[[wikilink]]`** | *lateral reference* | `get_backlinks` |
+
+A page no longer stores a `space` field — its space **is** the folder it sits in.
+Each folder may carry an optional **`_space.md`** holding that space's metadata
+(name, color, icon, description, sort) plus an **overview note** (its body); a
+folder still exists if it merely contains pages. Seed top-level folders are
+Career / School / Life / Learning, but you add and nest freely.
 
 ---
 
