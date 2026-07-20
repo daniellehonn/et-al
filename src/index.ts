@@ -9,13 +9,18 @@ export interface Env {
   APP_NAME?: string;
 }
 
-type ItemType = "note" | "goal" | "idea" | "link" | "tool" | "dump";
-type ItemSpace = "learning" | "ideas" | "goals" | "saved" | "life" | "work";
+type ItemType = "page" | "goal" | "idea" | "task" | "link";
+type ItemSpace = "school" | "career" | "learning" | "projects" | "life" | "saved";
+// What the API and MCP tools accept for a space: a real space, or the "identity"
+// keyword, which is stored as NULL (the identity layer sits above the spaces).
+type SpaceInput = ItemSpace | "identity";
+// space is null for items in the identity layer
 type ItemStatus = "active" | "paused" | "done" | "archived" | "inbox";
 type ListOptions = {
   type: string | null;
-  space: string | null;
+  space: string | null; // "identity" is a virtual filter that maps to WHERE space IS NULL
   status: string | null;
+  parent_id: string | null;
   limit: number;
   offset: number;
 };
@@ -24,12 +29,14 @@ interface Item {
   id: string;
   type: ItemType;
   title: string;
-  space: ItemSpace;
+  space: ItemSpace | null; // null = identity layer
   status: ItemStatus;
   tags: string;
   metadata: string;
   content: string;
   related: string;
+  parent_id: string | null;
+  due_date: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -40,8 +47,8 @@ interface ItemResponse extends Omit<Item, "tags" | "metadata" | "related"> {
   related: string[];
 }
 
-const TYPES = new Set<ItemType>(["note", "goal", "idea", "link", "tool", "dump"]);
-const SPACES = new Set<ItemSpace>(["learning", "ideas", "goals", "saved", "life", "work"]);
+const TYPES = new Set<ItemType>(["page", "goal", "idea", "task", "link"]);
+const SPACES = new Set<ItemSpace>(["school", "career", "learning", "projects", "life", "saved"]);
 const STATUSES = new Set<ItemStatus>(["active", "paused", "done", "archived", "inbox"]);
 
 const jsonHeaders = {
@@ -91,6 +98,10 @@ export default {
         return json(await getDailyReview(env.DB));
       }
 
+      if (url.pathname === "/api/identity/graph" && request.method === "GET") {
+        return json(await getIdentityGraph(env.DB));
+      }
+
       if (url.pathname === "/api/search" && request.method === "GET") {
         const query = url.searchParams.get("q")?.trim() ?? "";
         return json({ items: await searchItems(env.DB, query, readListOptions(url)) });
@@ -104,6 +115,16 @@ export default {
         await assertAuthorized(request, env);
         const payload = await readJson(request);
         return json(await createItem(env.DB, payload), 201);
+      }
+
+      const itemChildrenMatch = url.pathname.match(/^\/api\/items\/([^/]+)\/children$/);
+      if (itemChildrenMatch && request.method === "GET") {
+        return json({ items: await getChildren(env.DB, itemChildrenMatch[1], readListOptions(url)) });
+      }
+
+      const itemBacklinksMatch = url.pathname.match(/^\/api\/items\/([^/]+)\/backlinks$/);
+      if (itemBacklinksMatch && request.method === "GET") {
+        return json({ items: await getBacklinks(env.DB, itemBacklinksMatch[1]) });
       }
 
       const itemMatch = url.pathname.match(/^\/api\/items\/([^/]+)$/);
@@ -146,11 +167,12 @@ function createEtAlMcpServer(env: Env): McpServer {
   server.registerTool(
     "list_items",
     {
-      description: "List et al. items filtered by type, space, status, limit, and offset.",
+      description: "List et al. items filtered by type, space, status, parent_id, limit, and offset.",
       inputSchema: {
-        type: z.enum(["note", "goal", "idea", "link", "tool", "dump"]).optional(),
-        space: z.enum(["learning", "ideas", "goals", "saved", "life", "work"]).optional(),
+        type: z.enum(["page", "goal", "idea", "task", "link"]).optional(),
+        space: z.enum(["identity", "school", "career", "learning", "projects", "life", "saved"]).optional(),
         status: z.enum(["active", "paused", "done", "archived", "inbox"]).optional(),
+        parent_id: z.string().optional().describe("Filter by parent item ID"),
         limit: z.number().int().min(1).max(100).optional(),
         offset: z.number().int().min(0).optional(),
       },
@@ -175,16 +197,18 @@ function createEtAlMcpServer(env: Env): McpServer {
   server.registerTool(
     "create_item",
     {
-      description: "Create a new et al. item. Use dump/inbox for messy capture when the final structure is unclear.",
+      description: "Create a new et al. item. Use dump/inbox for messy capture when structure is unclear. Use task type with due_date for actionable to-dos. Use identity space for profile data (skills, experiences).",
       inputSchema: {
-        type: z.enum(["note", "goal", "idea", "link", "tool", "dump"]).default("dump"),
+        type: z.enum(["page", "goal", "idea", "task", "link"]).default("idea"),
         title: z.string().min(1),
-        space: z.enum(["learning", "ideas", "goals", "saved", "life", "work"]).optional(),
+        space: z.enum(["identity", "school", "career", "learning", "projects", "life", "saved"]).optional(),
         status: z.enum(["active", "paused", "done", "archived", "inbox"]).optional(),
         tags: z.array(z.string()).optional(),
         metadata: z.record(z.string(), z.unknown()).optional(),
         content: z.string().optional(),
         related: z.array(z.string()).optional(),
+        parent_id: z.string().optional().describe("Parent item ID — use to nest tasks under pages or notes under goals"),
+        due_date: z.number().int().optional().describe("Unix timestamp deadline, primarily for tasks"),
       },
     },
     async (input) => mcpJson(await createItem(env.DB, input)),
@@ -196,14 +220,16 @@ function createEtAlMcpServer(env: Env): McpServer {
       description: "Partially update an existing et al. item by ID.",
       inputSchema: {
         id: z.string().min(1),
-        type: z.enum(["note", "goal", "idea", "link", "tool", "dump"]).optional(),
+        type: z.enum(["page", "goal", "idea", "task", "link"]).optional(),
         title: z.string().min(1).optional(),
-        space: z.enum(["learning", "ideas", "goals", "saved", "life", "work"]).optional(),
+        space: z.enum(["identity", "school", "career", "learning", "projects", "life", "saved"]).optional(),
         status: z.enum(["active", "paused", "done", "archived", "inbox"]).optional(),
         tags: z.array(z.string()).optional(),
         metadata: z.record(z.string(), z.unknown()).optional(),
         content: z.string().optional(),
         related: z.array(z.string()).optional(),
+        parent_id: z.string().nullable().optional().describe("Set to null to remove parent"),
+        due_date: z.number().int().nullable().optional().describe("Unix timestamp deadline; null to clear"),
       },
     },
     async ({ id, ...updates }) => {
@@ -232,8 +258,8 @@ function createEtAlMcpServer(env: Env): McpServer {
       description: "Search et al. items across title, content, and tags. Optional filters narrow the result set.",
       inputSchema: {
         query: z.string().min(1),
-        type: z.enum(["note", "goal", "idea", "link", "tool", "dump"]).optional(),
-        space: z.enum(["learning", "ideas", "goals", "saved", "life", "work"]).optional(),
+        type: z.enum(["page", "goal", "idea", "task", "link"]).optional(),
+        space: z.enum(["identity", "school", "career", "learning", "projects", "life", "saved"]).optional(),
         status: z.enum(["active", "paused", "done", "archived", "inbox"]).optional(),
         limit: z.number().int().min(1).max(100).optional(),
       },
@@ -257,7 +283,7 @@ function createEtAlMcpServer(env: Env): McpServer {
       inputSchema: {
         ids: z.array(z.string().min(1)).min(1).max(50),
         status: z.enum(["active", "paused", "done", "archived", "inbox"]).optional(),
-        space: z.enum(["learning", "ideas", "goals", "saved", "life", "work"]).optional(),
+        space: z.enum(["identity", "school", "career", "learning", "projects", "life", "saved"]).optional(),
         tags: z.array(z.string()).optional(),
         related: z.array(z.string()).optional(),
       },
@@ -291,11 +317,38 @@ function createEtAlMcpServer(env: Env): McpServer {
   );
 
   server.registerTool(
+    "get_children",
+    {
+      description: "List items that are direct children of a given parent item (by parent_id). Useful for getting tasks under a page, or notes under a goal.",
+      inputSchema: {
+        parent_id: z.string().min(1),
+        type: z.enum(["page", "goal", "idea", "task", "link"]).optional(),
+        status: z.enum(["active", "paused", "done", "archived", "inbox"]).optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+        offset: z.number().int().min(0).optional(),
+      },
+    },
+    async ({ parent_id, ...filters }) =>
+      mcpJson({ items: await getChildren(env.DB, parent_id, normalizeListOptions(filters)) }),
+  );
+
+  server.registerTool(
+    "get_backlinks",
+    {
+      description: "Find all items that reference a given item ID in their related array. Returns bidirectional backlinks.",
+      inputSchema: {
+        id: z.string().min(1),
+      },
+    },
+    async ({ id }) => mcpJson({ items: await getBacklinks(env.DB, id) }),
+  );
+
+  server.registerTool(
     "summarize_space",
     {
       description: "Summarize one space with status/type counts, frequent tags, and recently updated highlights. This is a deterministic, read-only summary rather than an AI-generated narrative.",
       inputSchema: {
-        space: z.enum(["learning", "ideas", "goals", "saved", "life", "work"]),
+        space: z.enum(["identity", "school", "career", "learning", "projects", "life", "saved"]),
         recent_limit: z.number().int().min(1).max(20).default(5),
       },
     },
@@ -310,6 +363,7 @@ function readListOptions(url: URL): ListOptions {
     type: url.searchParams.get("type"),
     space: url.searchParams.get("space"),
     status: url.searchParams.get("status"),
+    parent_id: url.searchParams.get("parent_id"),
     limit: clampNumber(url.searchParams.get("limit"), 1, 100, 30),
     offset: clampNumber(url.searchParams.get("offset"), 0, 10000, 0),
   };
@@ -319,6 +373,7 @@ function normalizeListOptions(input: {
   type?: string;
   space?: string;
   status?: string;
+  parent_id?: string;
   limit?: number;
   offset?: number;
 }): ListOptions {
@@ -326,6 +381,7 @@ function normalizeListOptions(input: {
     type: input.type ?? null,
     space: input.space ?? null,
     status: input.status ?? null,
+    parent_id: input.parent_id ?? null,
     limit: clampNumber(String(input.limit ?? ""), 1, 100, 30),
     offset: clampNumber(String(input.offset ?? ""), 0, 10000, 0),
   };
@@ -342,15 +398,24 @@ async function listItems(db: D1Database, options: ListOptions): Promise<ItemResp
   }
 
   if (options.space) {
-    if (!SPACES.has(options.space as ItemSpace)) throw new Error("Invalid space");
-    clauses.push("space = ?");
-    values.push(options.space);
+    if (options.space === "identity") {
+      clauses.push("space IS NULL");
+    } else {
+      if (!SPACES.has(options.space as ItemSpace)) throw new Error("Invalid space");
+      clauses.push("space = ?");
+      values.push(options.space);
+    }
   }
 
   if (options.status) {
     if (!STATUSES.has(options.status as ItemStatus)) throw new Error("Invalid status");
     clauses.push("status = ?");
     values.push(options.status);
+  }
+
+  if (options.parent_id) {
+    clauses.push("parent_id = ?");
+    values.push(options.parent_id);
   }
 
   values.push(options.limit, options.offset);
@@ -377,9 +442,13 @@ async function searchItems(db: D1Database, query: string, options: ListOptions):
   }
 
   if (options.space) {
-    if (!SPACES.has(options.space as ItemSpace)) throw new Error("Invalid space");
-    clauses.push("items.space = ?");
-    values.push(options.space);
+    if (options.space === "identity") {
+      clauses.push("items.space IS NULL");
+    } else {
+      if (!SPACES.has(options.space as ItemSpace)) throw new Error("Invalid space");
+      clauses.push("items.space = ?");
+      values.push(options.space);
+    }
   }
 
   if (options.status) {
@@ -416,18 +485,20 @@ async function createItem(db: D1Database, payload: unknown): Promise<ItemRespons
   const now = Math.floor(Date.now() / 1000);
 
   await db.prepare(`
-    INSERT INTO items (id, type, title, space, status, tags, metadata, content, related, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO items (id, type, title, space, status, tags, metadata, content, related, parent_id, due_date, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     id,
     input.type,
     input.title,
-    input.space,
+    input.space ?? null,
     input.status,
     JSON.stringify(input.tags),
     JSON.stringify(input.metadata),
     input.content,
     JSON.stringify(input.related),
+    input.parent_id ?? null,
+    input.due_date ?? null,
     now,
     now,
   ).run();
@@ -463,7 +534,8 @@ async function updateItem(db: D1Database, id: string, payload: unknown): Promise
 async function bulkUpdateItems(
   db: D1Database,
   ids: string[],
-  updates: Partial<{ status: ItemStatus; space: ItemSpace; tags: string[]; related: string[] }>,
+  // "identity" is accepted here and normalized to NULL by parseUpdatePayload.
+  updates: Partial<{ status: ItemStatus; space: SpaceInput; tags: string[]; related: string[] }>,
 ) {
   const cleanedUpdates = Object.fromEntries(
     Object.entries(updates).filter(([, value]) => value !== undefined),
@@ -511,12 +583,105 @@ async function getDailyReview(db: D1Database) {
       AND json_extract(metadata, '$.processed') IS NOT 1
   `).first<{ count: number }>();
 
+  const upcomingTasks = await db.prepare(`
+    SELECT * FROM items
+    WHERE type = 'task' AND status NOT IN ('done', 'archived')
+      AND due_date IS NOT NULL AND due_date <= ?
+    ORDER BY due_date ASC
+    LIMIT 5
+  `).bind(Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60).all<Item>();
+
   return {
     activeGoals: (activeGoals.results ?? []).map(serializeItem),
     inbox: (inbox.results ?? []).map(serializeItem),
     recentIdeas: (recentIdeas.results ?? []).map(serializeItem),
     unprocessedLinks: unprocessedLinks?.count ?? 0,
+    upcomingTasks: (upcomingTasks.results ?? []).map(serializeItem),
   };
+}
+
+// One round trip for the whole Identity home screen. Every lens (Core, Constellation,
+// Cascade) reads from this, so fanning out per-item /backlinks calls would be an N+1.
+async function getIdentityGraph(db: D1Database) {
+  const identity = await db.prepare(`
+    SELECT * FROM items
+    WHERE space IS NULL AND status != 'archived'
+    ORDER BY type = 'goal' DESC, updated_at DESC
+  `).all<Item>();
+
+  // Space items pointing back up at any identity item — ring 2 of the constellation.
+  const inbound = await db.prepare(`
+    SELECT DISTINCT items.*, je.value AS identity_id
+    FROM items, json_each(items.related) je
+    WHERE items.space IS NOT NULL
+      AND items.status != 'archived'
+      AND je.value IN (SELECT id FROM items WHERE space IS NULL)
+    ORDER BY items.updated_at DESC
+  `).all<Item & { identity_id: string }>();
+
+  // Space goals with no identity ancestor at all — the orphan callout.
+  const orphanGoals = await db.prepare(`
+    SELECT * FROM items
+    WHERE type = 'goal' AND space IS NOT NULL
+      AND status NOT IN ('done', 'archived')
+      AND json_extract(metadata, '$.untethered') IS NOT 1
+      AND NOT EXISTS (
+        SELECT 1 FROM json_each(items.related) je
+        WHERE je.value IN (SELECT id FROM items WHERE space IS NULL)
+      )
+    ORDER BY updated_at DESC
+  `).all<Item>();
+
+  const links: Record<string, ItemResponse[]> = {};
+  for (const row of inbound.results ?? []) {
+    (links[row.identity_id] ??= []).push(serializeItem(row));
+  }
+
+  return {
+    identity: (identity.results ?? []).map(serializeItem),
+    links,
+    orphanGoals: (orphanGoals.results ?? []).map(serializeItem),
+  };
+}
+
+async function getChildren(db: D1Database, parentId: string, options: ListOptions): Promise<ItemResponse[]> {
+  const clauses: string[] = ["parent_id = ?"];
+  const values: unknown[] = [parentId];
+
+  if (options.type) {
+    if (!TYPES.has(options.type as ItemType)) throw new Error("Invalid type");
+    clauses.push("type = ?");
+    values.push(options.type);
+  }
+  if (options.status) {
+    if (!STATUSES.has(options.status as ItemStatus)) throw new Error("Invalid status");
+    clauses.push("status = ?");
+    values.push(options.status);
+  }
+
+  values.push(options.limit, options.offset);
+
+  const result = await db
+    .prepare(`SELECT * FROM items WHERE ${clauses.join(" AND ")} ORDER BY updated_at DESC LIMIT ? OFFSET ?`)
+    .bind(...values)
+    .all<Item>();
+
+  return (result.results ?? []).map(serializeItem);
+}
+
+async function getBacklinks(db: D1Database, id: string): Promise<ItemResponse[]> {
+  // Find items whose related JSON array contains this id
+  const result = await db
+    .prepare(`
+      SELECT DISTINCT items.*
+      FROM items, json_each(items.related) je
+      WHERE je.value = ? AND items.id != ?
+      ORDER BY items.updated_at DESC
+    `)
+    .bind(id, id)
+    .all<Item>();
+
+  return (result.results ?? []).map(serializeItem);
 }
 
 async function triageInbox(db: D1Database, limit: number, includeContent: boolean, relatedLimit: number) {
@@ -524,11 +689,12 @@ async function triageInbox(db: D1Database, limit: number, includeContent: boolea
     type: null,
     space: null,
     status: null,
+    parent_id: null,
     limit: 100,
     offset: 0,
   });
   const items = allItems
-    .filter((item) => item.status === "inbox" || (item.type === "dump" && item.status !== "archived"))
+    .filter((item) => item.status === "inbox")
     .slice(0, limit);
 
   return {
@@ -536,10 +702,10 @@ async function triageInbox(db: D1Database, limit: number, includeContent: boolea
     heuristicVersion: 1,
     count: items.length,
     items: items.map((item) => {
-      const suggestedType = item.type === "dump" ? inferItemType(item) : item.type;
+      const suggestedType = item.type === "idea" ? inferItemType(item) : item.type;
       const suggestedSpace = inferItemSpace(item, suggestedType);
       const suggestedTags = inferItemTags(item, suggestedType, suggestedSpace);
-      const suggestions: { type: ItemType; space: ItemSpace; status: ItemStatus; tags: string[] } = {
+      const suggestions: { type: ItemType; space: ItemSpace | null; status: ItemStatus; tags: string[] } = {
         type: suggestedType,
         space: suggestedSpace,
         status: "active",
@@ -570,6 +736,7 @@ async function suggestRelatedItems(db: D1Database, id: string, limit: number) {
     type: null,
     space: null,
     status: null,
+    parent_id: null,
     limit: 100,
     offset: 0,
   });
@@ -610,8 +777,11 @@ async function suggestRelatedItems(db: D1Database, id: string, limit: number) {
   };
 }
 
-async function summarizeSpace(db: D1Database, space: ItemSpace, recentLimit: number) {
-  const result = await db.prepare("SELECT * FROM items WHERE space = ? ORDER BY updated_at DESC").bind(space).all<Item>();
+async function summarizeSpace(db: D1Database, space: SpaceInput, recentLimit: number) {
+  // The identity layer is space IS NULL, so it needs a different predicate.
+  const result = space === "identity"
+    ? await db.prepare("SELECT * FROM items WHERE space IS NULL ORDER BY updated_at DESC").all<Item>()
+    : await db.prepare("SELECT * FROM items WHERE space = ? ORDER BY updated_at DESC").bind(space).all<Item>();
   const items = (result.results ?? []).map(serializeItem);
   const byStatus = countBy(items, (item) => item.status);
   const byType = countBy(items, (item) => item.type);
@@ -642,25 +812,27 @@ async function summarizeSpace(db: D1Database, space: ItemSpace, recentLimit: num
 function inferItemType(item: ItemResponse): ItemType {
   const text = `${item.title} ${item.content}`.toLowerCase();
   if (/https?:\/\//.test(text)) return "link";
-  if (/\b(goal|milestone|objective|finish|ship|complete)\b/.test(text)) return "goal";
-  if (/\b(idea|maybe|could|what if|concept)\b/.test(text)) return "idea";
-  if (/\b(tool|app|library|service|software)\b/.test(text)) return "tool";
-  return "note";
+  if (/\b(goal|milestone|objective|finish|achieve|complete)\b/.test(text)) return "goal";
+  if (/\b(task|todo|do|finish|submit|send|schedule|buy)\b/.test(text)) return "task";
+  if (/\b(idea|maybe|could|what if|concept|thinking)\b/.test(text)) return "idea";
+  return "page";
 }
 
-function inferItemSpace(item: ItemResponse, type: ItemType): ItemSpace {
+function inferItemSpace(item: ItemResponse, type: ItemType): ItemSpace | null {
   const text = `${item.title} ${item.content} ${item.tags.join(" ")}`.toLowerCase();
-  if (type === "goal") return "goals";
-  if (type === "link" || type === "tool") return "saved";
-  if (/\b(work|client|meeting|project|team)\b/.test(text)) return "work";
-  if (/\b(home|health|family|personal|life)\b/.test(text)) return "life";
-  if (/\b(learn|course|book|study|research)\b/.test(text)) return "learning";
-  return "ideas";
+  if (type === "goal" && /\b(life|career|identity|purpose|vision|brand)\b/.test(text)) return null; // identity layer
+  if (type === "link") return "saved";
+  if (/\b(internship|job|resume|career|interview|application)\b/.test(text)) return "career";
+  if (/\b(class|course|school|homework|assignment|lecture|professor)\b/.test(text)) return "school";
+  if (/\b(project|build|ship|launch|startup|app)\b/.test(text)) return "projects";
+  if (/\b(home|health|family|personal|life|watch|movie|show)\b/.test(text)) return "life";
+  if (/\b(learn|tutorial|book|study|research|experiment)\b/.test(text)) return "learning";
+  return "projects";
 }
 
 function explainTriageSuggestions(
   item: ItemResponse,
-  suggestions: { type: ItemType; space: ItemSpace; status: ItemStatus; tags: string[] },
+  suggestions: { type: ItemType; space: ItemSpace | null; status: ItemStatus; tags: string[] },
 ): string[] {
   const reasons: string[] = [];
   if (item.type !== suggestions.type) reasons.push(`content cues suggest type '${suggestions.type}'`);
@@ -671,7 +843,7 @@ function explainTriageSuggestions(
   return reasons;
 }
 
-function inferItemTags(item: ItemResponse, type: ItemType, space: ItemSpace): string[] {
+function inferItemTags(item: ItemResponse, type: ItemType, space: ItemSpace | null): string[] {
   const text = `${item.title} ${item.content}`.toLowerCase();
   const rules: Array<[string, RegExp]> = [
     ["reading", /\b(book|read|reading|article|paper)\b/],
@@ -683,15 +855,14 @@ function inferItemTags(item: ItemResponse, type: ItemType, space: ItemSpace): st
   ];
   const inferred = rules.filter(([, pattern]) => pattern.test(text)).map(([tag]) => tag);
   if (type === "link" && !inferred.includes("reference")) inferred.push("reference");
-  if (space === "work" && !inferred.includes("work")) inferred.push("work");
+  if (space === "career" && !inferred.includes("career")) inferred.push("career");
   return [...new Set([...item.tags.map((tag) => tag.toLowerCase()), ...inferred])].slice(0, 8);
 }
 
 function inferNextAction(item: ItemResponse, type: ItemType): string {
   const text = `${item.title} ${item.content}`.toLowerCase();
-  if (type === "link") return "Open the link and decide whether to annotate it, connect it to an item, or archive it.";
+  if (type === "link") return "Open the link, annotate what's useful, tag it, and connect it to related items.";
   if (type === "goal") return "Define the smallest concrete step and record it in this item's content.";
-  if (type === "tool") return "Record what this tool is useful for and when you would reach for it.";
   if (/\b(call|email|message|ask|send|schedule)\b/.test(text)) return "Turn the named action into a concrete next step, then move this item out of the inbox.";
   if (type === "idea") return "Add one sentence explaining why the idea matters or what it could connect to.";
   return "Clarify the capture in one sentence, accept useful tags and connections, then move it out of the inbox.";
@@ -745,8 +916,13 @@ function parseCreatePayload(payload: unknown) {
   if (!isPlainObject(payload)) throw new Error("Invalid JSON body");
 
   const title = readString(payload.title, "Untitled capture").trim();
-  const type = readEnum(payload.type, TYPES, "dump");
-  const space = readEnum(payload.space, SPACES, type === "goal" ? "goals" : type === "link" ? "saved" : "ideas");
+  const type = readEnum(payload.type, TYPES, "idea");
+  // null space = identity layer; "identity" keyword also maps to null
+  const rawSpace = payload.space;
+  const space: ItemSpace | null =
+    rawSpace === "identity" || rawSpace === null || rawSpace === undefined
+      ? null
+      : SPACES.has(rawSpace as ItemSpace) ? (rawSpace as ItemSpace) : null;
   const status = readEnum(payload.status, STATUSES, type === "goal" ? "active" : "inbox");
 
   return {
@@ -758,31 +934,49 @@ function parseCreatePayload(payload: unknown) {
     metadata: readObject(payload.metadata),
     content: readString(payload.content, ""),
     related: readStringArray(payload.related),
+    parent_id: typeof payload.parent_id === "string" && payload.parent_id ? payload.parent_id : null,
+    due_date: readDueDate(payload.due_date),
   };
 }
 
 function parseUpdatePayload(payload: unknown): Partial<{
   type: ItemType;
   title: string;
-  space: ItemSpace;
+  space: ItemSpace | null;
   status: ItemStatus;
   tags: string[];
   metadata: Record<string, unknown>;
   content: string;
   related: string[];
+  parent_id: string | null;
+  due_date: number | null;
 }> {
   if (!isPlainObject(payload)) throw new Error("Invalid JSON body");
 
   const out: ReturnType<typeof parseUpdatePayload> = {};
-  if ("type" in payload) out.type = readEnum(payload.type, TYPES, "dump");
+  if ("type" in payload) out.type = readEnum(payload.type, TYPES, "idea");
   if ("title" in payload) out.title = readString(payload.title, "").trim() || "Untitled capture";
-  if ("space" in payload) out.space = readEnum(payload.space, SPACES, "ideas");
+  if ("space" in payload) {
+    const s = payload.space;
+    out.space = (s === "identity" || s === null) ? null : (SPACES.has(s as ItemSpace) ? s as ItemSpace : null);
+  }
   if ("status" in payload) out.status = readEnum(payload.status, STATUSES, "inbox");
   if ("tags" in payload) out.tags = readTags(payload.tags);
   if ("metadata" in payload) out.metadata = readObject(payload.metadata);
   if ("content" in payload) out.content = readString(payload.content, "");
   if ("related" in payload) out.related = readStringArray(payload.related);
+  if ("parent_id" in payload) out.parent_id = typeof payload.parent_id === "string" && payload.parent_id ? payload.parent_id : null;
+  if ("due_date" in payload) out.due_date = readDueDate(payload.due_date);
   return out;
+}
+
+function readDueDate(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.floor(value);
+  if (typeof value === "string" && value) {
+    const ts = Date.parse(value);
+    return Number.isFinite(ts) ? Math.floor(ts / 1000) : null;
+  }
+  return null;
 }
 
 async function readJson(request: Request): Promise<unknown> {
@@ -1060,6 +1254,10 @@ function renderApp(appName: string): string {
     <div class="body">
       <aside class="nav">
         <div>
+          <div class="nav-head" style="color:#c4917c">◈ Identity</div>
+          <div class="nav-list" id="identityRow"></div>
+        </div>
+        <div>
           <div class="nav-head">§ Spaces</div>
           <div class="nav-list" id="spaceList"></div>
         </div>
@@ -1075,29 +1273,37 @@ function renderApp(appName: string): string {
   <div id="modalRoot"></div>
   <div id="toastRoot"></div>
   <script>
+    window.onerror = function(msg, src, line, col, err) {
+      document.getElementById('main').innerHTML =
+        '<div class="placeholder" style="color:#b4776f;text-align:left;font-family:monospace;font-size:12px;white-space:pre-wrap">' +
+        'JS ERROR: ' + msg + '\\nAt line ' + line + '\\n' + (err && err.stack ? err.stack : '') + '</div>';
+    };
     var SPACES = {
-      learning: { label: 'Learning', dot: '#7c93ab' },
-      ideas:    { label: 'Ideas',    dot: '#aab6c4' },
-      goals:    { label: 'Goals',    dot: '#93a3b6' },
-      saved:    { label: 'Saved',    dot: '#8a7cab' },
-      life:     { label: 'Life',     dot: '#7ca88f' },
-      work:     { label: 'Work',     dot: '#b1a07c' }
+      school:   { label: 'School',   dot: '#7c93ab' },
+      career:   { label: 'Career',   dot: '#b1a07c' },
+      learning: { label: 'Learning', dot: '#6f8fa8' },
+      projects: { label: 'Projects', dot: '#7ca88f' },
+      life:     { label: 'Life',     dot: '#c48b8b' },
+      saved:    { label: 'Saved',    dot: '#8a7cab' }
     };
     var TYPES = {
-      note: { label: 'Note',      color: '#7c93ab', border: 'rgba(124,147,171,.35)' },
-      goal: { label: 'Goal',      color: '#93a3b6', border: 'rgba(147,163,182,.35)' },
-      idea: { label: 'Idea',      color: '#7ca88f', border: 'rgba(124,168,143,.35)' },
-      link: { label: 'Link',      color: '#b1a07c', border: 'rgba(177,160,124,.35)' },
-      tool: { label: 'Tool',      color: '#6f8fa8', border: 'rgba(111,143,168,.35)' },
-      dump: { label: 'Brain dump',color: '#8a7cab', border: 'rgba(138,124,171,.35)' }
+      page: { label: 'Page', color: '#7c93ab', border: 'rgba(124,147,171,.35)' },
+      goal: { label: 'Goal', color: '#93a3b6', border: 'rgba(147,163,182,.35)' },
+      idea: { label: 'Idea', color: '#7ca88f', border: 'rgba(124,168,143,.35)' },
+      task: { label: 'Task', color: '#c4917c', border: 'rgba(196,145,124,.35)' },
+      link: { label: 'Link', color: '#b1a07c', border: 'rgba(177,160,124,.35)' }
     };
-    var TYPE_KEYS = ['note', 'goal', 'idea', 'link', 'tool', 'dump'];
-    var SPACE_KEYS = ['learning', 'ideas', 'goals', 'saved', 'life', 'work'];
+    var TYPE_KEYS = ['page', 'goal', 'idea', 'task', 'link'];
+    var SPACE_KEYS = ['school', 'career', 'learning', 'projects', 'life', 'saved'];
+    var IDENTITY_COLOR = '#c4917c';
 
     var state = {
       view: 'home', activeId: null, filterSpace: 'all', filterType: null, query: '',
       items: [], review: null, loading: true, error: null, editing: false, capture: null, toast: null,
-      authed: false, unlockPrompt: null
+      authed: false, unlockPrompt: null, backlinks: null,
+      // Core is the default lens: you land on your own words, not on a diagram
+      // you have already absorbed. The last-used lens survives a re-render.
+      identity: null, identityTab: 'core'
     };
 
     // The browser never stores the key: POST /api/session exchanges it once for
@@ -1118,8 +1324,28 @@ function renderApp(appName: string): string {
     }
     function pad(n) { return String(n).padStart(3, '0'); }
     function num(item) { return pad((parseInt(String(item.id).replace(/\\D/g, '').slice(-3), 10) || 0) % 1000); }
-    function typeOf(item) { return TYPES[item.type] ? item.type : 'note'; }
-    function spaceOf(item) { return SPACES[item.space] ? item.space : 'ideas'; }
+    function typeOf(item) { return TYPES[item.type] ? item.type : 'page'; }
+    function spaceOf(item) { return (item.space && SPACES[item.space]) ? item.space : null; }
+    function getSpaceInfo(item) {
+      var sp = spaceOf(item);
+      return sp ? SPACES[sp] : { label: 'Identity', dot: IDENTITY_COLOR };
+    }
+    function isIdentity(item) { return !item.space; }
+    function identityItems() { return (state.identity && state.identity.identity) || state.items.filter(isIdentity); }
+    // The lineage chip: the identity item this one explicitly points back up at.
+    function identityAncestor(item) {
+      if (!item || isIdentity(item)) return null;
+      var pool = identityItems();
+      var ids = item.related || [];
+      for (var i = 0; i < ids.length; i++) {
+        var hit = pool.find(function (candidate) { return candidate.id === ids[i]; });
+        if (hit) return hit;
+      }
+      return null;
+    }
+    function childrenOf(id) {
+      return state.items.filter(function (item) { return item.parent_id === id && item.status !== 'archived'; });
+    }
     function stamp(ts) {
       var d = new Date(ts * 1000), now = Date.now() / 1000, diff = now - ts;
       if (diff < 3600) return Math.max(1, Math.round(diff / 60)) + 'm';
@@ -1127,7 +1353,20 @@ function renderApp(appName: string): string {
       return pad2(d.getDate()) + '·' + pad2(d.getMonth() + 1);
     }
     function pad2(n) { return String(n).padStart(2, '0'); }
+    function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
     function clock(ts) { var d = new Date(ts * 1000); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
+    function formatDue(ts) {
+      if (!ts) return '';
+      var d = new Date(ts * 1000);
+      var today = new Date(); today.setHours(0,0,0,0);
+      var due = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      var diff = Math.floor((due - today) / 86400000);
+      var str = pad2(d.getDate()) + '/' + pad2(d.getMonth()+1) + '/' + String(d.getFullYear()).slice(2);
+      if (diff < 0) return str + ' · overdue';
+      if (diff === 0) return str + ' · today';
+      if (diff === 1) return str + ' · tomorrow';
+      return str + ' · ' + diff + 'd';
+    }
     function todayLine() {
       var d = new Date();
       var days = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
@@ -1154,13 +1393,18 @@ function renderApp(appName: string): string {
       try {
         var responses = await Promise.all([
           fetch('/api/review'), fetch('/api/items?limit=100'),
-          fetch('/api/session', { credentials: 'same-origin' })
+          fetch('/api/session', { credentials: 'same-origin' }),
+          fetch('/api/identity/graph')
         ]);
         if (!responses[0].ok || !responses[1].ok) throw new Error('The workspace did not respond.');
-        var payloads = await Promise.all([responses[0].json(), responses[1].json(), responses[2].json()]);
+        var payloads = await Promise.all([
+          responses[0].json(), responses[1].json(), responses[2].json(),
+          responses[3].ok ? responses[3].json() : Promise.resolve(null)
+        ]);
         state.review = payloads[0];
         state.items = payloads[1].items || [];
         state.authed = !!payloads[2].authenticated;
+        state.identity = payloads[3];
       } catch (error) {
         state.error = error && error.message ? error.message : 'The workspace could not be loaded.';
       } finally {
@@ -1196,6 +1440,22 @@ function renderApp(appName: string): string {
       } catch (error) { failWrite(error, function () { patchItem(id, updates); }); }
     }
 
+    // Orphan nagging should be closable, not a permanent scold.
+    async function untether(id) {
+      var orphans = (state.identity && state.identity.orphanGoals) || [];
+      var goal = orphans.find(function (o) { return o.id === id; });
+      if (!goal) return;
+      try {
+        var updated = await write('PATCH', '/api/items/' + id, {
+          metadata: Object.assign({}, goal.metadata, { untethered: true })
+        });
+        mergeItem(updated);
+        state.identity.orphanGoals = orphans.filter(function (o) { return o.id !== id; });
+        render();
+        toast('Left untethered');
+      } catch (error) { failWrite(error, function () { untether(id); }); }
+    }
+
     // A write that fails only because the session is locked resumes itself once unlocked.
     function failWrite(error, retry) {
       if (error && error.needsUnlock) { state.unlockPrompt = { key: '', error: null, retry: retry }; render(); }
@@ -1204,7 +1464,14 @@ function renderApp(appName: string): string {
 
     // ---------- actions ----------
     function goHome() { state.view = 'home'; state.activeId = null; state.editing = false; render(); }
-    function openItem(id) { state.view = 'item'; state.activeId = id; state.editing = false; render(); window.scrollTo(0, 0); }
+    function openItem(id) {
+      state.view = 'item'; state.activeId = id; state.editing = false; state.backlinks = null;
+      render(); window.scrollTo(0, 0);
+      fetch('/api/items/' + id + '/backlinks')
+        .then(function(r) { return r.json(); })
+        .then(function(data) { if (state.activeId === id) { state.backlinks = data.items || []; render(); } })
+        .catch(function() {});
+    }
     function activeItem() { return state.items.find(function (item) { return item.id === state.activeId; }); }
 
     function toggleGoal(goal) {
@@ -1235,7 +1502,8 @@ function renderApp(appName: string): string {
     function filteredItems() {
       var query = state.query.trim().toLowerCase();
       return state.items.filter(function (item) {
-        if (state.filterSpace !== 'all' && spaceOf(item) !== state.filterSpace) return false;
+        if (state.filterSpace === 'identity' && !isIdentity(item)) return false;
+        if (state.filterSpace !== 'all' && state.filterSpace !== 'identity' && spaceOf(item) !== state.filterSpace) return false;
         if (state.filterType && typeOf(item) !== state.filterType) return false;
         if (item.status === 'archived') return false;
         if (query) {
@@ -1253,6 +1521,7 @@ function renderApp(appName: string): string {
       if (state.loading) main.innerHTML = '<div class="placeholder">Loading workspace…</div>';
       else if (state.error) main.innerHTML = '<div class="placeholder">' + esc(state.error) + '</div>';
       else if (state.view === 'item' && activeItem()) main.innerHTML = renderDetail(activeItem());
+      else if (state.view === 'identity') main.innerHTML = renderIdentity();
       else main.innerHTML = renderHome();
       document.getElementById('modalRoot').innerHTML =
         state.unlockPrompt ? renderUnlock() : (state.capture ? renderCapture() : '');
@@ -1263,7 +1532,25 @@ function renderApp(appName: string): string {
 
     function renderNav() {
       var counts = {};
-      state.items.forEach(function (item) { counts[spaceOf(item)] = (counts[spaceOf(item)] || 0) + 1; });
+      var identityCount = 0;
+      state.items.forEach(function (item) {
+        if (isIdentity(item)) { identityCount++; }
+        else { counts[item.space] = (counts[item.space] || 0) + 1; }
+      });
+
+      // Identity is a card, not a nav row — it never shares visual grammar with a space.
+      var goalCount = identityItems().filter(function (i) { return i.type === 'goal'; }).length;
+      document.getElementById('identityRow').innerHTML =
+        '<button class="nav-row' + (state.view === 'identity' ? ' active' : '') + '" id="identityBtn"' +
+          ' style="display:block;text-align:left;padding:11px 12px;border:1px solid rgba(196,145,124,.35);border-radius:10px;background:linear-gradient(160deg,rgba(196,145,124,.10),rgba(196,145,124,.02))">' +
+          '<span style="display:flex;align-items:center;justify-content:space-between">' +
+            '<span class="label"><span class="dot" style="background:' + IDENTITY_COLOR + '"></span><b>Identity</b></span>' +
+            '<span class="nav-count">' + identityCount + '</span></span>' +
+          '<span style="display:block;font-size:10.5px;color:#9aa6b3;margin-top:3px">' +
+            plural(goalCount, 'goal') + ' · ' + plural(Math.max(0, identityCount - goalCount), 'page') + '</span>' +
+        '</button>';
+
+      // Spaces
       var rows = [{ key: 'all', label: 'All items', dot: '#1e2530', count: state.items.length }].concat(
         SPACE_KEYS.map(function (key) { return { key: key, label: SPACES[key].label, dot: SPACES[key].dot, count: counts[key] || 0 }; })
       );
@@ -1273,13 +1560,172 @@ function renderApp(appName: string): string {
           '<span class="label"><span class="dot" style="background:' + row.dot + '"></span>' + esc(row.label) + '</span>' +
           '<span class="nav-count">' + row.count + '</span></button>';
       }).join('');
+
       document.getElementById('typeList').innerHTML = TYPE_KEYS.map(function (key) {
         var active = state.filterType === key && state.view === 'home';
         return '<button class="nav-row' + (active ? ' active' : '') + '" data-type="' + key + '">' + esc(TYPES[key].label) + 's</button>';
       }).join('');
+
       var open = state.items.filter(function (item) { return item.status === 'active' || item.status === 'inbox'; }).length;
       document.getElementById('navFoot').innerHTML =
-        'Everything is an item<br>Cap. ' + pad(state.items.length) + ' · Active ' + pad(open) + '<br>CF free tier · v1';
+        'Everything is an item<br>Cap. ' + pad(state.items.length) + ' · Active ' + pad(open) + '<br>CF free tier · v2';
+    }
+
+    // ---------- identity ----------
+    function renderIdentity() {
+      var tabs = [
+        { key: 'core', label: 'Core' },
+        { key: 'constellation', label: 'Constellation' },
+        { key: 'cascade', label: 'Cascade' }
+      ];
+      var body = state.identityTab === 'constellation' ? renderConstellation()
+        : state.identityTab === 'cascade' ? renderCascade()
+        : renderIdentityCore();
+
+      return '<div class="home"><section>' +
+        '<div class="sec-head" style="align-items:center">' +
+          '<div>' +
+            '<h2 class="sec" style="color:' + IDENTITY_COLOR + '">◈ Identity</h2>' +
+            '<div class="sec-meta" style="text-transform:none;letter-spacing:0;margin-top:4px">' +
+              "Who you are, and who you're becoming. Everything below traces here." +
+            '</div>' +
+          '</div>' +
+          '<div class="chips">' + tabs.map(function (tab) {
+            return '<button class="chip' + (state.identityTab === tab.key ? ' active' : '') +
+              '" data-idtab="' + tab.key + '">' + esc(tab.label) + '</button>';
+          }).join('') + '</div>' +
+        '</div>' + body +
+      '</section></div>';
+    }
+
+    // Core — the written self. The lens you open to remember.
+    function renderIdentityCore() {
+      var all = identityItems();
+      var goals = all.filter(function (i) { return i.type === 'goal'; });
+      var pages = all.filter(function (i) { return i.type !== 'goal'; });
+
+      function group(title, list, empty) {
+        return '<div class="sec-head" style="margin-top:18px"><h2 class="sec">' + title + '</h2>' +
+          '<span class="sec-meta">' + list.length + '</span></div>' +
+          (list.length ? '<div class="feed">' + list.map(function (item) {
+            return '<button class="feed-card" data-open="' + esc(item.id) + '">' +
+              '<span class="num" style="padding-top:3px">' + num(item) + '</span>' +
+              '<div style="flex:1;min-width:0">' +
+                '<div class="feed-title">' + esc(item.title) + '</div>' +
+                '<div class="feed-snippet">' + esc(snippetOf(item)) + '</div>' +
+              '</div></button>';
+          }).join('') + '</div>' : '<div class="placeholder">' + empty + '</div>');
+      }
+
+      return group('Goals', goals, 'No identity goals yet — start with one thing you want to become') +
+        group('Pages', pages, 'No identity pages yet — values, skills, how you present yourself');
+    }
+
+    function renderConstellation() {
+      var W = 860, H = 480, cx = W / 2, cy = H / 2 + 20, R = 190;
+      var identityList = identityItems();
+      var goals = identityList.filter(function(i) { return i.type === 'goal'; });
+      var spaceAngles = {};
+      SPACE_KEYS.forEach(function(key, i) {
+        spaceAngles[key] = (i / SPACE_KEYS.length) * 2 * Math.PI - Math.PI / 2;
+      });
+
+      var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:' + H + 'px" xmlns="http://www.w3.org/2000/svg">';
+
+      // Dashed lines from identity to each space
+      SPACE_KEYS.forEach(function(key) {
+        var a = spaceAngles[key];
+        var nx = cx + R * Math.cos(a), ny = cy + R * Math.sin(a);
+        svg += '<line x1="' + cx + '" y1="' + cy + '" x2="' + nx + '" y2="' + ny + '" stroke="rgba(30,41,59,.1)" stroke-width="1.5" stroke-dasharray="5,4"/>';
+      });
+
+      // Space nodes
+      SPACE_KEYS.forEach(function(key) {
+        var a = spaceAngles[key];
+        var nx = cx + R * Math.cos(a), ny = cy + R * Math.sin(a);
+        var info = SPACES[key];
+        var count = state.items.filter(function(i) { return i.space === key; }).length;
+        svg += '<circle cx="' + nx + '" cy="' + ny + '" r="40" fill="' + info.dot + '" fill-opacity=".1" stroke="' + info.dot + '" stroke-width="1.5" data-space="' + key + '" style="cursor:pointer" class="graph-space"/>';
+        svg += '<text x="' + nx + '" y="' + (ny - 5) + '" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" font-weight="600" fill="#4a5563" letter-spacing=".12em" style="pointer-events:none">' + key.toUpperCase() + '</text>';
+        svg += '<text x="' + nx + '" y="' + (ny + 10) + '" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#9aa6b3" style="pointer-events:none">' + count + ' items</text>';
+      });
+
+      // Outer ring goal links — draw lines from identity goals to relevant spaces via related items
+      goals.slice(0, 5).forEach(function(goal, gi) {
+        var a = (gi / Math.max(goals.length, 1) - 0.5) * 0.8; // small arc near center top
+        var gx = cx + 28 * Math.cos(a - Math.PI / 2), gy = cy + 28 * Math.sin(a - Math.PI / 2) - 8;
+        (goal.related || []).forEach(function(relId) {
+          var rel = state.items.find(function(i) { return i.id === relId; });
+          if (rel && rel.space) {
+            var sa = spaceAngles[rel.space];
+            var tx = cx + (R - 45) * Math.cos(sa), ty = cy + (R - 45) * Math.sin(sa);
+            svg += '<line x1="' + gx + '" y1="' + gy + '" x2="' + tx + '" y2="' + ty + '" stroke="#c4917c" stroke-width="1" stroke-opacity=".4" stroke-dasharray="3,3"/>';
+          }
+        });
+      });
+
+      // Identity center
+      svg += '<circle cx="' + cx + '" cy="' + cy + '" r="58" fill="rgba(196,145,124,.07)" stroke="#c4917c" stroke-width="2"/>';
+      svg += '<text x="' + cx + '" y="' + (cy - 14) + '" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" font-weight="600" fill="#c4917c" letter-spacing=".2em">IDENTITY</text>';
+      svg += '<text x="' + cx + '" y="' + (cy + 4) + '" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4917c">' + identityList.length + ' items</text>';
+      svg += '<text x="' + cx + '" y="' + (cy + 20) + '" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="rgba(196,145,124,.6)">' + goals.length + ' goals</text>';
+      svg += '<circle cx="' + cx + '" cy="' + cy + '" r="58" fill="transparent" data-space="identity" style="cursor:pointer" class="graph-space"/>';
+
+      svg += '</svg>';
+
+      if (!identityList.length) {
+        return '<div class="placeholder">Your Identity layer is empty — start with one goal, ' +
+          'and the spaces below will have something to point back at.</div>';
+      }
+      return '<div class="card" style="overflow:hidden">' + svg + '</div>' +
+        '<div class="sec-meta" style="text-transform:none;letter-spacing:0;margin-top:10px">' +
+          'Centre = the whole Identity layer. Each spoke is one hop of <code>related</code> out into a space.' +
+        '</div>';
+    }
+
+    // Cascade — identity goal → related space goal → its child tasks.
+    function renderCascade() {
+      var links = (state.identity && state.identity.links) || {};
+      var orphans = (state.identity && state.identity.orphanGoals) || [];
+      var goals = identityItems().filter(function (i) { return i.type === 'goal'; });
+
+      function row(item, bold) {
+        var due = item.due_date ? '<span class="sec-meta" style="margin-left:auto">' + esc(formatDue(item.due_date)) + '</span>' : '';
+        return '<button class="goal-row" data-open="' + esc(item.id) + '" style="width:100%">' +
+          '<span class="dot" style="background:' + getSpaceInfo(item).dot + ';flex:none"></span>' +
+          '<span class="row-title"' + (bold ? ' style="font-weight:600"' : '') + '>' + esc(item.title) + '</span>' +
+          '<span class="tag" style="color:' + TYPES[typeOf(item)].color + ';border-color:' + TYPES[typeOf(item)].border + '">' +
+            esc(getSpaceInfo(item).label.toLowerCase() + ' · ' + typeOf(item)) + '</span>' + due +
+        '</button>';
+      }
+      function indent(inner) {
+        return '<div style="margin-left:20px;border-left:1px solid rgba(30,41,59,.10);padding-left:10px">' + inner + '</div>';
+      }
+
+      var body = goals.length ? goals.map(function (goal) {
+        var branches = (links[goal.id] || []).map(function (child) {
+          var tasks = childrenOf(child.id);
+          return row(child) + (tasks.length ? indent(tasks.map(function (t) { return row(t); }).join('')) : '');
+        }).join('');
+        return row(goal, true) + (branches ? indent(branches) :
+          indent('<div class="placeholder" style="padding:10px 0;text-align:left">Nothing in any space points at this yet.</div>'));
+      }).join('') : '<div class="placeholder">No identity goals yet — nothing to cascade from.</div>';
+
+      var orphanBlock = !orphans.length ? '' :
+        '<div class="card" style="margin-top:18px;border-color:rgba(196,145,124,.35);background:rgba(196,145,124,.05)">' +
+          '<div style="font-size:12.5px;color:#8a6b5c;margin-bottom:8px">' +
+            '<b>' + orphans.length + ' space goal' + (orphans.length === 1 ? " isn't" : "s aren't") + ' traced to Identity.</b> ' +
+            'Link them, or mark one untethered to stop it asking.</div>' +
+          orphans.map(function (o) {
+            return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0">' +
+              '<button class="linked-row" data-open="' + esc(o.id) + '" style="flex:1">' +
+                '<span class="num">' + esc(getSpaceInfo(o).label) + '</span>' + esc(o.title) + '</button>' +
+              '<button class="chip" data-untether="' + esc(o.id) + '">fine untethered</button>' +
+            '</div>';
+          }).join('') +
+        '</div>';
+
+      return '<div class="card">' + body + '</div>' + orphanBlock;
     }
 
     function renderHome() {
@@ -1291,31 +1737,67 @@ function renderApp(appName: string): string {
       var showToday = !query && state.filterSpace === 'all' && !state.filterType && goals.length > 0;
       var openGoals = goals.filter(function (goal) { return goal.status !== 'done'; }).length;
 
+      // The review opens with the reason, not the list: one active identity goal on top.
+      var anchor = identityItems().filter(function (i) {
+        return i.type === 'goal' && i.status === 'active';
+      })[0];
+      var becauseBlock = !anchor ? '' :
+        '<button class="goal-row" data-open="' + esc(anchor.id) + '" ' +
+          'style="width:100%;display:block;text-align:left;padding:14px 16px;border-bottom:1px solid rgba(30,41,59,.08)">' +
+          '<span style="display:block;font-family:IBM Plex Mono,monospace;font-size:9.5px;letter-spacing:.16em;' +
+            'text-transform:uppercase;color:' + IDENTITY_COLOR + '">Today, because</span>' +
+          '<span style="display:block;font-size:16px;font-weight:600;margin-top:4px">' + esc(anchor.title) + '</span>' +
+        '</button>';
+
       var todaySection = !showToday ? '' :
         '<section>' +
           '<div class="sec-head"><h2 class="sec">Today — Daily Review</h2>' +
           '<span class="sec-meta">' + todayLine() + ' / ' + pad(openGoals) + ' ACTIVE</span></div>' +
-          '<div class="card">' + goals.map(function (goal, i) {
+          '<div class="card">' + becauseBlock + goals.map(function (goal, i) {
             var done = goal.status === 'done';
             return '<button class="goal-row" data-goal="' + esc(goal.id) + '">' +
               '<span class="num" style="width:26px">' + pad(i + 1) + '</span>' +
               '<span class="box' + (done ? ' done' : '') + '">' + (done ? '✓' : '') + '</span>' +
               '<span class="row-title' + (done ? ' done' : '') + '">' + esc(goal.title) + '</span>' +
-              '<span class="sec-meta">' + esc(SPACES[spaceOf(goal)].label) + '</span></button>';
+              '<span class="sec-meta">' + esc(getSpaceInfo(goal).label) + '</span></button>';
           }).join('') + '</div>' +
         '</section>';
 
-      var heading = query ? 'Search' : (state.filterSpace === 'all' ? 'Everything' : SPACES[state.filterSpace].label);
+      var upcoming = (!query && state.filterSpace === 'all' && !state.filterType)
+        ? ((state.review && state.review.upcomingTasks) || []) : [];
+      var upcomingSection = upcoming.length === 0 ? '' :
+        '<section>' +
+          '<div class="sec-head"><h2 class="sec">Upcoming Tasks</h2>' +
+          '<span class="sec-meta">Next 7 days · ' + upcoming.length + ' due</span></div>' +
+          '<div class="card">' + upcoming.map(function(task, i) {
+            var done = task.status === 'done';
+            var overdue = task.due_date && task.due_date < Date.now() / 1000;
+            return '<button class="goal-row" data-open="' + esc(task.id) + '">' +
+              '<span class="num" style="width:26px">' + pad(i+1) + '</span>' +
+              '<span class="box' + (done ? ' done' : '') + '">' + (done ? '✓' : '') + '</span>' +
+              '<span class="row-title' + (done ? ' done' : '') + '">' + esc(task.title) + '</span>' +
+              '<span class="sec-meta" style="' + (overdue ? 'color:#b4776f' : '') + '">' + esc(formatDue(task.due_date)) + '</span></button>';
+          }).join('') + '</div>' +
+        '</section>';
+
+      var heading = query ? 'Search' : state.filterSpace === 'all' ? 'Everything' : state.filterSpace === 'identity' ? 'Identity' : (SPACES[state.filterSpace] ? SPACES[state.filterSpace].label : state.filterSpace);
       var chips = [{ key: null, label: 'All' }].concat(TYPE_KEYS.map(function (key) { return { key: key, label: TYPES[key].label }; }));
 
       var feed = visible.length ? visible.map(function (item) {
         var type = typeOf(item);
+        // Lineage chip — goals carry their identity ancestor wherever they are shown.
+        var ancestor = type === 'goal' ? identityAncestor(item) : null;
+        var lineage = type !== 'goal' || isIdentity(item) ? ''
+          : ancestor
+            ? '<span class="sec-meta" style="color:' + IDENTITY_COLOR + ';text-transform:none;letter-spacing:0">↑ ' + esc(ancestor.title) + '</span>'
+            : '<span class="tag" style="border-style:dashed;color:#9aa6b3">+ link to identity</span>';
         return '<button class="feed-card" data-open="' + esc(item.id) + '">' +
           '<span class="num" style="padding-top:3px">' + num(item) + '</span>' +
           '<div style="flex:1;min-width:0">' +
             '<div class="feed-meta">' +
               '<span class="tag" style="color:' + TYPES[type].color + ';border-color:' + TYPES[type].border + '">' + esc(TYPES[type].label) + '</span>' +
-              '<span class="sec-meta">' + esc(SPACES[spaceOf(item)].label) + '</span>' +
+              '<span class="sec-meta">' + esc(getSpaceInfo(item).label) + '</span>' +
+              lineage +
               '<span style="flex:1"></span>' +
               '<span class="num">' + stamp(item.updated_at) + '</span>' +
             '</div>' +
@@ -1324,7 +1806,7 @@ function renderApp(appName: string): string {
           '</div></button>';
       }).join('') : '<div class="placeholder">Nothing here yet</div>';
 
-      return '<div class="home">' + todaySection +
+      return '<div class="home">' + todaySection + upcomingSection +
         '<section>' +
           '<div class="sec-head" style="align-items:center">' +
             '<div style="display:flex;align-items:center;gap:8px">' +
@@ -1365,23 +1847,35 @@ function renderApp(appName: string): string {
 
     function renderSidebarMeta(item) {
       var tags = item.tags || [], related = item.related || [];
+      var parent = item.parent_id ? state.items.find(function(c) { return c.id === item.parent_id; }) : null;
+      var backlinks = state.backlinks || [];
+      var overdue = item.due_date && item.due_date < Date.now() / 1000 && item.status !== 'done';
+      var si = getSpaceInfo(item);
       return '<aside class="meta">' +
-        '<div><div class="meta-label">Space</div><div class="meta-value"><span class="dot" style="background:' + SPACES[spaceOf(item)].dot + '"></span>' + esc(SPACES[spaceOf(item)].label) + '</div></div>' +
+        (item.parent_id ? '<div><div class="meta-label">Parent</div>' +
+          '<button class="linked-row" data-open="' + esc(item.parent_id) + '"><span class="num">↑</span>' +
+          esc(parent ? parent.title : item.parent_id) + '</button></div>' : '') +
+        '<div><div class="meta-label">Space</div><div class="meta-value"><span class="dot" style="background:' + si.dot + '"></span>' + esc(si.label) + '</div></div>' +
         '<div><div class="meta-label">Type</div><div class="meta-value">' + esc(TYPES[typeOf(item)].label) + '</div></div>' +
         '<div><div class="meta-label">Status</div><div class="meta-value">' + esc(item.status) + '</div></div>' +
+        (item.due_date ? '<div><div class="meta-label">Due</div><div class="meta-value" style="color:' + (overdue ? '#b4776f' : '#4a5563') + ';font-family:IBM Plex Mono,monospace;font-size:11px">' + esc(formatDue(item.due_date)) + '</div></div>' : '') +
         (tags.length ? '<div><div class="meta-label">Tags</div><div style="display:flex;flex-wrap:wrap;gap:6px">' +
           tags.map(function (tag) { return '<span class="tag-pill">' + esc(tag) + '</span>'; }).join('') + '</div></div>' : '') +
-        (related.length ? '<div><div class="meta-label">Linked</div><div style="display:flex;flex-direction:column;gap:7px">' +
+        (related.length ? '<div><div class="meta-label">Linked →</div><div style="display:flex;flex-direction:column;gap:7px">' +
           related.map(function (id) {
             var target = state.items.find(function (candidate) { return candidate.id === id; });
             return '<button class="linked-row" data-open="' + esc(id) + '"><span class="num">→</span>' + esc(target ? target.title : id) + '</button>';
+          }).join('') + '</div></div>' : '') +
+        (backlinks.length ? '<div><div class="meta-label">Backlinks ←</div><div style="display:flex;flex-direction:column;gap:7px">' +
+          backlinks.map(function(bl) {
+            return '<button class="linked-row" data-open="' + esc(bl.id) + '"><span class="num">←</span>' + esc(bl.title) + '</button>';
           }).join('') + '</div></div>' : '') +
       '</aside>';
     }
 
     function detailHead(item, extra) {
       return '<div class="detail-head">' +
-        '<button class="crumb" id="back">← ' + esc(SPACES[spaceOf(item)].label + ' / ' + TYPES[typeOf(item)].label + 's / N°' + num(item)) + '</button>' +
+        '<button class="crumb" id="back">← ' + esc(getSpaceInfo(item).label + ' / ' + TYPES[typeOf(item)].label + 's / N°' + num(item)) + '</button>' +
         (extra || '<div class="actions"><button data-act="edit">' + (state.editing ? 'Save' : 'Edit') + '</button><button data-act="archive">Archive</button><button data-act="delete">Delete</button></div>') +
       '</div>';
     }
@@ -1445,9 +1939,15 @@ function renderApp(appName: string): string {
           '<div class="field-label">Type</div><div class="pick">' + TYPE_KEYS.map(function (key) {
             return '<button data-cap-type="' + key + '" class="' + (capture.type === key ? 'active' : '') + '">' + esc(TYPES[key].label) + '</button>';
           }).join('') + '</div>' +
-          '<div class="field-label">Space</div><div class="pick spaces">' + SPACE_KEYS.map(function (key) {
-            return '<button data-cap-space="' + key + '" class="' + (capture.space === key ? 'active' : '') + '">' + esc(SPACES[key].label) + '</button>';
-          }).join('') + '</div>' +
+          // One inbox, one promote gesture: Identity is the first option here, set apart,
+          // rather than a second capture box that forces classification at throw-time.
+          '<div class="field-label">Space</div><div class="pick spaces">' +
+            '<button data-cap-space="identity" class="' + (capture.space === 'identity' ? 'active' : '') + '"' +
+              ' style="border-color:rgba(196,145,124,.5);color:' + IDENTITY_COLOR + '">↑ Identity</button>' +
+            SPACE_KEYS.map(function (key) {
+              return '<button data-cap-space="' + key + '" class="' + (capture.space === key ? 'active' : '') + '">' + esc(SPACES[key].label) + '</button>';
+            }).join('') + '</div>' +
+          (capture.type === 'task' ? '<div class="field-label">Due date</div><input type="date" id="capDue" value="' + esc(capture.due || '') + '" style="width:100%;padding:8px 10px;border:1px solid rgba(30,41,59,.12);border-radius:8px;margin-bottom:20px;font-family:IBM Plex Mono,monospace;font-size:12px;outline:none;background:#fff;color:#1e2530"></input>' : '') +
           '<div class="modal-foot">' +
             '<button class="btn-ghost" id="cancelCapture">Cancel</button>' +
             '<button class="btn-primary" id="submitCapture"' + (capture.title.trim() ? '' : ' disabled') + '>Create item</button>' +
@@ -1481,6 +1981,21 @@ function renderApp(appName: string): string {
           var goal = state.items.concat((state.review && state.review.activeGoals) || [])
             .find(function (candidate) { return candidate.id === element.dataset.goal; });
           if (goal) toggleGoal(goal);
+        };
+      });
+      var identityBtn = document.getElementById('identityBtn');
+      if (identityBtn) identityBtn.onclick = function() { state.view = 'identity'; state.activeId = null; render(); };
+      document.querySelectorAll('[data-idtab]').forEach(function (element) {
+        element.onclick = function () { state.identityTab = element.dataset.idtab; render(); };
+      });
+      document.querySelectorAll('[data-untether]').forEach(function (element) {
+        element.onclick = function () { untether(element.dataset.untether); };
+      });
+      document.querySelectorAll('.graph-space').forEach(function(el) {
+        el.onclick = function() {
+          var sp = el.dataset.space;
+          if (!sp || sp === 'identity') { state.view = 'identity'; state.identityTab = 'core'; render(); return; }
+          state.filterSpace = sp; state.view = 'home'; render();
         };
       });
       var back = document.getElementById('back');
@@ -1549,6 +2064,8 @@ function renderApp(appName: string): string {
       document.querySelectorAll('[data-cap-space]').forEach(function (element) {
         element.onclick = function () { state.capture.space = element.dataset.capSpace; render(); };
       });
+      var dueInput = document.getElementById('capDue');
+      if (dueInput) dueInput.oninput = function() { state.capture.due = dueInput.value; };
       document.getElementById('submitCapture').onclick = submitCapture;
     }
 
@@ -1558,12 +2075,16 @@ function renderApp(appName: string): string {
       var capture = state.capture;
       if (!capture || !capture.title.trim()) return;
       try {
-        var created = await write('POST', '/api/items', {
+        var payload = {
           title: capture.title.trim(),
           type: capture.type,
           space: capture.space,
           status: capture.type === 'goal' ? 'active' : 'inbox'
-        });
+        };
+        if (capture.type === 'task' && capture.due) {
+          payload.due_date = Math.floor(new Date(capture.due).getTime() / 1000);
+        }
+        var created = await write('POST', '/api/items', payload);
         state.capture = null;
         mergeItem(created);
         state.view = 'home'; state.filterSpace = 'all'; state.filterType = null; state.query = '';
@@ -1618,7 +2139,7 @@ function renderApp(appName: string): string {
 
     document.getElementById('brand').onclick = goHome;
     document.getElementById('openCapture').onclick = function () {
-      state.capture = { title: '', type: 'note', space: 'ideas' };
+      state.capture = { title: '', type: 'idea', space: null };
       render();
     };
     document.getElementById('search').oninput = function (event) {
