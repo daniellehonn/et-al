@@ -1,0 +1,15 @@
+name = "et-al"
+main = "src/index.ts"
+compatibility_date = "2026-07-20"
+compatibility_flags = ["nodejs_compat"]
+account_id = "e4ea14de30df5be2da9c9e22e8e377ed"
+workers_dev = true
+preview_urls = false
+
+[[d1_databases]]
+binding = "DB"
+database_name = "et-al"
+database_id = "2ff89323-c48e-4c15-809a-7187b1bde9dc"
+
+[vars]
+APP_NAME = "et al."
