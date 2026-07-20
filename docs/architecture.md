@@ -21,7 +21,7 @@ The product principle is:
 - REST API
 - D1 persistence
 - Small built-in UI
-- Architecture ready for MCP tools
+- Streamable HTTP MCP endpoint
 
 ### Deferred
 
@@ -30,9 +30,8 @@ The product principle is:
 - Android share target
 - iOS Shortcut integration
 - Rich markdown editor
-- Graph/backlinks
+- Graph views (backlinks exist as an MCP tool, not a UI surface)
 - Multi-user auth
-- Full MCP implementation
 
 ## System Model
 
@@ -47,8 +46,6 @@ Cloudflare Worker
   |
   v
 Cloudflare D1
-
-Future:
 
 Claude / Codex / MCP Client
   |
@@ -84,7 +81,7 @@ CREATE TABLE items (
   type       TEXT NOT NULL CHECK(type IN ('note','goal','idea','link','tool','dump')),
   title      TEXT NOT NULL,
   space      TEXT NOT NULL CHECK(space IN ('learning','ideas','goals','saved','life','work')),
-  status     TEXT NOT NULL DEFAULT 'active'
+  status     TEXT NOT NULL DEFAULT 'inbox'
              CHECK(status IN ('active','paused','done','archived','inbox')),
   tags       TEXT NOT NULL DEFAULT '[]',
   metadata   TEXT NOT NULL DEFAULT '{}',
@@ -94,6 +91,8 @@ CREATE TABLE items (
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 ```
+
+The table is mirrored into an `items_fts` FTS5 index by insert/update/delete triggers, which is what `/api/search` queries.
 
 `related` starts as a simple JSON array so relationships can exist before a full graph model does. Later it can graduate into an `item_links` table if connections become central to the experience.
 
@@ -119,9 +118,21 @@ Spaces are where the item belongs in life:
 - `life`
 - `work`
 
+### Metadata Conventions
+
+`metadata` is deliberately schemaless, but two keys are read by the UI:
+
+- `checklist`: `[{ text, done }]`. Any item carrying one renders as a checklist
+  instead of prose, which is how lists exist without a `list` type.
+- `processed`: set on `link` items to drop them out of the daily review.
+
+Brain dumps stay plain text. Each thought is one `[HH:MM] text` line, newest
+first, so a dump degrades gracefully to a normal note.
+
 ## API
 
-All mutating API calls require `X-API-Key`.
+Reads are open. Mutations require either an `X-API-Key` header or a valid
+session cookie (see Authentication).
 
 ```text
 GET    /health
@@ -132,7 +143,30 @@ PATCH  /api/items/:id
 DELETE /api/items/:id
 GET    /api/search?q=...
 GET    /api/review
+GET    /api/session
+POST   /api/session
+DELETE /api/session
 ```
+
+## Authentication
+
+There is one shared secret, `ET_AL_API_KEY` — this is single-user memory, not a
+multi-tenant product. What differs is how each client presents it:
+
+- **Agents and scripts** send `x-api-key` (or `Authorization: Bearer` on `/mcp`).
+- **The browser** never holds the key. `POST /api/session` takes it once and
+  returns an opaque, key-derived token in an `HttpOnly; SameSite=Lax` cookie
+  good for a year; every later write rides that cookie.
+
+The point is that capture stays a single keystroke away. Prompting for a secret
+on every write is exactly the friction that kills the capture habit, and
+stashing the key in `localStorage` to avoid the prompt would hand it to any
+injected script. `SameSite=Lax` keeps cross-site requests from riding the
+cookie, and the CORS policy stays wildcard-origin *without* credentials, so
+other origins can read but never write.
+
+When a write returns 401, the UI raises one unlock prompt and replays the
+pending write after the session is established — no lost capture.
 
 ## Daily Review
 
@@ -145,9 +179,26 @@ Daily review should never become a guilt dashboard. It should return a small num
 
 The UI should show fewer things than the database knows. The agent can handle depth; the human surface should preserve energy.
 
-## MCP Plan
+## Built-in UI
 
-Use Cloudflare's current remote MCP approach with Streamable HTTP, not legacy SSE. The MCP endpoint should expose the same core behaviors:
+The Worker serves one self-contained HTML page at `/` — no build step, no
+framework, state re-rendered from a single `state` object. Its shape:
+
+- **Topbar**: wordmark + item count, search (`Cmd/Ctrl-K`), Capture.
+- **Sidebar**: spaces and types as filters, both driven by the same enums as the
+  schema so the UI can never drift from what D1 accepts.
+- **Home**: the daily review (active goals, toggleable) above the item feed.
+- **Detail**: one of three renderings picked from the item itself — checklist if
+  `metadata.checklist` exists, timestamped thoughts if the type is `dump`,
+  otherwise light markdown prose with an inline editor.
+
+Detail views are chosen by what an item *contains*, not by a stored view
+setting, which keeps "everything is an item" true at the presentation layer too.
+
+## MCP
+
+Uses Cloudflare's remote MCP approach with Streamable HTTP, not legacy SSE. The
+endpoint exposes the same core behaviors as REST:
 
 ```text
 list_items
@@ -160,6 +211,8 @@ get_daily_review
 bulk_update
 triage_inbox
 suggest_related_items
+get_children
+get_backlinks
 summarize_space
 ```
 
@@ -169,16 +222,16 @@ Agent-oriented analysis tools are deterministic and read-only. They return recom
 
 ## Growth Path
 
-### Phase 1: Working Local Memory
+### Phase 1: Working Local Memory — done
 
 - D1 schema
 - Worker REST API
-- tiny UI
+- workspace UI
 - daily review
 
-### Phase 2: Agent Memory
+### Phase 2: Agent Memory — done
 
-- maintain the Streamable HTTP MCP endpoint and agent-facing workflow tools
+- Streamable HTTP MCP endpoint and agent-facing workflow tools
 - connect Claude/Codex
 - test create/search/review flows
 
@@ -205,3 +258,4 @@ Agent-oriented analysis tools are deterministic and read-only. They return recom
 - Search matters more than navigation.
 - Metadata should be flexible enough to evolve.
 - UI should avoid showing too many stale obligations at once.
+- Authentication should cost the human one keystroke per browser, not one per capture.
