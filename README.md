@@ -11,14 +11,30 @@ This is intentionally not a Notion or Obsidian clone. The core idea is a private
 - Claude/Codex can eventually read, write, sort, and review items through MCP
 - the UI stays small enough to keep using after the novelty wears off
 
-## Current Shape
+## Current Shape (v4 — R2 vault)
+
+The system is now an **Obsidian-style markdown vault** (see
+[`docs/architecture-r2.md`](docs/architecture-r2.md)):
 
 - Cloudflare Worker backend
-- Cloudflare D1 for item metadata and markdown content
+- **R2 bucket (`VAULT`) is the source of truth** — one markdown file per page,
+  with YAML frontmatter and `[[Title]]` wikilinks
+- **D1 is a derived, rebuildable index** (titles, link graph, FTS). Losing it is
+  recoverable via `POST /api/reindex`; the bucket always wins
+- **Notion-style block editor** with `/` slash commands, `[[` page autocomplete,
+  and seamless live backlinks ("Linked mentions")
 - REST API for browser/mobile usage
 - Streamable HTTP MCP endpoint for AI agents
-- Daily review endpoint
-- Notion-esque built-in workspace UI for capture, review, filtering, and item editing
+
+### Modules
+
+```text
+src/markdown.ts  frontmatter + wikilink + block parse/serialize (pure, unit-tested)
+src/store.ts     R2 writes + D1 index sync + rename propagation + reindex
+src/mcp.ts       MCP tool surface over the store
+src/ui.ts        the block-editor single-page app
+src/index.ts     router, auth, REST, identity graph
+```
 
 ## Cloudflare
 
@@ -38,21 +54,21 @@ URL: https://et-al.daniellehonnn.workers.dev/mcp
 Authorization: Bearer <ET_AL_API_KEY>
 ```
 
-Available tools:
+Available tools (v4, operating over the vault):
 
-- `list_items`
-- `get_item`
-- `create_item`
-- `update_item`
-- `delete_item`
-- `search_items`
-- `get_daily_review`
-- `bulk_update`
-- `triage_inbox` — preview deterministic organization suggestions for inbox items (read-only)
-- `suggest_related_items` — rank likely connections for an item (read-only)
-- `summarize_space` — return counts, top tags, and recent highlights for a space (read-only)
+- `get_schema` — canonical enums + link semantics
+- `list_pages`
+- `get_page`
+- `create_page`
+- `update_page` — renaming rewrites `[[old title]]` in every linking page
+- `delete_page`
+- `search_pages`
+- `get_backlinks` — who links here, with context + parent/inline kind
+- `get_children` — pages whose `parent` link resolves here
+- `list_unresolved_links` — `[[titles]]` with no page yet (growth edges)
+- `reindex_vault` — rebuild the D1 index from the R2 bucket
 
-The endpoint uses Streamable HTTP through Cloudflare's Agents SDK. It shares the same D1-backed service functions as the REST API.
+The endpoint uses Streamable HTTP through Cloudflare's Agents SDK. It shares the same store functions as the REST API.
 
 ### Connect an MCP client
 
@@ -89,9 +105,25 @@ et-al/
 
 ```bash
 npm install
-npm run db:migrate:local
+wrangler r2 bucket create et-al-vault    # one-time: create the vault bucket
+npm run db:migrate:local                 # builds the derived index tables
 npm run dev
 ```
+
+### One-time migration from the old D1 model
+
+If you have existing rows in the legacy `items` table, seed the vault from them,
+then verify:
+
+```bash
+curl -X POST -H "x-api-key: $ET_AL_API_KEY" https://<worker>/api/migrate-from-d1
+curl -X POST -H "x-api-key: $ET_AL_API_KEY" https://<worker>/api/reindex
+```
+
+`migrate-from-d1` writes one markdown file per legacy item (converting
+`related`/`parent_id` UUIDs into `[[Title]]` links and any `metadata.checklist`
+into `- [ ]` task lines). It is safe to re-run. Once the vault looks right, the
+`items` table can be dropped.
 
 Then open the local Worker URL shown by Wrangler.
 

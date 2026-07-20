@@ -1,5 +1,12 @@
 # et al. Data Model
 
+> **Superseded by [`architecture-r2.md`](architecture-r2.md) (schema v4).** The
+> concepts below (types, spaces, identity-as-first-class, `parent` = hierarchy,
+> lateral links, unsorted bucket) still hold, but storage moved from a D1
+> `items` table to an **R2 markdown vault with a derived D1 index**, and links
+> are now `[[Title]]` wikilinks rather than a `related` UUID array. Read the v4
+> doc first; this remains for historical context on the model's reasoning.
+
 **Schema version: 3** (`SCHEMA_VERSION` in `src/index.ts` — the single source of truth for every enum; the DB CHECKs, MCP tool schemas, and UI are all derived from it. `GET /api/schema` and the `get_schema` MCP tool return it.)
 
 ## Philosophy

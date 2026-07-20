@@ -6,10 +6,19 @@ account_id = "e4ea14de30df5be2da9c9e22e8e377ed"
 workers_dev = true
 preview_urls = false
 
+# D1 is now a DERIVED, rebuildable index (see docs/architecture-r2.md).
+# The source of truth is the R2 vault below. Losing DB is recoverable via
+# POST /api/reindex.
 [[d1_databases]]
 binding = "DB"
 database_name = "et-al"
 database_id = "2ff89323-c48e-4c15-809a-7187b1bde9dc"
+
+# The vault: one markdown file per page, canonical source of truth.
+# Create it once with:  wrangler r2 bucket create et-al-vault
+[[r2_buckets]]
+binding = "VAULT"
+bucket_name = "et-al-vault"
 
 [vars]
 APP_NAME = "et al."
