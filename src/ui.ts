@@ -24,7 +24,11 @@ button,input,textarea{font:inherit}
 .mono{font-family:'IBM Plex Mono',monospace}
 .shell{height:100vh;display:flex;flex-direction:column}
 .topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;border-bottom:1px solid rgba(30,41,59,.08);background:#fff;flex:none}
-.brand{display:flex;align-items:baseline;gap:13px;cursor:pointer;border:0;background:none;padding:0}
+.brand{display:flex;align-items:center;gap:12px;cursor:pointer;border:0;background:none;padding:0}
+/* The logo art sits on a large square canvas with wide padding; this window
+   crops to the glyphs so the mark optically matches the UI's text sizes. */
+.brand-mark{display:block;height:18px;width:32.5px;overflow:hidden;position:relative;flex:none}
+.brand-mark img{position:absolute;width:50.4px;height:50.4px;left:-8.9px;top:-14.3px}
 .wordmark{font-size:16px;font-weight:600;letter-spacing:.28em;text-transform:uppercase}
 .stamp{font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:#93a0ae}
 .search{display:flex;align-items:center;gap:8px;width:280px;padding:7px 12px;background:#f2f5f8;border:1px solid rgba(30,41,59,.07);border-radius:9px}
@@ -137,7 +141,7 @@ aside.meta{width:250px;flex:none;padding:26px 22px;border-left:1px solid rgba(30
 <body>
 <div class="shell">
   <div class="topbar">
-    <button class="brand" id="brand"><span class="wordmark">ET&nbsp;AL</span><span class="stamp" id="stamp">VAULT</span></button>
+    <button class="brand" id="brand" title="et al."><span class="brand-mark"><img src="/etallogo2.png" alt="et al."></span><span class="stamp" id="stamp">VAULT</span></button>
     <div style="display:flex;align-items:center;gap:12px">
       <div class="search"><span></span><input id="search" placeholder="Search vault…" autocomplete="off"></div>
       <button class="capture-btn" id="openCapture">+&nbsp;New page</button>

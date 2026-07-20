@@ -20,5 +20,10 @@ database_id = "2ff89323-c48e-4c15-809a-7187b1bde9dc"
 binding = "VAULT"
 bucket_name = "et-al-vault"
 
+# Static files (logo). Assets are matched first; "/" has no index.html,
+# so the Worker still renders the app itself.
+[assets]
+directory = "src/public"
+
 [vars]
 APP_NAME = "et al."
