@@ -9,16 +9,54 @@ export interface Env {
   APP_NAME?: string;
 }
 
-type ItemType = "page" | "goal" | "idea" | "task" | "link";
-type ItemSpace = "school" | "career" | "learning" | "projects" | "life" | "saved";
-// What the API and MCP tools accept for a space: a real space, or the "identity"
-// keyword, which is stored as NULL (the identity layer sits above the spaces).
-type SpaceInput = ItemSpace | "identity";
-// space is null for items in the identity layer
-type ItemStatus = "active" | "paused" | "done" | "archived" | "inbox";
+// ---------------------------------------------------------------------------
+// Canonical schema (v3) — the single source of truth for the DB CHECKs
+// (migrations/0004), the REST API, the MCP tools, and the UI (renderApp injects
+// this exact object, so the surfaces cannot drift). Bump SCHEMA_VERSION
+// whenever an enum changes, and add a migration alongside.
+//
+// Spaces are contexts (where something lives); types are shapes (what it is).
+// "identity" is a real, writable space — the layer above the other spaces.
+// space = NULL means "unsorted": captured but not yet filed. Unsorted items are
+// always visible in their own bucket; they never vanish from views.
+//
+// Link semantics:
+//   parent_id — "traces to": hierarchy (task under goal, space goal under identity goal)
+//   related   — lateral association between items (surfaced as Linked/Backlinks)
+// ---------------------------------------------------------------------------
+// Not exported: the Workers runtime requires every named module export to be a
+// handler or Durable Object, so exporting a plain value fails at startup.
+const SCHEMA_VERSION = 3;
+
+const TYPE_KEYS = ["page", "goal", "idea", "task", "link"] as const;
+const SPACE_KEYS = ["identity", "school", "career", "learning", "projects", "life", "saved"] as const;
+const STATUS_KEYS = ["active", "paused", "done", "archived", "inbox"] as const;
+// Virtual filter value: matches rows where space IS NULL.
+const UNSORTED = "unsorted";
+const SPACE_FILTER_KEYS = [...SPACE_KEYS, UNSORTED] as const;
+
+type ItemType = (typeof TYPE_KEYS)[number];
+type ItemSpace = (typeof SPACE_KEYS)[number];
+type ItemStatus = (typeof STATUS_KEYS)[number];
+
+const LINK_SEMANTICS = {
+  parent_id: "Traces to (hierarchy): a task under a goal, a space goal under an identity goal. Drives get_children and the Cascade view.",
+  related: "Lateral association: non-hierarchical links between items. Drives get_backlinks and the Linked/Backlinks panels.",
+} as const;
+
+const SCHEMA_INFO = {
+  version: SCHEMA_VERSION,
+  types: TYPE_KEYS,
+  spaces: SPACE_KEYS,
+  statuses: STATUS_KEYS,
+  null_space: "unsorted — captured but not yet filed; always visible in the Unsorted bucket",
+  space_filters: SPACE_FILTER_KEYS,
+  link_semantics: LINK_SEMANTICS,
+};
+
 type ListOptions = {
   type: string | null;
-  space: string | null; // "identity" is a virtual filter that maps to WHERE space IS NULL
+  space: string | null; // "unsorted" is a virtual filter that maps to WHERE space IS NULL
   status: string | null;
   parent_id: string | null;
   limit: number;
@@ -29,7 +67,7 @@ interface Item {
   id: string;
   type: ItemType;
   title: string;
-  space: ItemSpace | null; // null = identity layer
+  space: ItemSpace | null; // null = unsorted (not yet filed)
   status: ItemStatus;
   tags: string;
   metadata: string;
@@ -47,9 +85,9 @@ interface ItemResponse extends Omit<Item, "tags" | "metadata" | "related"> {
   related: string[];
 }
 
-const TYPES = new Set<ItemType>(["page", "goal", "idea", "task", "link"]);
-const SPACES = new Set<ItemSpace>(["school", "career", "learning", "projects", "life", "saved"]);
-const STATUSES = new Set<ItemStatus>(["active", "paused", "done", "archived", "inbox"]);
+const TYPES = new Set<ItemType>(TYPE_KEYS);
+const SPACES = new Set<ItemSpace>(SPACE_KEYS);
+const STATUSES = new Set<ItemStatus>(STATUS_KEYS);
 
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
@@ -73,7 +111,8 @@ export default {
       }
 
       if (url.pathname === "/") return htmlResponse(renderApp(env.APP_NAME ?? "et al."));
-      if (url.pathname === "/health") return json({ ok: true, service: "et-al" });
+      if (url.pathname === "/health") return json({ ok: true, service: "et-al", schema_version: SCHEMA_VERSION });
+      if (url.pathname === "/api/schema") return json(SCHEMA_INFO);
 
       if (url.pathname === "/api/session") {
         if (request.method === "GET") {
@@ -165,13 +204,22 @@ function createEtAlMcpServer(env: Env): McpServer {
   });
 
   server.registerTool(
+    "get_schema",
+    {
+      description: "Canonical et al. schema: version, type/space/status enums, and link semantics (parent_id = traces-to hierarchy, related = lateral). Call this before writing if unsure which values are valid.",
+      inputSchema: {},
+    },
+    async () => mcpJson(SCHEMA_INFO),
+  );
+
+  server.registerTool(
     "list_items",
     {
-      description: "List et al. items filtered by type, space, status, parent_id, limit, and offset.",
+      description: "List et al. items filtered by type, space, status, parent_id, limit, and offset. space 'unsorted' matches items not yet filed into any space.",
       inputSchema: {
-        type: z.enum(["page", "goal", "idea", "task", "link"]).optional(),
-        space: z.enum(["identity", "school", "career", "learning", "projects", "life", "saved"]).optional(),
-        status: z.enum(["active", "paused", "done", "archived", "inbox"]).optional(),
+        type: z.enum(TYPE_KEYS).optional(),
+        space: z.enum(SPACE_FILTER_KEYS).optional(),
+        status: z.enum(STATUS_KEYS).optional(),
         parent_id: z.string().optional().describe("Filter by parent item ID"),
         limit: z.number().int().min(1).max(100).optional(),
         offset: z.number().int().min(0).optional(),
@@ -197,17 +245,17 @@ function createEtAlMcpServer(env: Env): McpServer {
   server.registerTool(
     "create_item",
     {
-      description: "Create a new et al. item. Use dump/inbox for messy capture when structure is unclear. Use task type with due_date for actionable to-dos. Use identity space for profile data (skills, experiences).",
+      description: "Create a new et al. item. Omit space to land in the visible Unsorted bucket. Use the 'identity' space for the identity layer (who you are / want to become). Use task type with due_date for actionable to-dos. parent_id = traces-to hierarchy; related = lateral links.",
       inputSchema: {
-        type: z.enum(["page", "goal", "idea", "task", "link"]).default("idea"),
+        type: z.enum(TYPE_KEYS).default("idea"),
         title: z.string().min(1),
-        space: z.enum(["identity", "school", "career", "learning", "projects", "life", "saved"]).optional(),
-        status: z.enum(["active", "paused", "done", "archived", "inbox"]).optional(),
+        space: z.enum(SPACE_KEYS).optional().describe("Omit for unsorted; 'identity' is the layer above the other spaces"),
+        status: z.enum(STATUS_KEYS).optional(),
         tags: z.array(z.string()).optional(),
         metadata: z.record(z.string(), z.unknown()).optional(),
         content: z.string().optional(),
-        related: z.array(z.string()).optional(),
-        parent_id: z.string().optional().describe("Parent item ID — use to nest tasks under pages or notes under goals"),
+        related: z.array(z.string()).optional().describe("Lateral links — IDs must exist or the write errors"),
+        parent_id: z.string().optional().describe("Traces-to hierarchy: task under a goal, space goal under an identity goal. Must exist or the write errors"),
         due_date: z.number().int().optional().describe("Unix timestamp deadline, primarily for tasks"),
       },
     },
@@ -217,18 +265,18 @@ function createEtAlMcpServer(env: Env): McpServer {
   server.registerTool(
     "update_item",
     {
-      description: "Partially update an existing et al. item by ID.",
+      description: "Partially update an existing et al. item by ID. Invalid values error instead of being silently coerced.",
       inputSchema: {
         id: z.string().min(1),
-        type: z.enum(["page", "goal", "idea", "task", "link"]).optional(),
+        type: z.enum(TYPE_KEYS).optional(),
         title: z.string().min(1).optional(),
-        space: z.enum(["identity", "school", "career", "learning", "projects", "life", "saved"]).optional(),
-        status: z.enum(["active", "paused", "done", "archived", "inbox"]).optional(),
+        space: z.enum(SPACE_KEYS).nullable().optional().describe("null moves the item to unsorted"),
+        status: z.enum(STATUS_KEYS).optional(),
         tags: z.array(z.string()).optional(),
         metadata: z.record(z.string(), z.unknown()).optional(),
         content: z.string().optional(),
-        related: z.array(z.string()).optional(),
-        parent_id: z.string().nullable().optional().describe("Set to null to remove parent"),
+        related: z.array(z.string()).optional().describe("Lateral links — IDs must exist or the write errors"),
+        parent_id: z.string().nullable().optional().describe("Traces-to hierarchy; must exist or the write errors. Set to null to remove parent"),
         due_date: z.number().int().nullable().optional().describe("Unix timestamp deadline; null to clear"),
       },
     },
@@ -255,12 +303,12 @@ function createEtAlMcpServer(env: Env): McpServer {
   server.registerTool(
     "search_items",
     {
-      description: "Search et al. items across title, content, and tags. Optional filters narrow the result set.",
+      description: "Search et al. items across title, content, and tags. Optional filters narrow the result set. space 'unsorted' matches items not yet filed.",
       inputSchema: {
         query: z.string().min(1),
-        type: z.enum(["page", "goal", "idea", "task", "link"]).optional(),
-        space: z.enum(["identity", "school", "career", "learning", "projects", "life", "saved"]).optional(),
-        status: z.enum(["active", "paused", "done", "archived", "inbox"]).optional(),
+        type: z.enum(TYPE_KEYS).optional(),
+        space: z.enum(SPACE_FILTER_KEYS).optional(),
+        status: z.enum(STATUS_KEYS).optional(),
         limit: z.number().int().min(1).max(100).optional(),
       },
     },
@@ -279,11 +327,11 @@ function createEtAlMcpServer(env: Env): McpServer {
   server.registerTool(
     "bulk_update",
     {
-      description: "Update status, space, tags, or related IDs for multiple items at once.",
+      description: "Update status, space, tags, or related IDs for multiple items at once. Invalid values error instead of being silently coerced.",
       inputSchema: {
         ids: z.array(z.string().min(1)).min(1).max(50),
-        status: z.enum(["active", "paused", "done", "archived", "inbox"]).optional(),
-        space: z.enum(["identity", "school", "career", "learning", "projects", "life", "saved"]).optional(),
+        status: z.enum(STATUS_KEYS).optional(),
+        space: z.enum(SPACE_KEYS).nullable().optional().describe("null moves items to unsorted"),
         tags: z.array(z.string()).optional(),
         related: z.array(z.string()).optional(),
       },
@@ -319,11 +367,11 @@ function createEtAlMcpServer(env: Env): McpServer {
   server.registerTool(
     "get_children",
     {
-      description: "List items that are direct children of a given parent item (by parent_id). Useful for getting tasks under a page, or notes under a goal.",
+      description: "List items that are direct children of a given parent item (by parent_id). Useful for getting tasks under a page, or notes under a goal. Returns all children unless you pass filters.",
       inputSchema: {
         parent_id: z.string().min(1),
-        type: z.enum(["page", "goal", "idea", "task", "link"]).optional(),
-        status: z.enum(["active", "paused", "done", "archived", "inbox"]).optional(),
+        type: z.enum(TYPE_KEYS).optional(),
+        status: z.enum(STATUS_KEYS).optional(),
         limit: z.number().int().min(1).max(100).optional(),
         offset: z.number().int().min(0).optional(),
       },
@@ -348,7 +396,7 @@ function createEtAlMcpServer(env: Env): McpServer {
     {
       description: "Summarize one space with status/type counts, frequent tags, and recently updated highlights. This is a deterministic, read-only summary rather than an AI-generated narrative.",
       inputSchema: {
-        space: z.enum(["identity", "school", "career", "learning", "projects", "life", "saved"]),
+        space: z.enum(SPACE_FILTER_KEYS),
         recent_limit: z.number().int().min(1).max(20).default(5),
       },
     },
@@ -382,8 +430,8 @@ function normalizeListOptions(input: {
     space: input.space ?? null,
     status: input.status ?? null,
     parent_id: input.parent_id ?? null,
-    limit: clampNumber(String(input.limit ?? ""), 1, 100, 30),
-    offset: clampNumber(String(input.offset ?? ""), 0, 10000, 0),
+    limit: clampNumber(input.limit, 1, 100, 30),
+    offset: clampNumber(input.offset, 0, 10000, 0),
   };
 }
 
@@ -398,10 +446,10 @@ async function listItems(db: D1Database, options: ListOptions): Promise<ItemResp
   }
 
   if (options.space) {
-    if (options.space === "identity") {
+    if (options.space === UNSORTED) {
       clauses.push("space IS NULL");
     } else {
-      if (!SPACES.has(options.space as ItemSpace)) throw new Error("Invalid space");
+      if (!SPACES.has(options.space as ItemSpace)) throw new Error(`Invalid space: ${options.space}`);
       clauses.push("space = ?");
       values.push(options.space);
     }
@@ -442,10 +490,10 @@ async function searchItems(db: D1Database, query: string, options: ListOptions):
   }
 
   if (options.space) {
-    if (options.space === "identity") {
+    if (options.space === UNSORTED) {
       clauses.push("items.space IS NULL");
     } else {
-      if (!SPACES.has(options.space as ItemSpace)) throw new Error("Invalid space");
+      if (!SPACES.has(options.space as ItemSpace)) throw new Error(`Invalid space: ${options.space}`);
       clauses.push("items.space = ?");
       values.push(options.space);
     }
@@ -479,8 +527,33 @@ async function getItem(db: D1Database, id: string): Promise<ItemResponse | null>
   return row ? serializeItem(row) : null;
 }
 
+// A write either applies exactly as requested or errors — never a silent no-op.
+// parent_id and related IDs must point at real items.
+async function assertLinksExist(
+  db: D1Database,
+  links: { parent_id?: string | null; related?: string[] },
+  selfId?: string,
+): Promise<void> {
+  const ids = new Set<string>();
+  if (links.parent_id) ids.add(links.parent_id);
+  for (const relatedId of links.related ?? []) ids.add(relatedId);
+  if (selfId && ids.has(selfId)) throw new Error("Invalid link: an item cannot reference itself");
+  if (ids.size === 0) return;
+
+  const list = [...ids];
+  const placeholders = list.map(() => "?").join(", ");
+  const result = await db
+    .prepare(`SELECT id FROM items WHERE id IN (${placeholders})`)
+    .bind(...list)
+    .all<{ id: string }>();
+  const found = new Set((result.results ?? []).map((row) => row.id));
+  const missing = list.filter((linkId) => !found.has(linkId));
+  if (missing.length) throw new Error(`Invalid link: no item with id ${missing.join(", ")}`);
+}
+
 async function createItem(db: D1Database, payload: unknown): Promise<ItemResponse> {
   const input = parseCreatePayload(payload);
+  await assertLinksExist(db, input);
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
 
@@ -510,6 +583,7 @@ async function createItem(db: D1Database, payload: unknown): Promise<ItemRespons
 
 async function updateItem(db: D1Database, id: string, payload: unknown): Promise<ItemResponse | null> {
   const input = parseUpdatePayload(payload);
+  await assertLinksExist(db, input, id);
   const entries = Object.entries(input);
   if (entries.length === 0) return getItem(db, id);
 
@@ -534,8 +608,7 @@ async function updateItem(db: D1Database, id: string, payload: unknown): Promise
 async function bulkUpdateItems(
   db: D1Database,
   ids: string[],
-  // "identity" is accepted here and normalized to NULL by parseUpdatePayload.
-  updates: Partial<{ status: ItemStatus; space: SpaceInput; tags: string[]; related: string[] }>,
+  updates: Partial<{ status: ItemStatus; space: ItemSpace | null; tags: string[]; related: string[] }>,
 ) {
   const cleanedUpdates = Object.fromEntries(
     Object.entries(updates).filter(([, value]) => value !== undefined),
@@ -564,7 +637,7 @@ async function getDailyReview(db: D1Database) {
 
   const inbox = await db.prepare(`
     SELECT * FROM items
-    WHERE status = 'inbox' OR type = 'dump'
+    WHERE status = 'inbox'
     ORDER BY created_at DESC
     LIMIT 5
   `).all<Item>();
@@ -600,44 +673,66 @@ async function getDailyReview(db: D1Database) {
   };
 }
 
-// One round trip for the whole Identity home screen. Every lens (Core, Constellation,
-// Cascade) reads from this, so fanning out per-item /backlinks calls would be an N+1.
+// One round trip for the whole Identity home screen. Every lens (Cascade,
+// Constellation, nav) derives from this payload, so the views cannot disagree.
+// An item is "traced to identity" via EITHER mechanism:
+//   parent_id → identity item ("traces to", the primary hierarchy)
+//   related[] contains identity id (lateral association)
 async function getIdentityGraph(db: D1Database) {
   const identity = await db.prepare(`
     SELECT * FROM items
-    WHERE space IS NULL AND status != 'archived'
+    WHERE space = 'identity' AND status != 'archived'
     ORDER BY type = 'goal' DESC, updated_at DESC
   `).all<Item>();
 
-  // Space items pointing back up at any identity item — ring 2 of the constellation.
   const inbound = await db.prepare(`
-    SELECT DISTINCT items.*, je.value AS identity_id
-    FROM items, json_each(items.related) je
-    WHERE items.space IS NOT NULL
+    SELECT items.*, items.parent_id AS identity_id, 'parent' AS via
+    FROM items
+    WHERE (items.space IS NULL OR items.space != 'identity')
       AND items.status != 'archived'
-      AND je.value IN (SELECT id FROM items WHERE space IS NULL)
-    ORDER BY items.updated_at DESC
-  `).all<Item & { identity_id: string }>();
+      AND items.parent_id IN (SELECT id FROM items WHERE space = 'identity')
+    UNION
+    SELECT items.*, je.value AS identity_id, 'related' AS via
+    FROM items, json_each(items.related) je
+    WHERE (items.space IS NULL OR items.space != 'identity')
+      AND items.status != 'archived'
+      AND je.value IN (SELECT id FROM items WHERE space = 'identity')
+    ORDER BY updated_at DESC
+  `).all<Item & { identity_id: string; via: "parent" | "related" }>();
 
-  // Space goals with no identity ancestor at all — the orphan callout.
+  // Goals outside the identity layer with no trace to it via either mechanism.
   const orphanGoals = await db.prepare(`
     SELECT * FROM items
-    WHERE type = 'goal' AND space IS NOT NULL
+    WHERE type = 'goal'
+      AND (space IS NULL OR space != 'identity')
       AND status NOT IN ('done', 'archived')
       AND json_extract(metadata, '$.untethered') IS NOT 1
+      AND (parent_id IS NULL OR parent_id NOT IN (SELECT id FROM items WHERE space = 'identity'))
       AND NOT EXISTS (
         SELECT 1 FROM json_each(items.related) je
-        WHERE je.value IN (SELECT id FROM items WHERE space IS NULL)
+        WHERE je.value IN (SELECT id FROM items WHERE space = 'identity')
       )
     ORDER BY updated_at DESC
   `).all<Item>();
 
-  const links: Record<string, ItemResponse[]> = {};
+  // Dedupe: an item traced via both mechanisms keeps 'parent' (the stronger claim).
+  const links: Record<string, Array<ItemResponse & { via: "parent" | "related" }>> = {};
+  const seen = new Map<string, ItemResponse & { via: "parent" | "related" }>();
   for (const row of inbound.results ?? []) {
-    (links[row.identity_id] ??= []).push(serializeItem(row));
+    const key = `${row.identity_id}:${row.id}`;
+    const existing = seen.get(key);
+    if (existing) {
+      if (existing.via === "related" && row.via === "parent") existing.via = "parent";
+      continue;
+    }
+    const entry = { ...serializeItem(row), via: row.via };
+    delete (entry as Record<string, unknown>).identity_id;
+    seen.set(key, entry);
+    (links[row.identity_id] ??= []).push(entry);
   }
 
   return {
+    schema_version: SCHEMA_VERSION,
     identity: (identity.results ?? []).map(serializeItem),
     links,
     orphanGoals: (orphanGoals.results ?? []).map(serializeItem),
@@ -777,9 +872,9 @@ async function suggestRelatedItems(db: D1Database, id: string, limit: number) {
   };
 }
 
-async function summarizeSpace(db: D1Database, space: SpaceInput, recentLimit: number) {
-  // The identity layer is space IS NULL, so it needs a different predicate.
-  const result = space === "identity"
+async function summarizeSpace(db: D1Database, space: ItemSpace | typeof UNSORTED, recentLimit: number) {
+  // "unsorted" is the virtual bucket for items with no space yet.
+  const result = space === UNSORTED
     ? await db.prepare("SELECT * FROM items WHERE space IS NULL ORDER BY updated_at DESC").all<Item>()
     : await db.prepare("SELECT * FROM items WHERE space = ? ORDER BY updated_at DESC").bind(space).all<Item>();
   const items = (result.results ?? []).map(serializeItem);
@@ -820,7 +915,7 @@ function inferItemType(item: ItemResponse): ItemType {
 
 function inferItemSpace(item: ItemResponse, type: ItemType): ItemSpace | null {
   const text = `${item.title} ${item.content} ${item.tags.join(" ")}`.toLowerCase();
-  if (type === "goal" && /\b(life|career|identity|purpose|vision|brand)\b/.test(text)) return null; // identity layer
+  if (type === "goal" && /\b(identity|purpose|vision|brand|become)\b/.test(text)) return "identity";
   if (type === "link") return "saved";
   if (/\b(internship|job|resume|career|interview|application)\b/.test(text)) return "career";
   if (/\b(class|course|school|homework|assignment|lecture|professor)\b/.test(text)) return "school";
@@ -916,25 +1011,24 @@ function parseCreatePayload(payload: unknown) {
   if (!isPlainObject(payload)) throw new Error("Invalid JSON body");
 
   const title = readString(payload.title, "Untitled capture").trim();
-  const type = readEnum(payload.type, TYPES, "idea");
-  // null space = identity layer; "identity" keyword also maps to null
-  const rawSpace = payload.space;
-  const space: ItemSpace | null =
-    rawSpace === "identity" || rawSpace === null || rawSpace === undefined
-      ? null
-      : SPACES.has(rawSpace as ItemSpace) ? (rawSpace as ItemSpace) : null;
-  const status = readEnum(payload.status, STATUSES, type === "goal" ? "active" : "inbox");
+  const type = payload.type === undefined ? "idea" : requireEnum(payload.type, TYPES, "type");
+  // Omitted/null space = unsorted. Anything else must be a real space — an
+  // unknown space is an error, never a silent null.
+  const space = readSpaceStrict(payload.space);
+  const status = payload.status === undefined
+    ? (type === "goal" ? "active" : "inbox")
+    : requireEnum(payload.status, STATUSES, "status");
 
   return {
     type,
     title: title || "Untitled capture",
     space,
     status,
-    tags: readTags(payload.tags),
+    tags: payload.tags === undefined ? [] : requireStringArray(payload.tags, "tags"),
     metadata: readObject(payload.metadata),
     content: readString(payload.content, ""),
-    related: readStringArray(payload.related),
-    parent_id: typeof payload.parent_id === "string" && payload.parent_id ? payload.parent_id : null,
+    related: payload.related === undefined ? [] : requireStringArray(payload.related, "related"),
+    parent_id: readParentId(payload.parent_id),
     due_date: readDueDate(payload.due_date),
   };
 }
@@ -954,29 +1048,51 @@ function parseUpdatePayload(payload: unknown): Partial<{
   if (!isPlainObject(payload)) throw new Error("Invalid JSON body");
 
   const out: ReturnType<typeof parseUpdatePayload> = {};
-  if ("type" in payload) out.type = readEnum(payload.type, TYPES, "idea");
+  if ("type" in payload) out.type = requireEnum(payload.type, TYPES, "type");
   if ("title" in payload) out.title = readString(payload.title, "").trim() || "Untitled capture";
-  if ("space" in payload) {
-    const s = payload.space;
-    out.space = (s === "identity" || s === null) ? null : (SPACES.has(s as ItemSpace) ? s as ItemSpace : null);
-  }
-  if ("status" in payload) out.status = readEnum(payload.status, STATUSES, "inbox");
-  if ("tags" in payload) out.tags = readTags(payload.tags);
+  if ("space" in payload) out.space = readSpaceStrict(payload.space); // null = unsorted; junk errors
+  if ("status" in payload) out.status = requireEnum(payload.status, STATUSES, "status");
+  if ("tags" in payload) out.tags = requireStringArray(payload.tags, "tags");
   if ("metadata" in payload) out.metadata = readObject(payload.metadata);
   if ("content" in payload) out.content = readString(payload.content, "");
-  if ("related" in payload) out.related = readStringArray(payload.related);
-  if ("parent_id" in payload) out.parent_id = typeof payload.parent_id === "string" && payload.parent_id ? payload.parent_id : null;
+  if ("related" in payload) out.related = requireStringArray(payload.related, "related");
+  if ("parent_id" in payload) out.parent_id = readParentId(payload.parent_id);
   if ("due_date" in payload) out.due_date = readDueDate(payload.due_date);
   return out;
 }
 
+function requireEnum<T extends string>(value: unknown, allowed: Set<T>, field: string): T {
+  if (typeof value === "string" && allowed.has(value as T)) return value as T;
+  throw new Error(`Invalid ${field}: ${JSON.stringify(value)} (allowed: ${[...allowed].join(", ")})`);
+}
+
+function readSpaceStrict(value: unknown): ItemSpace | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string" && SPACES.has(value as ItemSpace)) return value as ItemSpace;
+  throw new Error(`Invalid space: ${JSON.stringify(value)} (allowed: ${SPACE_KEYS.join(", ")}, or null for unsorted)`);
+}
+
+function readParentId(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value === "string") return value;
+  throw new Error(`Invalid parent_id: ${JSON.stringify(value)}`);
+}
+
+function requireStringArray(value: unknown, field: string): string[] {
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+    throw new Error(`Invalid ${field}: expected an array of strings`);
+  }
+  return (value as string[]).map((entry) => entry.trim()).filter(Boolean);
+}
+
 function readDueDate(value: unknown): number | null {
+  if (value === undefined || value === null) return null;
   if (typeof value === "number" && Number.isFinite(value)) return Math.floor(value);
   if (typeof value === "string" && value) {
     const ts = Date.parse(value);
-    return Number.isFinite(ts) ? Math.floor(ts / 1000) : null;
+    if (Number.isFinite(ts)) return Math.floor(ts / 1000);
   }
-  return null;
+  throw new Error(`Invalid due_date: ${JSON.stringify(value)} (unix seconds or a parseable date string)`);
 }
 
 async function readJson(request: Request): Promise<unknown> {
@@ -1071,24 +1187,14 @@ function readObject(value: unknown): Record<string, unknown> {
   return isPlainObject(value) ? value : {};
 }
 
-function readTags(value: unknown): string[] {
-  return readStringArray(value);
-}
-
-function readStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((tag): tag is string => typeof tag === "string").map((tag) => tag.trim()).filter(Boolean);
-}
-
-function readEnum<T extends string>(value: unknown, allowed: Set<T>, fallback: T): T {
-  return typeof value === "string" && allowed.has(value as T) ? value as T : fallback;
-}
-
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function clampNumber(value: string | null, min: number, max: number, fallback: number): number {
+function clampNumber(value: string | number | null | undefined, min: number, max: number, fallback: number): number {
+  // "" and null must fall through to the fallback: Number("") is 0, and 0
+  // clamped by min:1 silently became limit=1 — the get_children truncation bug.
+  if (value === null || value === undefined || value === "") return fallback;
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, Math.floor(parsed)));
@@ -1278,7 +1384,11 @@ function renderApp(appName: string): string {
         '<div class="placeholder" style="color:#b4776f;text-align:left;font-family:monospace;font-size:12px;white-space:pre-wrap">' +
         'JS ERROR: ' + msg + '\\nAt line ' + line + '\\n' + (err && err.stack ? err.stack : '') + '</div>';
     };
-    var SPACES = {
+    // The one schema. Injected by the worker from the same object that defines
+    // the MCP tool enums and the DB CHKs — the UI cannot drift from the model.
+    var SCHEMA = ${JSON.stringify(SCHEMA_INFO)};
+    var SPACE_META = {
+      identity: { label: 'Identity', dot: '#c4917c' },
       school:   { label: 'School',   dot: '#7c93ab' },
       career:   { label: 'Career',   dot: '#b1a07c' },
       learning: { label: 'Learning', dot: '#6f8fa8' },
@@ -1286,24 +1396,30 @@ function renderApp(appName: string): string {
       life:     { label: 'Life',     dot: '#c48b8b' },
       saved:    { label: 'Saved',    dot: '#8a7cab' }
     };
-    var TYPES = {
+    var TYPE_META = {
       page: { label: 'Page', color: '#7c93ab', border: 'rgba(124,147,171,.35)' },
       goal: { label: 'Goal', color: '#93a3b6', border: 'rgba(147,163,182,.35)' },
       idea: { label: 'Idea', color: '#7ca88f', border: 'rgba(124,168,143,.35)' },
       task: { label: 'Task', color: '#c4917c', border: 'rgba(196,145,124,.35)' },
       link: { label: 'Link', color: '#b1a07c', border: 'rgba(177,160,124,.35)' }
     };
-    var TYPE_KEYS = ['page', 'goal', 'idea', 'task', 'link'];
-    var SPACE_KEYS = ['school', 'career', 'learning', 'projects', 'life', 'saved'];
+    var SPACES = {};
+    SCHEMA.spaces.forEach(function (key) { SPACES[key] = SPACE_META[key] || { label: key, dot: '#9aa6b3' }; });
+    var TYPES = {};
+    SCHEMA.types.forEach(function (key) { TYPES[key] = TYPE_META[key] || { label: key, color: '#7c93ab', border: 'rgba(124,147,171,.35)' }; });
+    var TYPE_KEYS = SCHEMA.types;
+    // Identity is rendered as its own layer, not a peer space row.
+    var SPACE_KEYS = SCHEMA.spaces.filter(function (key) { return key !== 'identity'; });
+    var UNSORTED_INFO = { label: 'Unsorted', dot: '#aeb8c3' };
     var IDENTITY_COLOR = '#c4917c';
 
     var state = {
       view: 'home', activeId: null, filterSpace: 'all', filterType: null, query: '',
       items: [], review: null, loading: true, error: null, editing: false, capture: null, toast: null,
-      authed: false, unlockPrompt: null, backlinks: null,
-      // Core is the default lens: you land on your own words, not on a diagram
-      // you have already absorbed. The last-used lens survives a re-render.
-      identity: null, identityTab: 'core'
+      authed: false, unlockPrompt: null, backlinks: null, lastSync: null,
+      // Cascade is the default lens: identity goals earn their place by what hangs
+      // off them, and that chain is what you act on. The last-used lens survives a re-render.
+      identity: null, identityTab: 'cascade', collapsed: {}
     };
 
     // The browser never stores the key: POST /api/session exchanges it once for
@@ -1328,14 +1444,20 @@ function renderApp(appName: string): string {
     function spaceOf(item) { return (item.space && SPACES[item.space]) ? item.space : null; }
     function getSpaceInfo(item) {
       var sp = spaceOf(item);
-      return sp ? SPACES[sp] : { label: 'Identity', dot: IDENTITY_COLOR };
+      return sp ? SPACES[sp] : UNSORTED_INFO;
     }
-    function isIdentity(item) { return !item.space; }
+    function isIdentity(item) { return item.space === 'identity'; }
+    function isUnsorted(item) { return !item.space; }
     function identityItems() { return (state.identity && state.identity.identity) || state.items.filter(isIdentity); }
-    // The lineage chip: the identity item this one explicitly points back up at.
+    // The lineage chip: the identity item this one traces up to — parent_id
+    // (hierarchy) wins, related (lateral) counts too.
     function identityAncestor(item) {
       if (!item || isIdentity(item)) return null;
       var pool = identityItems();
+      if (item.parent_id) {
+        var parent = pool.find(function (candidate) { return candidate.id === item.parent_id; });
+        if (parent) return parent;
+      }
       var ids = item.related || [];
       for (var i = 0; i < ids.length; i++) {
         var hit = pool.find(function (candidate) { return candidate.id === ids[i]; });
@@ -1376,9 +1498,11 @@ function renderApp(appName: string): string {
       var text = (item.content || '').replace(/[#>*\\-]/g, ' ').replace(/\\s+/g, ' ').trim();
       return text ? text.slice(0, 160) : 'No content yet — open to fill it in.';
     }
-    function checklistOf(item) {
-      var list = item.metadata && item.metadata.checklist;
-      return Array.isArray(list) ? list : null;
+    // Subtasks are real task items with parent_id = this item — queryable,
+    // consistent, no freeform metadata checklists.
+    function childTasks(item) {
+      return childrenOf(item.id).filter(function (child) { return child.type === 'task'; })
+        .sort(function (a, b) { return a.created_at - b.created_at; });
     }
     function toast(message) {
       state.toast = message;
@@ -1388,8 +1512,9 @@ function renderApp(appName: string): string {
     }
 
     // ---------- data ----------
-    async function load() {
-      state.loading = true; state.error = null; render();
+    // quiet = refresh in place (window focus, post-write) without the loading flash.
+    async function load(quiet) {
+      if (!quiet) { state.loading = true; state.error = null; render(); }
       try {
         var responses = await Promise.all([
           fetch('/api/review'), fetch('/api/items?limit=100'),
@@ -1405,11 +1530,21 @@ function renderApp(appName: string): string {
         state.items = payloads[1].items || [];
         state.authed = !!payloads[2].authenticated;
         state.identity = payloads[3];
+        state.lastSync = Date.now();
       } catch (error) {
-        state.error = error && error.message ? error.message : 'The workspace could not be loaded.';
+        if (!quiet) state.error = error && error.message ? error.message : 'The workspace could not be loaded.';
       } finally {
         state.loading = false; render();
       }
+    }
+
+    // Identity graph is the shared source for Cascade, Constellation, and the
+    // nav card — refresh it after any write that could change a link.
+    async function refreshIdentity() {
+      try {
+        var response = await fetch('/api/identity/graph');
+        if (response.ok) { state.identity = await response.json(); state.lastSync = Date.now(); }
+      } catch (error) {}
     }
 
     async function write(method, path, payload) {
@@ -1437,7 +1572,18 @@ function renderApp(appName: string): string {
       try {
         mergeItem(await write('PATCH', '/api/items/' + id, updates));
         render();
+        refreshIdentity().then(render);
       } catch (error) { failWrite(error, function () { patchItem(id, updates); }); }
+    }
+
+    // Inline fix for an orphan goal: trace it to an identity item via parent_id.
+    async function linkToIdentity(id, identityId) {
+      try {
+        mergeItem(await write('PATCH', '/api/items/' + id, { parent_id: identityId }));
+        await refreshIdentity();
+        render();
+        toast('Traced to identity');
+      } catch (error) { failWrite(error, function () { linkToIdentity(id, identityId); }); }
     }
 
     // Orphan nagging should be closable, not a permanent scold.
@@ -1478,32 +1624,27 @@ function renderApp(appName: string): string {
       patchItem(goal.id, { status: goal.status === 'done' ? 'active' : 'done' });
     }
 
-    function toggleCheck(item, index) {
-      var list = (checklistOf(item) || []).map(function (entry, i) {
-        return i === index ? { text: entry.text, done: !entry.done } : entry;
-      });
-      var metadata = Object.assign({}, item.metadata, { checklist: list });
-      patchItem(item.id, { metadata: metadata });
+    function toggleTask(task) {
+      patchItem(task.id, { status: task.status === 'done' ? 'active' : 'done' });
     }
 
-    function addCheck(item, text) {
+    async function addSubtask(item, text) {
       var value = text.trim(); if (!value) return;
-      var list = (checklistOf(item) || []).concat([{ text: value, done: false }]);
-      patchItem(item.id, { metadata: Object.assign({}, item.metadata, { checklist: list }) });
-    }
-
-    function addThought(item, text) {
-      var value = text.trim(); if (!value) return;
-      var line = '[' + clock(Date.now() / 1000) + '] ' + value;
-      var content = item.content ? line + '\\n' + item.content : line;
-      patchItem(item.id, { content: content });
+      try {
+        var created = await write('POST', '/api/items', {
+          type: 'task', title: value, parent_id: item.id, space: item.space, status: 'active'
+        });
+        mergeItem(created);
+        render();
+      } catch (error) { failWrite(error, function () { addSubtask(item, text); }); }
     }
 
     function filteredItems() {
       var query = state.query.trim().toLowerCase();
       return state.items.filter(function (item) {
         if (state.filterSpace === 'identity' && !isIdentity(item)) return false;
-        if (state.filterSpace !== 'all' && state.filterSpace !== 'identity' && spaceOf(item) !== state.filterSpace) return false;
+        if (state.filterSpace === 'unsorted' && !isUnsorted(item)) return false;
+        if (state.filterSpace !== 'all' && state.filterSpace !== 'identity' && state.filterSpace !== 'unsorted' && spaceOf(item) !== state.filterSpace) return false;
         if (state.filterType && typeOf(item) !== state.filterType) return false;
         if (item.status === 'archived') return false;
         if (query) {
@@ -1533,8 +1674,10 @@ function renderApp(appName: string): string {
     function renderNav() {
       var counts = {};
       var identityCount = 0;
+      var unsortedCount = 0;
       state.items.forEach(function (item) {
         if (isIdentity(item)) { identityCount++; }
+        else if (isUnsorted(item)) { unsortedCount++; }
         else { counts[item.space] = (counts[item.space] || 0) + 1; }
       });
 
@@ -1550,9 +1693,11 @@ function renderApp(appName: string): string {
             plural(goalCount, 'goal') + ' · ' + plural(Math.max(0, identityCount - goalCount), 'page') + '</span>' +
         '</button>';
 
-      // Spaces
+      // Spaces — plus the Unsorted bucket: unfiled items are always visible,
+      // never nowhere.
       var rows = [{ key: 'all', label: 'All items', dot: '#1e2530', count: state.items.length }].concat(
-        SPACE_KEYS.map(function (key) { return { key: key, label: SPACES[key].label, dot: SPACES[key].dot, count: counts[key] || 0 }; })
+        SPACE_KEYS.map(function (key) { return { key: key, label: SPACES[key].label, dot: SPACES[key].dot, count: counts[key] || 0 }; }),
+        [{ key: 'unsorted', label: UNSORTED_INFO.label, dot: UNSORTED_INFO.dot, count: unsortedCount }]
       );
       document.getElementById('spaceList').innerHTML = rows.map(function (row) {
         var active = state.filterSpace === row.key && state.view === 'home';
@@ -1567,20 +1712,19 @@ function renderApp(appName: string): string {
       }).join('');
 
       var open = state.items.filter(function (item) { return item.status === 'active' || item.status === 'inbox'; }).length;
+      var synced = state.lastSync ? 'Synced ' + clock(state.lastSync / 1000) : 'Not synced yet';
       document.getElementById('navFoot').innerHTML =
-        'Everything is an item<br>Cap. ' + pad(state.items.length) + ' · Active ' + pad(open) + '<br>CF free tier · v2';
+        'Everything is an item<br>Cap. ' + pad(state.items.length) + ' · Active ' + pad(open) +
+        '<br>' + synced + ' · Schema v' + SCHEMA.version;
     }
 
     // ---------- identity ----------
     function renderIdentity() {
       var tabs = [
-        { key: 'core', label: 'Core' },
-        { key: 'constellation', label: 'Constellation' },
-        { key: 'cascade', label: 'Cascade' }
+        { key: 'cascade', label: 'Cascade' },
+        { key: 'constellation', label: 'Constellation' }
       ];
-      var body = state.identityTab === 'constellation' ? renderConstellation()
-        : state.identityTab === 'cascade' ? renderCascade()
-        : renderIdentityCore();
+      var body = state.identityTab === 'constellation' ? renderConstellation() : renderCascade();
 
       return '<div class="home"><section>' +
         '<div class="sec-head" style="align-items:center">' +
@@ -1596,29 +1740,6 @@ function renderApp(appName: string): string {
           }).join('') + '</div>' +
         '</div>' + body +
       '</section></div>';
-    }
-
-    // Core — the written self. The lens you open to remember.
-    function renderIdentityCore() {
-      var all = identityItems();
-      var goals = all.filter(function (i) { return i.type === 'goal'; });
-      var pages = all.filter(function (i) { return i.type !== 'goal'; });
-
-      function group(title, list, empty) {
-        return '<div class="sec-head" style="margin-top:18px"><h2 class="sec">' + title + '</h2>' +
-          '<span class="sec-meta">' + list.length + '</span></div>' +
-          (list.length ? '<div class="feed">' + list.map(function (item) {
-            return '<button class="feed-card" data-open="' + esc(item.id) + '">' +
-              '<span class="num" style="padding-top:3px">' + num(item) + '</span>' +
-              '<div style="flex:1;min-width:0">' +
-                '<div class="feed-title">' + esc(item.title) + '</div>' +
-                '<div class="feed-snippet">' + esc(snippetOf(item)) + '</div>' +
-              '</div></button>';
-          }).join('') + '</div>' : '<div class="placeholder">' + empty + '</div>');
-      }
-
-      return group('Goals', goals, 'No identity goals yet — start with one thing you want to become') +
-        group('Pages', pages, 'No identity pages yet — values, skills, how you present yourself');
     }
 
     function renderConstellation() {
@@ -1650,13 +1771,14 @@ function renderApp(appName: string): string {
         svg += '<text x="' + nx + '" y="' + (ny + 10) + '" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#9aa6b3" style="pointer-events:none">' + count + ' items</text>';
       });
 
-      // Outer ring goal links — draw lines from identity goals to relevant spaces via related items
+      // Outer ring goal links — same source as Cascade (the identity graph),
+      // so the two lenses can never disagree about what is traced.
+      var graphLinks = (state.identity && state.identity.links) || {};
       goals.slice(0, 5).forEach(function(goal, gi) {
         var a = (gi / Math.max(goals.length, 1) - 0.5) * 0.8; // small arc near center top
         var gx = cx + 28 * Math.cos(a - Math.PI / 2), gy = cy + 28 * Math.sin(a - Math.PI / 2) - 8;
-        (goal.related || []).forEach(function(relId) {
-          var rel = state.items.find(function(i) { return i.id === relId; });
-          if (rel && rel.space) {
+        (graphLinks[goal.id] || []).forEach(function(rel) {
+          if (rel.space && spaceAngles[rel.space] !== undefined) {
             var sa = spaceAngles[rel.space];
             var tx = cx + (R - 45) * Math.cos(sa), ty = cy + (R - 45) * Math.sin(sa);
             svg += '<line x1="' + gx + '" y1="' + gy + '" x2="' + tx + '" y2="' + ty + '" stroke="#c4917c" stroke-width="1" stroke-opacity=".4" stroke-dasharray="3,3"/>';
@@ -1674,8 +1796,9 @@ function renderApp(appName: string): string {
       svg += '</svg>';
 
       if (!identityList.length) {
-        return '<div class="placeholder">Your Identity layer is empty — start with one goal, ' +
-          'and the spaces below will have something to point back at.</div>';
+        return '<div class="placeholder" style="text-transform:none;letter-spacing:0;font-family:Hanken Grotesk,sans-serif;font-size:13.5px">' +
+          'Your Identity layer is empty — start with one goal, and the spaces below will have something to point back at.<br>' +
+          '<button class="btn-primary" data-capture-identity style="margin-top:16px">Start with one goal</button></div>';
       }
       return '<div class="card" style="overflow:hidden">' + svg + '</div>' +
         '<div class="sec-meta" style="text-transform:none;letter-spacing:0;margin-top:10px">' +
@@ -1691,8 +1814,10 @@ function renderApp(appName: string): string {
 
       function row(item, bold) {
         var due = item.due_date ? '<span class="sec-meta" style="margin-left:auto">' + esc(formatDue(item.due_date)) + '</span>' : '';
+        // ↑ = traces here via parent_id; ↔ = lateral related link.
+        var via = item.via ? '<span class="num" title="' + (item.via === 'parent' ? 'traces to (parent)' : 'related (lateral)') + '">' + (item.via === 'parent' ? '↑' : '↔') + '</span>' : '';
         return '<button class="goal-row" data-open="' + esc(item.id) + '" style="width:100%">' +
-          '<span class="dot" style="background:' + getSpaceInfo(item).dot + ';flex:none"></span>' +
+          '<span class="dot" style="background:' + getSpaceInfo(item).dot + ';flex:none"></span>' + via +
           '<span class="row-title"' + (bold ? ' style="font-weight:600"' : '') + '>' + esc(item.title) + '</span>' +
           '<span class="tag" style="color:' + TYPES[typeOf(item)].color + ';border-color:' + TYPES[typeOf(item)].border + '">' +
             esc(getSpaceInfo(item).label.toLowerCase() + ' · ' + typeOf(item)) + '</span>' + due +
@@ -1702,25 +1827,57 @@ function renderApp(appName: string): string {
         return '<div style="margin-left:20px;border-left:1px solid rgba(30,41,59,.10);padding-left:10px">' + inner + '</div>';
       }
 
+      // Each identity reads as a heading you can collapse — the whole point of the
+      // lens is scanning identities, so their branches have to get out of the way.
       var body = goals.length ? goals.map(function (goal) {
-        var branches = (links[goal.id] || []).map(function (child) {
+        var kids = links[goal.id] || [];
+        var open = !state.collapsed[goal.id];
+        var head =
+          '<div style="display:flex;align-items:center;gap:10px;padding:14px 4px 10px">' +
+            '<button data-idfold="' + esc(goal.id) + '" title="' + (open ? 'Collapse' : 'Expand') + '"' +
+              ' style="border:0;background:none;cursor:pointer;padding:0;color:#9aa6b3;font-size:11px;' +
+              'width:16px;flex:none;transform:rotate(' + (open ? '90' : '0') + 'deg);transition:transform .12s">▶</button>' +
+            '<button data-open="' + esc(goal.id) + '" style="border:0;background:none;cursor:pointer;padding:0;' +
+              'text-align:left;flex:1;min-width:0">' +
+              '<span style="display:block;font-size:19px;font-weight:600;letter-spacing:-.01em;line-height:1.3">' +
+                esc(goal.title) + '</span>' +
+            '</button>' +
+            '<span class="num" style="flex:none">' + plural(kids.length, 'link') + '</span>' +
+          '</div>';
+        if (!open) return head;
+        var branches = kids.map(function (child) {
           var tasks = childrenOf(child.id);
           return row(child) + (tasks.length ? indent(tasks.map(function (t) { return row(t); }).join('')) : '');
         }).join('');
-        return row(goal, true) + (branches ? indent(branches) :
+        return head + (branches ? indent(branches) :
           indent('<div class="placeholder" style="padding:10px 0;text-align:left">Nothing in any space points at this yet.</div>'));
-      }).join('') : '<div class="placeholder">No identity goals yet — nothing to cascade from.</div>';
+      }).join('<div style="height:1px;background:rgba(30,41,59,.07);margin:6px 0"></div>')
+        : '<div class="placeholder" style="text-transform:none;letter-spacing:0;font-family:Hanken Grotesk,sans-serif;font-size:13.5px">' +
+            'No identity goals yet — nothing to cascade from.<br>' +
+            '<button class="btn-primary" data-capture-identity style="margin-top:16px">Start with one goal</button></div>';
 
+      // Fixing an orphan happens inline: pick an identity item from the row,
+      // no need to open 17 items one by one. "Leave untethered" is a plain
+      // button, and the banner stays informational rather than a scold.
+      var identityTargets = identityItems().filter(function (i) { return i.status !== 'archived'; });
+      var pickerOptions = '<option value="">link to ↑ …</option>' + identityTargets.map(function (t) {
+        return '<option value="' + esc(t.id) + '">' + esc(t.title) + '</option>';
+      }).join('');
       var orphanBlock = !orphans.length ? '' :
-        '<div class="card" style="margin-top:18px;border-color:rgba(196,145,124,.35);background:rgba(196,145,124,.05)">' +
-          '<div style="font-size:12.5px;color:#8a6b5c;margin-bottom:8px">' +
-            '<b>' + orphans.length + ' space goal' + (orphans.length === 1 ? " isn't" : "s aren't") + ' traced to Identity.</b> ' +
-            'Link them, or mark one untethered to stop it asking.</div>' +
+        '<div class="card" style="margin-top:18px;padding:14px 16px;border-color:rgba(196,145,124,.22);background:rgba(196,145,124,.03)">' +
+          '<div style="font-size:12.5px;color:#8a7568;margin-bottom:10px">' +
+            orphans.length + ' goal' + (orphans.length === 1 ? " isn't" : "s aren't") + ' traced to Identity yet. ' +
+            'Pick where each one traces to, or leave it untethered.</div>' +
           orphans.map(function (o) {
-            return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0">' +
-              '<button class="linked-row" data-open="' + esc(o.id) + '" style="flex:1">' +
+            return '<div style="display:flex;align-items:center;gap:10px;padding:5px 0">' +
+              '<button class="linked-row" data-open="' + esc(o.id) + '" style="flex:1;min-width:0">' +
                 '<span class="num">' + esc(getSpaceInfo(o).label) + '</span>' + esc(o.title) + '</button>' +
-              '<button class="chip" data-untether="' + esc(o.id) + '">fine untethered</button>' +
+              '<select data-linkpick="' + esc(o.id) + '" style="font-family:IBM Plex Mono,monospace;font-size:9.5px;' +
+                'color:#4a5563;border:1px solid rgba(30,41,59,.14);border-radius:7px;padding:5px 6px;background:#fff;max-width:190px">' +
+                pickerOptions + '</select>' +
+              '<button data-untether="' + esc(o.id) + '" style="font-family:IBM Plex Mono,monospace;font-size:9px;' +
+                'letter-spacing:.1em;text-transform:uppercase;color:#7a8794;background:#fff;' +
+                'border:1px solid rgba(30,41,59,.14);border-radius:7px;padding:6px 10px;cursor:pointer">Leave untethered</button>' +
             '</div>';
           }).join('') +
         '</div>';
@@ -1780,7 +1937,7 @@ function renderApp(appName: string): string {
           }).join('') + '</div>' +
         '</section>';
 
-      var heading = query ? 'Search' : state.filterSpace === 'all' ? 'Everything' : state.filterSpace === 'identity' ? 'Identity' : (SPACES[state.filterSpace] ? SPACES[state.filterSpace].label : state.filterSpace);
+      var heading = query ? 'Search' : state.filterSpace === 'all' ? 'Everything' : state.filterSpace === 'unsorted' ? 'Unsorted' : (SPACES[state.filterSpace] ? SPACES[state.filterSpace].label : state.filterSpace);
       var chips = [{ key: null, label: 'All' }].concat(TYPE_KEYS.map(function (key) { return { key: key, label: TYPES[key].label }; }));
 
       var feed = visible.length ? visible.map(function (item) {
@@ -1882,8 +2039,6 @@ function renderApp(appName: string): string {
 
     function renderDetail(item) {
       var type = typeOf(item);
-      if (type === 'dump') return renderDump(item);
-      if (checklistOf(item)) return renderChecklist(item);
       var bodyHtml = state.editing
         ? '<textarea class="editor" id="editor">' + esc(item.content || '') + '</textarea>'
         : '<div class="prose">' + renderProse(item.content) + '</div>';
@@ -1891,43 +2046,34 @@ function renderApp(appName: string): string {
         '<h1 class="detail-title">' + esc(item.title) + '</h1>' +
         '<div class="meta-line">' + esc(TYPES[type].label) + ' · N°' + num(item) + ' · Edited ' + stamp(item.updated_at) + '</div>' +
         bodyHtml +
-        (checklistOf(item) ? '' : '<div class="add-row" style="margin-top:20px"><span class="plus">+</span><input data-add-check placeholder="Turn this into a checklist"></div>') +
+        renderSubtasks(item) +
         '</div>' + renderSidebarMeta(item) + '</div>';
     }
 
-    function renderDump(item) {
-      var lines = String(item.content || '').split('\\n').filter(function (line) { return line.trim(); });
-      var thoughts = lines.map(function (line) {
-        var match = line.match(/^\\[(\\d{2}:\\d{2})\\]\\s*(.*)$/);
-        return { time: match ? match[1] : '', text: match ? match[2] : line.trim() };
-      });
-      return '<div class="detail"><div class="detail-main" style="max-width:720px">' + detailHead(item,
-        '<span class="sec-meta">' + thoughts.length + ' thoughts</span>') +
-        '<h1 class="detail-title">' + esc(item.title) + '</h1>' +
-        '<div class="dump-input"><span class="dot" style="background:#8a7cab;width:8px;height:8px"></span>' +
-        '<input data-add-thought placeholder="Dump a thought…"><span class="kbd">↵ Enter</span></div>' +
-        '<div class="group-name">Thoughts</div>' +
-        (thoughts.length ? thoughts.map(function (thought) {
-          return '<div class="thought"><span class="time">' + esc(thought.time) + '</span><p>' + esc(thought.text) + '</p></div>';
-        }).join('') : '<div class="placeholder">Nothing dumped yet</div>') +
-        '</div>' + renderSidebarMeta(item) + '</div>';
-    }
-
-    function renderChecklist(item) {
-      var list = checklistOf(item) || [];
-      var done = list.filter(function (entry) { return entry.done; }).length;
-      var pct = list.length ? Math.round((done / list.length) * 100) : 0;
-      return '<div class="detail"><div class="detail-main" style="max-width:700px">' + detailHead(item) +
-        '<h1 class="detail-title">' + esc(item.title) + '</h1>' +
-        '<div class="progress"><span class="label">' + done + ' / ' + list.length + ' done</span>' +
-        '<div class="track"><div class="bar" style="width:' + pct + '%"></div></div></div>' +
-        list.map(function (entry, index) {
-          return '<button class="check-row" data-check="' + index + '">' +
-            '<span class="box green' + (entry.done ? ' done' : '') + '">' + (entry.done ? '✓' : '') + '</span>' +
-            '<span class="text' + (entry.done ? ' done' : '') + '">' + esc(entry.text) + '</span></button>';
+    // Subtasks are child task items (parent_id = this item), not freeform
+    // metadata — the same rows get_children returns.
+    function renderSubtasks(item) {
+      if (typeOf(item) === 'task') return '';
+      var tasks = childTasks(item);
+      var done = tasks.filter(function (t) { return t.status === 'done'; }).length;
+      var pct = tasks.length ? Math.round((done / tasks.length) * 100) : 0;
+      var progress = !tasks.length ? '' :
+        '<div class="progress" style="margin:0 0 14px"><span class="label">' + done + ' / ' + tasks.length + ' done</span>' +
+        '<div class="track"><div class="bar" style="width:' + pct + '%"></div></div></div>';
+      return '<div style="margin-top:26px">' +
+        (tasks.length ? '<div class="group-name">Subtasks</div>' : '') +
+        progress +
+        tasks.map(function (task) {
+          var isDone = task.status === 'done';
+          return '<button class="check-row" data-task-toggle="' + esc(task.id) + '">' +
+            '<span class="box green' + (isDone ? ' done' : '') + '">' + (isDone ? '✓' : '') + '</span>' +
+            '<span class="text' + (isDone ? ' done' : '') + '">' + esc(task.title) + '</span>' +
+            (task.due_date ? '<span class="sec-meta">' + esc(formatDue(task.due_date)) + '</span>' : '') +
+          '</button>';
         }).join('') +
-        '<div class="add-row"><span class="plus">+</span><input data-add-check placeholder="Add item"></div>' +
-        '</div>' + renderSidebarMeta(item) + '</div>';
+        '<div class="add-row"><span class="plus">+</span><input data-add-subtask placeholder="' +
+          (tasks.length ? 'Add a subtask' : 'Break this down — add a subtask') + '"></div>' +
+      '</div>';
     }
 
     function renderCapture() {
@@ -1988,13 +2134,31 @@ function renderApp(appName: string): string {
       document.querySelectorAll('[data-idtab]').forEach(function (element) {
         element.onclick = function () { state.identityTab = element.dataset.idtab; render(); };
       });
+      document.querySelectorAll('[data-idfold]').forEach(function (element) {
+        element.onclick = function () {
+          var id = element.dataset.idfold;
+          state.collapsed[id] = !state.collapsed[id];
+          render();
+        };
+      });
       document.querySelectorAll('[data-untether]').forEach(function (element) {
         element.onclick = function () { untether(element.dataset.untether); };
+      });
+      document.querySelectorAll('[data-linkpick]').forEach(function (element) {
+        element.onchange = function () {
+          if (element.value) linkToIdentity(element.dataset.linkpick, element.value);
+        };
+      });
+      document.querySelectorAll('[data-capture-identity]').forEach(function (element) {
+        element.onclick = function () {
+          state.capture = { title: '', type: 'goal', space: 'identity' };
+          render();
+        };
       });
       document.querySelectorAll('.graph-space').forEach(function(el) {
         el.onclick = function() {
           var sp = el.dataset.space;
-          if (!sp || sp === 'identity') { state.view = 'identity'; state.identityTab = 'core'; render(); return; }
+          if (!sp || sp === 'identity') { state.view = 'identity'; state.identityTab = 'cascade'; render(); return; }
           state.filterSpace = sp; state.view = 'home'; render();
         };
       });
@@ -2003,18 +2167,16 @@ function renderApp(appName: string): string {
       document.querySelectorAll('[data-act]').forEach(function (element) {
         element.onclick = function () { itemAction(element.dataset.act); };
       });
-      document.querySelectorAll('[data-check]').forEach(function (element) {
-        element.onclick = function () { toggleCheck(activeItem(), Number(element.dataset.check)); };
+      document.querySelectorAll('[data-task-toggle]').forEach(function (element) {
+        element.onclick = function () {
+          var task = state.items.find(function (candidate) { return candidate.id === element.dataset.taskToggle; });
+          if (task) toggleTask(task);
+        };
       });
-      var addCheckInput = document.querySelector('[data-add-check]');
-      if (addCheckInput) addCheckInput.onkeydown = function (event) {
+      var addSubtaskInput = document.querySelector('[data-add-subtask]');
+      if (addSubtaskInput) addSubtaskInput.onkeydown = function (event) {
         if (event.key !== 'Enter') return;
-        addCheck(activeItem(), addCheckInput.value); addCheckInput.value = '';
-      };
-      var addThoughtInput = document.querySelector('[data-add-thought]');
-      if (addThoughtInput) addThoughtInput.onkeydown = function (event) {
-        if (event.key !== 'Enter') return;
-        addThought(activeItem(), addThoughtInput.value); addThoughtInput.value = '';
+        addSubtask(activeItem(), addSubtaskInput.value); addSubtaskInput.value = '';
       };
       bindCapture();
       bindUnlock();
@@ -2090,6 +2252,7 @@ function renderApp(appName: string): string {
         state.view = 'home'; state.filterSpace = 'all'; state.filterType = null; state.query = '';
         document.getElementById('search').value = '';
         render();
+        refreshIdentity().then(render);
         toast('Captured N°' + num(created));
       } catch (error) { failWrite(error, submitCapture); }
     }
@@ -2154,6 +2317,13 @@ function renderApp(appName: string): string {
       else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault(); document.getElementById('search').focus();
       }
+    });
+
+    // Never show stale state: refresh quietly whenever the window regains
+    // focus (e.g. after an agent wrote via MCP), unless mid-edit or mid-modal.
+    window.addEventListener('focus', function () {
+      if (state.loading || state.editing || state.capture || state.unlockPrompt) return;
+      load(true);
     });
 
     load();
