@@ -267,6 +267,58 @@ export async function deleteSpace(env: Env, path: string): Promise<{ ok: boolean
   return { ok: true };
 }
 
+// Move or rename a space, carrying its pages and subspaces with it. The folder
+// path IS the space's identity, so this is the only way to reorganize the tree —
+// updateSpace can change a display name but never where a space lives.
+export async function moveSpace(
+  env: Env,
+  from: string,
+  to: string,
+): Promise<{ path: string; movedFiles: number }> {
+  const src = normalizeSpacePath(from);
+  const dest = normalizeSpacePath(to);
+  if (!src) throw new Error("Cannot move the vault root");
+  if (!dest) throw new Error("Destination path is required (use '' only for pages, not spaces)");
+  if (src === dest) return { path: dest, movedFiles: 0 };
+  // Moving a folder inside itself would orphan everything under it.
+  if (dest === src || dest.startsWith(`${src}/`)) throw new Error("Cannot move a space into its own descendant");
+  if (await spaceExists(env, dest)) throw new Error(`Destination already exists: ${dest}`);
+  if (!(await spaceExists(env, src))) throw new Error(`Space not found: ${src}`);
+
+  // Rewrite every key under the old prefix. R2 has no rename, so this is
+  // get + put + delete per object.
+  let cursor: string | undefined;
+  let movedFiles = 0;
+  do {
+    const listing = await env.VAULT.list({ prefix: `${src}/`, cursor, limit: 1000 });
+    for (const obj of listing.objects) {
+      const object = await env.VAULT.get(obj.key);
+      if (!object) continue;
+      await env.VAULT.put(`${dest}/${obj.key.slice(src.length + 1)}`, await object.text());
+      await env.VAULT.delete(obj.key);
+      movedFiles++;
+    }
+    cursor = listing.truncated ? listing.cursor : undefined;
+  } while (cursor);
+
+  // The space's own _space.md sits beside the folder, not inside it.
+  const srcMetaKey = spaceFileKey(src);
+  const srcMeta = await env.VAULT.get(srcMetaKey);
+  if (srcMeta) {
+    const parsed = parseSpaceFile(await srcMeta.text(), spaceLeaf(src));
+    // A rename should follow the folder unless the space was given a custom name.
+    if (parsed.meta.name === spaceLeaf(src)) parsed.meta.name = spaceLeaf(dest);
+    parsed.meta.updated_at = Math.floor(Date.now() / 1000);
+    await env.VAULT.put(spaceFileKey(dest), serializeSpaceFile(parsed));
+    await env.VAULT.delete(srcMetaKey);
+    movedFiles++;
+  }
+
+  // The index derives entirely from paths, so rebuild rather than patching rows.
+  await reindex(env);
+  return { path: dest, movedFiles };
+}
+
 async function spaceExists(env: Env, path: string): Promise<boolean> {
   const sp = normalizeSpacePath(path);
   if (!sp) return true; // root always exists

@@ -5,7 +5,7 @@ import {
   SCHEMA_INFO, type Env,
   listPages, searchPages, getPage, getPageByPath, createPage, updatePage, deletePage,
   getBacklinks, getChildren, listUnresolved, reindex,
-  listSpaces, getSpace, createSpace, updateSpace, deleteSpace,
+  listSpaces, getSpace, createSpace, updateSpace, deleteSpace, moveSpace,
 } from "./store.ts";
 
 function mcpJson(value: unknown) {
@@ -57,6 +57,14 @@ export function createEtAlMcpServer(env: Env): McpServer {
       overview: z.string().optional(),
     },
   }, async ({ path, ...rest }) => mcpJson(await updateSpace(env, path, rest)));
+
+  server.registerTool("move_space", {
+    description: "Move or rename a space, carrying its pages and subspaces with it (e.g. 'career' -> 'identity/career'). The folder path is the space's identity, so this — not update_space — is how you reorganize the tree. Refuses to move a space into its own descendant or onto an existing path.",
+    inputSchema: {
+      from: z.string().min(1).describe("Current space path"),
+      to: z.string().min(1).describe("New full path, including any new parent folders"),
+    },
+  }, async ({ from, to }) => mcpJson(await moveSpace(env, from, to)));
 
   server.registerTool("delete_space", {
     description: "Delete an empty space. Refuses if it still contains pages or subspaces.",

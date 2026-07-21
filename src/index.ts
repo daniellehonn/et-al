@@ -5,7 +5,7 @@ import {
   SCHEMA_INFO, type Env,
   listPages, searchPages, getPage, getPageByPath, createPage, updatePage, deletePage,
   getBacklinks, getChildren, listUnresolved, reindex, migrateFromLegacyD1,
-  listSpaces, getSpace, createSpace, updateSpace, deleteSpace,
+  listSpaces, getSpace, createSpace, updateSpace, deleteSpace, moveSpace,
 } from "./store.ts";
 
 export type { Env };
@@ -59,7 +59,13 @@ export default {
           const space = await getSpace(env, path);
           return space ? json(space) : json({ error: "Space not found", code: 404 }, 404);
         }
-        if (request.method === "PATCH") { await assertAuthorized(request, env); return json(await updateSpace(env, path, await readJson(request))); }
+        if (request.method === "PATCH") {
+          await assertAuthorized(request, env);
+          const body = (await readJson(request)) as Record<string, unknown>;
+          // { "move_to": "identity/career" } relocates the folder; anything else edits metadata.
+          if (typeof body.move_to === "string") return json(await moveSpace(env, path, body.move_to));
+          return json(await updateSpace(env, path, body));
+        }
         if (request.method === "DELETE") { await assertAuthorized(request, env); return json(await deleteSpace(env, path)); }
       }
 

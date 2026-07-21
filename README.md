@@ -63,6 +63,7 @@ Available tools (v5, operating over the nested vault):
 - `get_schema` — canonical enums + the three structures (folder / parent / wikilink)
 - `list_spaces` — the full folder tree with page counts
 - `get_space` / `create_space` / `update_space` / `delete_space` — folders + `_space.md`
+- `move_space` — move or rename a folder, carrying its pages and subspaces (the only way to reorganize the tree; `update_space` changes a display name, never a path)
 - `list_pages` — filter by `space_path` (+`recursive` for subtrees), type, status, parent
 - `get_page`
 - `create_page` — into a `space_path`; `parent` is the goal it breaks down
