@@ -55,9 +55,17 @@ export const CONTENT_STATUS = ["idea", "draft", "review", "scheduled", "publishe
 export const CONTENT_FORMAT = ["short-post", "thread", "video", "article", "newsletter", "case-study"] as const;
 export const CONTENT_CHANNEL = ["linkedin", "x", "medium", "substack", "youtube", "instagram", "tiktok", "portfolio"] as const;
 
-/** Generic blocks first, then the product-specific ones (spec §2.12). */
+/**
+ * Generic blocks first, then the product-specific ones (spec §2.12).
+ *
+ * `number` and `divider` are carried over from the v5 editor so the ported
+ * writing experience keeps parity. Safe to extend: `document_blocks.type` is
+ * plain TEXT with no CHECK, so the vocabulary lives here and needs no migration.
+ * Heading level is carried in the block's `data.level`, not separate types.
+ */
 export const BLOCK_TYPE = [
-  "paragraph", "heading", "bullet", "todo", "todo-done", "code", "quote", "callout", "image", "table",
+  "paragraph", "heading", "bullet", "number", "todo", "todo-done",
+  "code", "quote", "callout", "divider", "image", "table",
   "decision", "experiment", "learning", "content-seed", "relation", "tool-card", "log-ref",
 ] as const;
 

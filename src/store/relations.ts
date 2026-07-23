@@ -48,6 +48,35 @@ function view(row: typeof relations.$inferSelect): RelationDoc {
   };
 }
 
+/**
+ * Finds an existing object by title so a new [[wikilink]] resolves immediately.
+ *
+ * Without this, a link written to a page that ALREADY exists is stored
+ * unresolved forever: `resolveRelationsTo` only runs when a target is created or
+ * renamed, so nothing would ever come along to fix it. The symptom is a target
+ * sitting in the "unresolved" list while the page is plainly right there.
+ *
+ * Knowledge notes are checked first (they carry an indexed `title_norm` and are
+ * what wikilinks usually mean), then projects.
+ */
+async function resolveTargetByTitle(
+  env: Env, userId: string, title: string,
+): Promise<{ type: SubjectType; id: string } | null> {
+  const norm = normalizeTitle(title);
+
+  const note = await env.DB.prepare(
+    "SELECT id FROM knowledge_notes WHERE user_id = ? AND title_norm = ? ORDER BY created_at LIMIT 1",
+  ).bind(userId, norm).first<{ id: string }>();
+  if (note) return { type: "knowledge_note", id: note.id };
+
+  const project = await env.DB.prepare(
+    "SELECT id FROM projects WHERE user_id = ? AND LOWER(TRIM(title)) = ? ORDER BY created_at LIMIT 1",
+  ).bind(userId, norm).first<{ id: string }>();
+  if (project) return { type: "project", id: project.id };
+
+  return null;
+}
+
 export async function createRelation(env: Env, userId: string, input: RelationInput): Promise<RelationDoc> {
   const sourceType = requireEnum(input.source_type, SUBJECT_TYPE, "source_type");
   const sourceId = input.source_id;
@@ -56,11 +85,20 @@ export async function createRelation(env: Env, userId: string, input: RelationIn
     throw new ValidationError("A relation needs either target_id or target_title");
   }
 
+  // A link to something that already exists should resolve on the spot.
+  let targetType = input.target_type ? requireEnum(input.target_type, SUBJECT_TYPE, "target_type") : null;
+  let targetId = input.target_id ?? null;
+  if (!targetId && input.target_title) {
+    const found = await resolveTargetByTitle(env, userId, input.target_title);
+    if (found) { targetType = found.type; targetId = found.id; }
+  }
+
   const row = {
     id: newId(), userId,
     sourceType, sourceId,
-    targetType: input.target_type ? requireEnum(input.target_type, SUBJECT_TYPE, "target_type") : null,
-    targetId: input.target_id ?? null,
+    targetType,
+    targetId,
+    // Kept even once resolved, so a later rename can still be matched by title.
     targetNorm: input.target_title ? normalizeTitle(input.target_title) : null,
     relationType: requireEnum(input.relation_type ?? "mentions", RELATION_TYPE, "relation_type"),
     context: String(input.context ?? ""),

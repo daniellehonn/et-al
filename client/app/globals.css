@@ -195,3 +195,143 @@ code, .mono {
   background: var(--canvas); color: var(--ink);
   border: 1px solid var(--border); border-radius: var(--r-ctl);
 }
+
+/* ---- block editor (ported from v5 src/ui.ts) ---- */
+.editor { display: flex; flex-direction: column; gap: 1px; }
+
+.blk { display: flex; gap: 8px; align-items: flex-start; position: relative; padding: 1px 0; }
+.blk-body { flex: 1; min-width: 0; position: relative; }
+
+.blk-input {
+  width: 100%; border: none; background: transparent; color: var(--ink);
+  font: inherit; padding: 4px 2px; resize: none; overflow: hidden;
+  line-height: 1.6; display: block;
+}
+.blk-input:focus { outline: none; }
+.blk-input::placeholder { color: var(--ink-2); opacity: 0.7; }
+
+/* The rendered layer replaces the raw text when a block is not focused, so
+   wikilinks are clickable without a separate preview mode. */
+.blk-render {
+  position: absolute; inset: 0; padding: 4px 2px; line-height: 1.6;
+  pointer-events: none; background: var(--canvas);
+  white-space: pre-wrap; word-break: break-word;
+}
+.blk-render .wikilink, .blk-render code, .blk-render b { pointer-events: auto; }
+
+.wikilink {
+  font: inherit; background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--accent); border-bottom: 1px solid var(--accent-soft);
+}
+.wikilink:hover { border-bottom-color: var(--accent); }
+
+.blk-render code {
+  background: var(--accent-soft); padding: 0 4px; border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em;
+}
+
+.blk-affix { width: 14px; flex: 0 0 14px; color: var(--ink-2); padding-top: 5px; text-align: center; }
+.blk-check {
+  width: 15px; height: 15px; flex: 0 0 15px; margin-top: 6px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 4px; background: var(--surface);
+  color: #fff; font-size: 10px; line-height: 1; padding: 0;
+}
+.blk-check.on { background: var(--accent); border-color: var(--accent); }
+.blk-tag {
+  flex: 0 0 auto; margin-top: 5px; font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent);
+  border: 1px solid var(--accent); border-radius: 4px; padding: 1px 5px;
+}
+
+.blk-heading .blk-input, .blk-heading .blk-render { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
+.blk-quote { border-left: 3px solid var(--border); padding-left: 10px; }
+.blk-quote .blk-input, .blk-quote .blk-render { color: var(--ink-2); font-style: italic; }
+.blk-callout {
+  background: var(--accent-soft); border-radius: var(--r-ctl); padding: 6px 10px;
+}
+.blk-code .blk-input, .blk-code .blk-render {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-ctl); padding: 8px 10px;
+}
+.blk-todo-done .blk-input, .blk-todo-done .blk-render { color: var(--ink-2); text-decoration: line-through; }
+.blk-divider { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
+
+/* Product blocks look structurally different because they ARE different —
+   their fields are the reusable evidence, not decoration. */
+.blk-decision, .blk-experiment, .blk-learning, .blk-content-seed {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-card); padding: 8px 10px; margin: 6px 0;
+}
+.blk-fields { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.blk-field { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; }
+.blk-field > span {
+  flex: 0 0 108px; color: var(--ink-2); text-transform: capitalize;
+  font-size: 11px; letter-spacing: 0.04em;
+}
+.blk-field input {
+  flex: 1; min-width: 0; font: inherit; font-size: 13px; padding: 3px 7px;
+  background: var(--canvas); color: var(--ink);
+  border: 1px solid var(--border); border-radius: 4px;
+}
+.ai-flag { align-self: flex-start; margin-top: 5px; }
+
+.blk-menu {
+  position: absolute; z-index: 40; top: 100%; left: 20px; margin-top: 2px;
+  min-width: 250px; max-height: 280px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-card); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+  padding: 4px;
+}
+.blk-menu-head {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.09em;
+  color: var(--ink-2); font-weight: 700; padding: 5px 8px 3px;
+}
+.blk-menu button {
+  display: flex; align-items: baseline; gap: 9px; width: 100%; text-align: left;
+  background: none; border: none; cursor: pointer; font: inherit; font-size: 13px;
+  padding: 6px 8px; border-radius: var(--r-ctl); color: var(--ink);
+}
+.blk-menu button.on { background: var(--accent-soft); }
+.blk-menu .mi {
+  flex: 0 0 26px; color: var(--ink-2); font-size: 11px;
+  font-family: ui-monospace, monospace;
+}
+.blk-menu .mt { font-weight: 500; }
+.blk-menu .mh { color: var(--ink-2); font-size: 11px; margin-left: auto; }
+
+.blk-add {
+  align-self: flex-start; margin-top: 8px; background: none; border: none;
+  color: var(--ink-2); font: inherit; font-size: 13px; cursor: pointer; padding: 4px 2px;
+}
+.blk-add:hover { color: var(--accent); }
+
+/* ---- master-detail layout ---- */
+.split { display: grid; grid-template-columns: minmax(0, 300px) minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 860px) { .split { grid-template-columns: 1fr; } }
+.list-pane { display: flex; flex-direction: column; gap: 10px; }
+.detail-pane { min-width: 0; }
+
+.pick { display: flex; flex-wrap: wrap; gap: 5px; }
+.pick button {
+  font: inherit; font-size: 11.5px; font-weight: 600; cursor: pointer;
+  background: var(--surface); color: var(--ink-2);
+  border: 1px solid var(--border); border-radius: 100px; padding: 3px 10px;
+}
+.pick button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+.row.selectable { cursor: pointer; width: 100%; text-align: left; background: none; font: inherit; color: inherit; }
+.row.selectable:hover { background: var(--accent-soft); }
+.row.selected { background: var(--accent-soft); }
+
+.sync { font-size: 11.5px; color: var(--ink-2); }
+.field {
+  width: 100%; font: inherit; padding: 8px 11px; margin-bottom: 8px;
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--border); border-radius: var(--r-ctl);
+}
+.title-field {
+  width: 100%; font: inherit; font-size: 24px; font-weight: 600; letter-spacing: -0.01em;
+  background: transparent; border: none; color: var(--ink); padding: 0; margin-bottom: 4px;
+}
+.title-field:focus { outline: none; }

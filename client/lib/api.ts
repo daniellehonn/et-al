@@ -56,6 +56,8 @@ export const api = {
     request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) }),
   patch: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
+  put: <T>(path: string, body: unknown) =>
+    request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
 };
 
@@ -84,9 +86,137 @@ export interface Capture {
   created_at: number;
 }
 
+export interface Project {
+  id: string; title: string; summary: string | null; status: string;
+  priority: string | null; next_action: string | null;
+  target_date: number | null; repository_url: string | null; live_url: string | null;
+  body_document_id: string | null; portfolio_ready: boolean;
+  last_activity_at: number | null; completed_at: number | null;
+  area_ids: string[]; goal_ids: string[];
+  created_at: number; updated_at: number;
+}
+
+export interface ProjectLog {
+  id: string; project_id: string; entry_type: string; title: string | null;
+  body_document_id: string | null; content_seed_status: string;
+  created_at: number; updated_at: number;
+}
+
+export interface Note {
+  id: string; title: string; note_type: string; mastery: string;
+  body_document_id: string | null; created_at: number; updated_at: number;
+}
+
+export interface Tool {
+  id: string; name: string; url: string | null; status: string;
+  expected_use: string | null; test_criteria: string | null;
+  verdict: string | null; rating: number | null; tested_at: number | null;
+}
+
+export interface Source {
+  id: string; title: string; url: string | null; platform: string;
+  author: string | null; summary: string | null; transcript: string | null;
+}
+
+export interface ContentItem {
+  id: string; title: string; status: string; format: string | null;
+  channel: string | null; hook: string | null; audience: string | null;
+  body_document_id: string | null; published_url: string | null;
+}
+
+export interface Block {
+  id: string; type: string; text: string;
+  data: Record<string, unknown>; is_ai: boolean;
+}
+
+export interface DocumentDoc {
+  id: string; owner_type: string; owner_id: string | null; blocks: Block[];
+}
+
+export interface Relation {
+  id: string; source_type: string; source_id: string;
+  target_type: string | null; target_id: string | null; target_norm: string | null;
+  relation_type: string; context: string;
+}
+
+export interface ReviewData {
+  steps: Array<{ key: string; title: string; items: unknown[] }>;
+}
+
+export interface SearchHit {
+  subject_id: string; subject_type: string; title: string; snippet: string;
+}
+
+/** Query strings built from a filter object, skipping empty values. */
+function qs(params: Record<string, string | number | undefined | null>): string {
+  const pairs = Object.entries(params)
+    .filter(([, v]) => v !== undefined && v !== null && v !== "")
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
+  return pairs.length ? `?${pairs.join("&")}` : "";
+}
+
 export const getHome = () => api.get<HomeData>("/api/home");
+export const getReview = () => api.get<ReviewData>("/api/review");
+
+export const getProjects = (f: { status?: string; area_id?: string } = {}) =>
+  api.get<{ projects: Project[] }>(`/api/projects${qs(f)}`);
+export const getProject = (id: string) => api.get<Project>(`/api/projects/${id}`);
+export const createProject = (body: Partial<Project>) => api.post<Project>("/api/projects", body);
+export const updateProject = (id: string, body: Partial<Project>) =>
+  api.patch<Project>(`/api/projects/${id}`, body);
+
+export const getLogs = (f: { project_id?: string; entry_type?: string } = {}) =>
+  api.get<{ logs: ProjectLog[] }>(`/api/logs${qs(f)}`);
+export const createLog = (body: { project_id: string; entry_type?: string; title?: string }) =>
+  api.post<ProjectLog>("/api/logs", body);
+
+export const getNotes = (f: { mastery?: string; note_type?: string } = {}) =>
+  api.get<{ notes: Note[] }>(`/api/notes${qs(f)}`);
+export const createNote = (body: { title: string; note_type?: string }) =>
+  api.post<Note>("/api/notes", body);
+export const updateNote = (id: string, body: Partial<Note>) =>
+  api.patch<Note>(`/api/notes/${id}`, body);
+
+export const getTools = (f: { status?: string } = {}) =>
+  api.get<{ tools: Tool[] }>(`/api/tools${qs(f)}`);
+export const createTool = (body: Partial<Tool>) => api.post<Tool>("/api/tools", body);
+export const updateTool = (id: string, body: Partial<Tool>) =>
+  api.patch<Tool>(`/api/tools/${id}`, body);
+
+export const getSources = () => api.get<{ sources: Source[] }>("/api/sources");
+
+export const getContent = (f: { status?: string } = {}) =>
+  api.get<{ content: ContentItem[] }>(`/api/content${qs(f)}`);
+export const createContent = (body: Partial<ContentItem>) =>
+  api.post<ContentItem>("/api/content", body);
+export const updateContent = (id: string, body: Partial<ContentItem>) =>
+  api.patch<ContentItem>(`/api/content/${id}`, body);
+
+export const getCaptures = (f: { review_status?: string } = {}) =>
+  api.get<{ captures: Capture[] }>(`/api/captures${qs(f)}`);
+export const updateCapture = (id: string, body: { review_status?: string }) =>
+  api.patch<Capture>(`/api/captures/${id}`, body);
+export const retryCapture = (id: string) => api.post<Capture>(`/api/captures/${id}/retry`);
+export const deleteCapture = (id: string) => api.delete<{ ok: boolean }>(`/api/captures/${id}`);
+
+/** Lazily creates the body document server-side on first open. */
+export const getBody = (resource: string, id: string) =>
+  api.get<DocumentDoc>(`/api/${resource}/${id}/body`);
+export const saveBody = (
+  documentId: string,
+  payload: { blocks: Array<Partial<Block>>; subject_type: string; subject_id: string; title: string },
+) => api.put<DocumentDoc>(`/api/documents/${documentId}`, payload);
+
+export const getBacklinks = (resource: string, id: string) =>
+  api.get<{ backlinks: Relation[] }>(`/api/${resource}/${id}/backlinks`);
+export const createRelation = (body: Partial<Relation> & { target_title?: string }) =>
+  api.post<Relation>("/api/relations", body);
+
+export const search = (q: string, type?: string) =>
+  api.get<{ results: SearchHit[] }>(`/api/search${qs({ q, type })}`);
+
+// ---- session & capture (restored: these back the Home screen and unlock) ----
 export const getAreas = () => api.get<{ areas: Area[] }>("/api/areas");
 export const getSession = () => api.get<{ authenticated: boolean }>("/api/session");
 export const login = (key: string) => api.post<{ authenticated: boolean }>("/api/session", { key });
-export const createCapture = (raw_input: string) =>
-  api.post<Capture>("/api/captures", { raw_input });
+export const createCapture = (raw_input: string) => api.post<Capture>("/api/captures", { raw_input });
