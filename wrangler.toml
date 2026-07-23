@@ -38,7 +38,7 @@ max_retries = 2
 # Safety net for anything the queue missed: never-delivered messages, failed
 # jobs with attempts remaining, and jobs stranded in `running`.
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["*/5 * * * *", "0 4 * * *"]
 
 # CO-DEPLOY: the Next client is served from this Worker, so the client and the
 # API share ONE origin. That is an auth decision as much as a hosting one — the

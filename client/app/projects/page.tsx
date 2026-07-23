@@ -15,13 +15,13 @@ import { useCallback, useEffect, useState } from "react";
 import BodyEditor from "@/components/BodyEditor";
 import {
   getProjects, getProject, createProject, updateProject,
-  getLogs, createLog, getBacklinks,
-  ApiError, type Project, type ProjectLog, type Relation,
+  getLogs, createLog, getBacklinks, getCompletion, createSeedFrom,
+  ApiError, type Project, type ProjectLog, type Relation, type CompletionChecklist,
 } from "@/lib/api";
 
 const STATUSES = ["idea", "planned", "active", "paused", "completed", "archived"] as const;
 const LOG_TYPES = ["progress", "decision", "experiment", "problem", "learning", "reflection"] as const;
-const TABS = ["Overview", "Log", "Connections"] as const;
+const TABS = ["Overview", "Log", "Connections", "Finish"] as const;
 
 export default function ProjectsPage() {
   const [projects, setProjects] = useState<Project[] | null>(null);
@@ -208,6 +208,7 @@ function ProjectDetail({ id, onSaved }: { id: string; onSaved: () => void }) {
       )}
       {tab === "Log" && <ProjectLogTab projectId={id} />}
       {tab === "Connections" && <Connections resource="projects" id={id} />}
+      {tab === "Finish" && <CompletionTab project={project} onChanged={reload} />}
     </>
   );
 }
@@ -271,6 +272,92 @@ function ProjectLogTab({ projectId }: { projectId: string }) {
           )}
         </div>
       ))}
+    </>
+  );
+}
+
+/**
+ * The completion flow (spec §4.6). Completing a project is the moment work
+ * becomes evidence, so this shows what it still owes rather than just offering a
+ * status button.
+ */
+function CompletionTab({ project, onChanged }: { project: Project; onChanged: () => void }) {
+  const [check, setCheck] = useState<CompletionChecklist | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState<string | null>(null);
+
+  useEffect(() => {
+    setCheck(null);
+    getCompletion(project.id).then(setCheck).catch(() => {});
+  }, [project.id]);
+
+  async function seed() {
+    setBusy(true);
+    try {
+      await createSeedFrom({ type: "project", id: project.id }, `What I learned building ${project.title}`);
+      setFlash("Content seed created, linked back to this project");
+      getCompletion(project.id).then(setCheck).catch(() => {});
+    } finally { setBusy(false); }
+  }
+
+  if (!check) return <div className="card"><div className="skeleton" /></div>;
+
+  return (
+    <>
+      <div className="card" style={{ marginBottom: 12 }}>
+        <div className="row">
+          <div className="lead">
+            <div className="title">Retrospective</div>
+            <div className="meta">What worked, what did not, what you would change</div>
+          </div>
+          <span className={`chip ${check.has_retrospective ? "ok" : "warn"}`}>
+            {check.has_retrospective ? "written" : "missing"}
+          </span>
+        </div>
+        <div className="row">
+          <div className="lead">
+            <div className="title">Learnings to promote</div>
+            <div className="meta">Log entries worth becoming durable knowledge notes</div>
+          </div>
+          <span className="chip">{check.learnings_to_promote.length}</span>
+        </div>
+        <div className="row">
+          <div className="lead">
+            <div className="title">Reusable decisions</div>
+            <div className="meta">Decision and experiment entries — case-study material</div>
+          </div>
+          <span className="chip">{check.reusable_decisions}</span>
+        </div>
+        <div className="row">
+          <div className="lead">
+            <div className="title">Outputs</div>
+            <div className="meta">Content or portfolio evidence created from this project</div>
+          </div>
+          <span className={`chip ${check.outputs ? "ok" : "warn"}`}>{check.outputs}</span>
+        </div>
+      </div>
+
+      {check.suggestions.length > 0 && (
+        <div className="card" style={{ marginBottom: 12 }}>
+          {check.suggestions.map((sug, i) => (
+            <div className="row" key={i}>
+              <div className="lead"><div className="title" style={{ fontWeight: 500 }}>{sug}</div></div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {flash && <p className="sync" style={{ color: "var(--accent)", marginBottom: 10 }}>{flash}</p>}
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button className="btn" disabled={busy} onClick={seed}>Create content seed from this work</button>
+        {project.status !== "completed" && (
+          <button className="btn primary" disabled={busy}
+            onClick={async () => { setBusy(true); try { await updateProject(project.id, { status: "completed" }); onChanged(); } finally { setBusy(false); } }}>
+            Mark completed
+          </button>
+        )}
+      </div>
     </>
   );
 }

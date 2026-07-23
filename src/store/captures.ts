@@ -19,6 +19,7 @@ import {
   audit, NotFoundError,
 } from "./db.ts";
 import { enqueueJob, listJobs, resetJob } from "./jobs.ts";
+import { track } from "../analytics.ts";
 
 export interface CaptureInput {
   raw_input?: string;
@@ -114,6 +115,7 @@ export async function createCapture(env: Env, userId: string, input: CaptureInpu
   };
   await getDb(env).insert(captures).values(row);
   await audit(env, { userId, subjectType: "capture", subjectId: row.id, action: "created" });
+  await track(env, userId, "capture_created", { input_type: inputType });
 
   // Processing is scheduled, never awaited: the capture must be durable and
   // confirmed to the user immediately (spec §3.1, "immediate confirmation"),
@@ -142,6 +144,10 @@ export async function updateCapture(env: Env, userId: string, id: string, input:
 
   await getDb(env).update(captures).set(patch).where(and(eq(captures.id, id), eq(captures.userId, userId)));
   await audit(env, { userId, subjectType: "capture", subjectId: id, action: "updated" });
+  if (input.review_status && input.review_status !== current.review_status) {
+    await track(env, userId, "capture_triaged", { to: input.review_status, classification: input.classification ?? null });
+  }
+  if (input.processing_status === "ready") await track(env, userId, "capture_processed", {});
   return (await getCapture(env, userId, id))!;
 }
 

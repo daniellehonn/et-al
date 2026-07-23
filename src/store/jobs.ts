@@ -196,6 +196,24 @@ export async function listRunnableJobs(env: Env, staleSeconds = 300, limit = 25)
     .map(view);
 }
 
+/**
+ * Enqueue for work that should re-run when its subject changes.
+ *
+ * A stable key would make the second save a no-op (the job already succeeded);
+ * a timestamped key would mint a fresh row on every save. Neither is right for
+ * something like embedding, where the work should run again but only once per
+ * settled change. So: reuse the row and reset it to `queued`.
+ */
+export async function enqueueOrRefresh(
+  env: Env,
+  input: { userId: string; jobType: JobType; subjectType: SubjectType | string; subjectId: string },
+): Promise<JobDoc> {
+  const { job, created } = await enqueueJob(env, input);
+  if (created) return job;
+  const refreshed = await resetJob(env, input.userId, job.id);
+  return refreshed ?? job;
+}
+
 /** Clears the give-up state so a job can be retried by hand. */
 export async function resetJob(env: Env, userId: string, jobId: string): Promise<JobDoc | null> {
   const db = getDb(env);

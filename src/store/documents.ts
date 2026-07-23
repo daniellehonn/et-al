@@ -14,6 +14,7 @@ import { documents, documentBlocks, type BlockType, type SubjectType, BLOCK_TYPE
 import {
   type Env, getDb, now, newId, requireEnum, boolInt, NotFoundError, indexFts,
 } from "./db.ts";
+import { enqueueOrRefresh } from "./jobs.ts";
 
 export interface BlockInput {
   id?: string;
@@ -122,9 +123,22 @@ export async function replaceBlocks(env: Env, documentId: string, blocks: BlockI
  */
 export async function saveBody(
   env: Env, documentId: string, blocks: BlockInput[], subjectType: SubjectType, subjectId: string, title: string,
+  userId?: string,
 ): Promise<void> {
   await replaceBlocks(env, documentId, blocks);
   await indexFts(env, subjectType, subjectId, title, flattenBlocks(blocks.map((b) => ({ text: String(b.text ?? "") }))));
+
+  // Semantic indexing is deliberately asynchronous: embedding costs a model call
+  // and a save must never wait on it, or fail because of it.
+  //
+  // `enqueueOrRefresh` reuses the subject's existing job row rather than minting
+  // one per save — otherwise every debounced keystroke would leave a job behind.
+  // Re-running is cheap because indexEmbedding skips unchanged content by hash.
+  if (userId) {
+    await enqueueOrRefresh(env, {
+      userId, jobType: "embed", subjectType, subjectId,
+    }).catch(() => { /* search still works without it */ });
+  }
 }
 
 export async function deleteDocument(env: Env, id: string): Promise<void> {

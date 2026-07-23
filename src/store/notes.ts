@@ -18,6 +18,7 @@ import {
 } from "./db.ts";
 import { deleteDocument } from "./documents.ts";
 import { resolveRelationsTo } from "./relations.ts";
+import { track } from "../analytics.ts";
 
 export interface NoteInput {
   title?: string;
@@ -144,6 +145,7 @@ export async function updateNote(env: Env, userId: string, id: string, input: No
     action: masteryChanged ? "status-changed" : "updated",
     detail: masteryChanged ? { from: current.mastery, to: patch.mastery } : {},
   });
+  if (masteryChanged) await track(env, userId, "knowledge_mastery_changed", { from: current.mastery, to: patch.mastery });
   return (await getNote(env, userId, id))!;
 }
 

@@ -15,6 +15,7 @@ import {
 } from "./db.ts";
 import { deleteDocument } from "./documents.ts";
 import { createRelation } from "./relations.ts";
+import { track } from "../analytics.ts";
 import type { SubjectType } from "../schema.ts";
 
 export interface ContentInput {
@@ -114,6 +115,7 @@ export async function createSeedFrom(
     relation_type: "created-from",
     context: `seeded from ${origin.type}`,
   });
+  await track(env, userId, "content_seed_created", { origin_type: origin.type });
   return item;
 }
 
@@ -155,6 +157,7 @@ export async function updateContent(env: Env, userId: string, id: string, input:
     action: statusChanged ? "status-changed" : "updated",
     detail: statusChanged ? { from: current.status, to: status } : {},
   });
+  if (statusChanged && status === "published") await track(env, userId, "content_published", { channel: patch.channel ?? current.channel });
   return (await getContent(env, userId, id))!;
 }
 

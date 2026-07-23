@@ -38,8 +38,14 @@ export async function runJob(env: Env, message: JobMessage): Promise<JobResult> 
 
   let stage: Stage = "load";
   try {
+    if (job.job_type === "embed") {
+      stage = "index";
+      await embedSubject(env, message.user_id, job.subject_type, job.subject_id);
+      await store.completeJob(env, job.id, { durationMs: Date.now() - started });
+      return { ok: true, job_id: job.id };
+    }
+
     if (job.job_type !== "fetch") {
-      // Only `fetch` exists in Phase 2. Other types are enqueued by later phases.
       await store.completeJob(env, job.id, { durationMs: Date.now() - started });
       return { ok: true, job_id: job.id };
     }
@@ -99,6 +105,44 @@ export async function runJob(env: Env, message: JobMessage): Promise<JobResult> 
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+/**
+ * Embeds one object by reading whatever the FTS row already holds — the same
+ * flattened title+body, so keyword and semantic layers always describe the same
+ * text rather than drifting apart.
+ */
+export async function embedSubject(
+  env: Env, userId: string, subjectType: string, subjectId: string,
+): Promise<{ indexed: boolean; reason?: string }> {
+  const row = await env.DB
+    .prepare("SELECT title, body FROM documents_fts WHERE subject_id = ? LIMIT 1")
+    .bind(subjectId).first<{ title: string; body: string }>();
+  if (!row) return { indexed: false, reason: "not indexed for search" };
+  return store.indexEmbedding(
+    env, userId, subjectType as store.SubjectType, subjectId, row.title ?? "", row.body ?? "",
+  );
+}
+
+/**
+ * Re-embeds everything currently in the search index. Used after enabling
+ * semantic search, or after a model change.
+ */
+export async function backfillEmbeddings(
+  env: Env, userId: string, limit = 200,
+): Promise<{ indexed: number; skipped: number }> {
+  if (!store.semanticAvailable(env)) return { indexed: 0, skipped: 0 };
+  const rows = await env.DB
+    .prepare("SELECT subject_id, subject_type, title, body FROM documents_fts LIMIT ?")
+    .bind(limit).all<{ subject_id: string; subject_type: string; title: string; body: string }>();
+  let indexed = 0, skipped = 0;
+  for (const r of rows.results ?? []) {
+    const result = await store.indexEmbedding(
+      env, userId, r.subject_type as store.SubjectType, r.subject_id, r.title ?? "", r.body ?? "",
+    );
+    if (result.indexed) indexed++; else skipped++;
+  }
+  return { indexed, skipped };
 }
 
 /**

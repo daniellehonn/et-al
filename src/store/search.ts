@@ -12,7 +12,8 @@
 // Authorization is applied *before* ranking (spec §6.5), not as a post-filter,
 // so a result the user may not see can never influence the ordering.
 
-import { type Env, clampInt } from "./db.ts";
+import { type Env, clampInt, now } from "./db.ts";
+import { semanticSearch, semanticAvailable } from "./embeddings.ts";
 import type { SubjectType } from "../schema.ts";
 
 export interface SearchHit {
@@ -21,6 +22,9 @@ export interface SearchHit {
   title: string;
   snippet: string;
   rank: number;
+  /** Which layers produced this hit — useful for explaining a result. */
+  matched?: string[];
+  score?: number;
 }
 
 export interface SearchOptions {
@@ -69,6 +73,104 @@ export async function search(
   ).bind(...values).all<SearchHit>();
 
   return result.results ?? [];
+}
+
+/**
+ * Hybrid search (spec §6.5): combines exact keyword matching, semantic
+ * similarity, recency, and a title-match boost into one ranking.
+ *
+ * The layers are complementary, not redundant. FTS finds the right word;
+ * embeddings find the right idea. Fusing them means "that thing about vector
+ * similarity" finds a note titled "Embeddings" that never uses the word.
+ *
+ * Falls back to keyword-only when the AI/Vectorize bindings are absent, so this
+ * is always safe to call.
+ */
+export async function hybridSearch(
+  env: Env, userId: string, query: string, opts: SearchOptions = {},
+): Promise<SearchHit[]> {
+  const limit = clampInt(opts.limit, 1, 200, 30);
+  const [keyword, semantic] = await Promise.all([
+    search(env, userId, query, { ...opts, limit: 50 }),
+    semanticAvailable(env) ? semanticSearch(env, userId, query, 30) : Promise.resolve([]),
+  ]);
+
+  interface Merged extends SearchHit { score: number; matched: string[] }
+  const merged = new Map<string, Merged>();
+
+  // FTS `rank` is negative, better when more negative. Normalise to 0..1 by
+  // position so the two layers can be summed meaningfully.
+  keyword.forEach((hit, index) => {
+    merged.set(hit.subject_id, {
+      ...hit,
+      score: 1 - index / Math.max(1, keyword.length),
+      matched: ["keyword"],
+    });
+  });
+
+  semantic.forEach((hit, index) => {
+    const positional = 1 - index / Math.max(1, semantic.length);
+    const existing = merged.get(hit.subject_id);
+    if (existing) {
+      // Agreement between layers is a strong signal; add rather than replace.
+      existing.score += positional * 0.8;
+      existing.matched.push("semantic");
+    } else {
+      merged.set(hit.subject_id, {
+        subject_id: hit.subject_id,
+        subject_type: hit.subject_type as SubjectType,
+        title: hit.title,
+        snippet: "",
+        rank: 0,
+        score: positional * 0.8,
+        matched: ["semantic"],
+      });
+    }
+  });
+
+  const results = [...merged.values()];
+  if (!results.length) return [];
+
+  // Title match is a deliberate, explainable boost: if someone types a title,
+  // that record should win regardless of how the body scores.
+  const q = query.toLowerCase().trim();
+  for (const hit of results) {
+    const title = hit.title.toLowerCase();
+    if (title === q) hit.score += 1.0;
+    else if (title.includes(q)) hit.score += 0.4;
+  }
+
+  // Recency as a gentle tiebreaker only — old material stays findable.
+  const updated = await recencyMap(env, userId, results.map((r) => r.subject_id));
+  const nowTs = now();
+  for (const hit of results) {
+    const ts = updated.get(hit.subject_id);
+    if (!ts) continue;
+    const ageDays = (nowTs - ts) / 86400;
+    hit.score += Math.max(0, 0.25 - ageDays / 730);   // decays to 0 over ~2 years
+  }
+
+  if (opts.subject_type) {
+    return results
+      .filter((r) => r.subject_type === opts.subject_type)
+      .sort((a, b) => b.score - a.score).slice(0, limit);
+  }
+  return results.sort((a, b) => b.score - a.score).slice(0, limit);
+}
+
+/** updated_at for a mixed set of ids, for the recency component. */
+async function recencyMap(env: Env, userId: string, ids: string[]): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  if (!ids.length) return map;
+  const placeholders = ids.map(() => "?").join(",");
+  const TABLES = ["projects", "knowledge_notes", "content_items", "project_logs", "tools", "sources"];
+  for (const table of TABLES) {
+    const rows = await env.DB
+      .prepare(`SELECT id, updated_at FROM ${table} WHERE user_id = ? AND id IN (${placeholders})`)
+      .bind(userId, ...ids).all<{ id: string; updated_at: number }>();
+    for (const r of rows.results ?? []) map.set(r.id, r.updated_at);
+  }
+  return map;
 }
 
 /**

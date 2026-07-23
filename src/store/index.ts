@@ -25,6 +25,7 @@ export * from "./tools.ts";
 export * from "./sources.ts";
 export * from "./content.ts";
 export * from "./captures.ts";
+export * from "./embeddings.ts";
 export * from "./search.ts";
 export * from "./jobs.ts";
 export * from "./assets.ts";

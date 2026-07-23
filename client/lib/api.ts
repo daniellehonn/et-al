@@ -145,6 +145,9 @@ export interface ReviewData {
 
 export interface SearchHit {
   subject_id: string; subject_type: string; title: string; snippet: string;
+  /** Which layers produced the hit: "keyword", "semantic", or both. */
+  matched?: string[];
+  score?: number;
 }
 
 /** Query strings built from a filter object, skipping empty values. */
@@ -220,3 +223,60 @@ export const getAreas = () => api.get<{ areas: Area[] }>("/api/areas");
 export const getSession = () => api.get<{ authenticated: boolean }>("/api/session");
 export const login = (key: string) => api.post<{ authenticated: boolean }>("/api/session", { key });
 export const createCapture = (raw_input: string) => api.post<Capture>("/api/captures", { raw_input });
+
+// ---- Phase 5/6 surfaces ----
+export interface Goal {
+  id: string; title: string; type: string; timeframe: string | null;
+  metric_name: string | null; target_value: number | null; current_value: number | null;
+  status: string; area_id: string | null;
+}
+
+export interface IdentityStudio {
+  period_days: number;
+  themes: Array<{ area: string; projects: number; notes_applied: number; outputs: number }>;
+  evidence: {
+    completed_projects: Array<{ id: string; title: string; completed_at: number | null; outputs: number }>;
+    applied_knowledge: Array<{ id: string; title: string; used_in: number }>;
+    adopted_tools: Array<{ id: string; name: string; verdict: string | null }>;
+    published: Array<{ id: string; title: string; channel: string | null; url: string | null }>;
+  };
+  portfolio_queue: Array<{ id: string; title: string; reason: string }>;
+  gaps: string[];
+}
+
+export interface CompletionChecklist {
+  project_id: string;
+  has_retrospective: boolean;
+  learnings_to_promote: Array<{ id: string; title: string | null }>;
+  reusable_decisions: number;
+  outputs: number;
+  suggestions: string[];
+}
+
+export const getGoals = (f: { area_id?: string; status?: string } = {}) =>
+  api.get<{ goals: Goal[] }>(`/api/goals${qs(f)}`);
+export const createGoal = (body: Partial<Goal>) => api.post<Goal>("/api/goals", body);
+export const updateGoal = (id: string, body: Partial<Goal>) => api.patch<Goal>(`/api/goals/${id}`, body);
+
+export const getIdentity = (days?: number) =>
+  api.get<IdentityStudio>(`/api/identity${qs({ days })}`);
+export const getCompletion = (projectId: string) =>
+  api.get<CompletionChecklist>(`/api/projects/${projectId}/completion`);
+
+export const writeSnapshot = () =>
+  api.post<{ prefix: string; files: number; bytes: number }>("/api/export/snapshot");
+export const backfillEmbeddings = () =>
+  api.post<{ indexed: number; skipped: number }>("/api/embeddings/backfill");
+
+/** Content seed created from real work, preserving provenance. */
+export const createSeedFrom = async (
+  origin: { type: string; id: string }, title: string,
+) => {
+  const item = await createContent({ title });
+  await createRelation({
+    source_type: "content_item", source_id: item.id,
+    target_type: origin.type, target_id: origin.id,
+    relation_type: "created-from", context: `seeded from ${origin.type}`,
+  });
+  return item;
+};

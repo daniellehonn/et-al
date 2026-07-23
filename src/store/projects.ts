@@ -19,6 +19,7 @@ import {
   readTimestamp, boolInt, audit, NotFoundError, ValidationError, removeFts,
 } from "./db.ts";
 import { deleteDocument } from "./documents.ts";
+import { track } from "../analytics.ts";
 
 /** Statuses for which a next action is mandatory. */
 const REQUIRES_NEXT_ACTION: readonly ProjectStatus[] = ["active"];
@@ -262,6 +263,10 @@ export async function updateProject(
     action: statusChanged ? "status-changed" : "updated",
     detail: statusChanged ? { from: current.status, to: status } : {},
   });
+  if (statusChanged && status === "active") {
+    await track(env, userId, "project_activated", { has_next_action: Boolean(nextAction) });
+  }
+  if (statusChanged && status === "completed") await track(env, userId, "project_completed", {});
   return (await getProject(env, userId, id))!;
 }
 

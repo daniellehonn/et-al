@@ -15,6 +15,7 @@ import {
   type Env, getDb, now, newId, requireText, optionalText, optionalEnum, requireEnum,
   clampInt, audit, NotFoundError, ValidationError, removeFts,
 } from "./db.ts";
+import { track } from "../analytics.ts";
 
 export interface ToolInput {
   name?: string;
@@ -150,6 +151,7 @@ export async function updateTool(env: Env, userId: string, id: string, input: To
     action: statusChanged ? "status-changed" : "updated",
     detail: statusChanged ? { from: current.status, to: status } : {},
   });
+  if (statusChanged) await track(env, userId, "tool_status_changed", { from: current.status, to: status });
   return (await getTool(env, userId, id))!;
 }
 

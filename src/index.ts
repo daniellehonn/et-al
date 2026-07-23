@@ -8,7 +8,10 @@ import { createMcpHandler } from "agents/mcp";
 import { createEtAlMcpServer } from "./mcp.ts";
 import { SCHEMA_INFO } from "./schema.ts";
 import { RESOURCES, readFilters, getHome, getReview } from "./api.ts";
-import { runJob, sweepJobs } from "./pipeline.ts";
+import { runJob, sweepJobs, backfillEmbeddings } from "./pipeline.ts";
+import { buildExport, toSingleDocument, writeSnapshot } from "./export.ts";
+import { getIdentityStudio, getCompletionChecklist } from "./identity.ts";
+import { getMetrics, track } from "./analytics.ts";
 import type { JobMessage } from "./store/jobs.ts";
 import * as store from "./store/index.ts";
 import { type Env, ValidationError, NotFoundError } from "./store/index.ts";
@@ -134,12 +137,53 @@ export default {
         });
       }
 
+      // ---- export: the ONLY real backup path now that D1 is canonical ----
+      if (path === "/api/export" && request.method === "GET") {
+        await assertAuthorized(request, env);
+        const files = await buildExport(env, userId);
+        if (url.searchParams.get("format") === "json") return json({ files });
+        return new Response(toSingleDocument(files), {
+          headers: {
+            "content-type": "text/markdown; charset=utf-8",
+            "content-disposition": `attachment; filename="et-al-export-${new Date().toISOString().slice(0, 10)}.md"`,
+          },
+        });
+      }
+      if (path === "/api/export/snapshot" && request.method === "POST") {
+        await assertAuthorized(request, env);
+        return json(await writeSnapshot(env, userId));
+      }
+
+      if (path === "/api/metrics" && request.method === "GET") {
+        return json(await getMetrics(env, userId));
+      }
+      if (path === "/api/review/complete" && request.method === "POST") {
+        await assertAuthorized(request, env);
+        await track(env, userId, "weekly_review_completed", await readJson(request).catch(() => ({})));
+        return json({ ok: true });
+      }
+
+      // ---- identity studio + completion flow ----
+      if (path === "/api/identity" && request.method === "GET") {
+        return json(await getIdentityStudio(env, userId, Number(url.searchParams.get("days")) || 180));
+      }
+      const completionMatch = path.match(/^\/api\/projects\/([^/]+)\/completion$/);
+      if (completionMatch && request.method === "GET") {
+        return json(await getCompletionChecklist(env, userId, decodeURIComponent(completionMatch[1])));
+      }
+
+      // ---- semantic index ----
+      if (path === "/api/embeddings/backfill" && request.method === "POST") {
+        await assertAuthorized(request, env);
+        return json(await backfillEmbeddings(env, userId));
+      }
+
       // ---- read surfaces ----
       if (path === "/api/home" && request.method === "GET") return json(await getHome(env, userId));
       if (path === "/api/review" && request.method === "GET") return json(await getReview(env, userId));
       if (path === "/api/search" && request.method === "GET") {
         return json({
-          results: await store.search(env, userId, url.searchParams.get("q") ?? "", {
+          results: await store.hybridSearch(env, userId, url.searchParams.get("q") ?? "", {
             subject_type: url.searchParams.get("type"),
             limit: Number(url.searchParams.get("limit")) || undefined,
           }),
@@ -168,6 +212,7 @@ export default {
             (body.subject_type as store.SubjectType) ?? doc.owner_type,
             body.subject_id ?? doc.owner_id ?? id,
             body.title ?? "",
+            userId,
           );
           return json(await store.getDocument(env, id));
         }
@@ -266,7 +311,16 @@ export default {
    * on the queue. Picks up never-delivered messages, failed jobs with attempts
    * left, and jobs stranded in `running` by an evicted Worker.
    */
-  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    // The nightly trigger writes a Markdown snapshot to R2. Since D1 became
+    // canonical, that snapshot IS the backup — without it, losing D1 loses data.
+    if (event.cron === "0 4 * * *") {
+      ctx.waitUntil((async () => {
+        const userId = await store.ensureUser(env);
+        await writeSnapshot(env, userId);
+      })());
+      return;
+    }
     ctx.waitUntil(sweepJobs(env).then(() => undefined));
   },
 } satisfies ExportedHandler<Env, JobMessage>;

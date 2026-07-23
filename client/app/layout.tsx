@@ -11,11 +11,14 @@ export const metadata: Metadata = {
 // would recreate the fragmentation this product exists to remove.
 const NAV = [
   { href: "/", label: "Home" },
+  { href: "/search/", label: "Search" },
   { href: "/inbox/", label: "Inbox" },
   { href: "/projects/", label: "Projects" },
   { href: "/knowledge/", label: "Knowledge" },
   { href: "/library/", label: "Library" },
   { href: "/content/", label: "Content" },
+  { href: "/goals/", label: "Goals" },
+  { href: "/identity/", label: "Identity" },
   { href: "/review/", label: "Review" },
 ];
 

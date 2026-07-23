@@ -18,6 +18,9 @@ import {
 import * as store from "./store/index.ts";
 import type { Env } from "./store/index.ts";
 import { getHome, getReview } from "./api.ts";
+import { getIdentityStudio, getCompletionChecklist } from "./identity.ts";
+import { buildExport, writeSnapshot } from "./export.ts";
+import { getMetrics } from "./analytics.ts";
 
 function mcpJson(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
@@ -393,14 +396,17 @@ export function createEtAlMcpServer(env: Env): McpServer {
     ({ backlinks: await store.getBacklinks(env, await user(), subject_type, id) })));
 
   server.registerTool("search", {
-    description: "Full-text search across projects, notes, logs, tools, sources, and content.",
+    description:
+      "Hybrid search across projects, notes, logs, tools, sources, and content. Combines exact keyword matching " +
+      "with semantic similarity, so it finds the right idea even when the wording differs. Each hit reports which " +
+      "layers matched.",
     inputSchema: {
       query: z.string().min(1),
       subject_type: z.enum(SUBJECT_TYPE).optional(),
       limit: z.number().int().min(1).max(200).optional(),
     },
   }, guard(async ({ query, ...opts }) =>
-    ({ results: await store.search(env, await user(), query, opts) })));
+    ({ results: await store.hybridSearch(env, await user(), query, opts) })));
 
   server.registerTool("list_unresolved_links", {
     description: "Referenced titles with no object behind them yet — the graph's growth edges.",
@@ -459,9 +465,49 @@ export function createEtAlMcpServer(env: Env): McpServer {
       })),
     },
   }, guard(async ({ document_id, subject_type, subject_id, title, blocks }) => {
-    await store.saveBody(env, document_id, blocks as store.BlockInput[], subject_type, subject_id, title);
+    await store.saveBody(env, document_id, blocks as store.BlockInput[], subject_type, subject_id, title, await user());
     return store.getDocument(env, document_id);
   }));
+
+  server.registerTool("get_identity_studio", {
+    description:
+      "Evidence-based view of what the user's work actually demonstrates: recurring themes by Area, completed " +
+      "projects, applied knowledge, adopted tools, published output, plus a portfolio queue of finished work that " +
+      "produced nothing shareable, and explicit gaps. Everything is derived from records — do not embellish it " +
+      "into claims the evidence does not support.",
+    inputSchema: { days: z.number().int().min(7).max(1095).optional() },
+  }, guard(async ({ days }) => getIdentityStudio(env, await user(), days ?? 180)));
+
+  server.registerTool("get_completion_checklist", {
+    description:
+      "What a project still owes before it is really finished: a retrospective, learnings worth promoting into " +
+      "knowledge notes, reusable decisions, and whether it produced any output. Use when the user completes a " +
+      "project — completion is the moment work becomes evidence, not a silent status change.",
+    inputSchema: { project_id: z.string().min(1) },
+  }, guard(async ({ project_id }) => getCompletionChecklist(env, await user(), project_id)));
+
+  server.registerTool("export_markdown", {
+    description:
+      "Export everything as portable Markdown with stable ids, typed frontmatter, and relations — Obsidian-" +
+      "compatible. Since D1 is the source of truth in v6, this is the real backup path. Returns the file list.",
+    inputSchema: {},
+  }, guard(async () => {
+    const files = await buildExport(env, await user());
+    return { files: files.length, paths: files.map((f) => f.path) };
+  }));
+
+  server.registerTool("write_snapshot", {
+    description: "Write a timestamped Markdown snapshot of everything into R2. This is the backup; run it before any bulk change.",
+    inputSchema: {},
+  }, guard(async () => writeSnapshot(env, await user())));
+
+  server.registerTool("get_metrics", {
+    description:
+      "The product's own success metrics (spec §1.7), led by the north-star: weekly active TRANSFORMATION rate — " +
+      "the share of weeks where something captured actually became a project, note, tested tool, or content seed. " +
+      "Volume of captures is deliberately not a success measure; report these honestly rather than flatteringly.",
+    inputSchema: {},
+  }, guard(async () => getMetrics(env, await user())));
 
   server.registerTool("rebuild_search_index", {
     description:

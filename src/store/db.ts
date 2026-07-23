@@ -15,6 +15,8 @@ export interface Env {
   DB: D1Database;
   VAULT: R2Bucket;                 // assets + Markdown exports (no longer truth)
   JOBS?: Queue;                    // durable processing queue (Phase 2)
+  VECTORIZE?: VectorizeIndex;      // semantic search index (Phase 5)
+  AI?: Ai;                         // Workers AI — embeddings only, not an agent
   // No AI provider key: the AI lives OUTSIDE the platform (Claude via MCP).
   // See docs/v6-implementation-plan.md, Decision F.
   ET_AL_API_KEY?: string;

@@ -15,6 +15,7 @@ import {
   audit, NotFoundError, ValidationError, removeFts,
 } from "./db.ts";
 import { deleteDocument } from "./documents.ts";
+import { track } from "../analytics.ts";
 
 export interface LogInput {
   project_id?: string;
@@ -112,6 +113,7 @@ export async function createLog(env: Env, userId: string, input: LogInput): Prom
   await getDb(env).insert(projectLogs).values(row);
   await touchProject(env, projectId);
   await audit(env, { userId, subjectType: "project_log", subjectId: row.id, action: "created" });
+  await track(env, userId, "project_log_created", { entry_type: row.entryType });
   return view(row as typeof projectLogs.$inferSelect);
 }
 
