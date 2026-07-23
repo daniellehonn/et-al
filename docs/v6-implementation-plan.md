@@ -22,9 +22,40 @@ These came out of the architecture review (`/.lavish/v6-architecture-review.html
 | B | **Semantic search** | **Cloudflare Vectorize** + D1 FTS5 (hybrid ranking). | The only genuine `pgvector` substitution. |
 | C | **Backend** | **Cloudflare Worker, kept.** Drizzle (D1 dialect) replaces hand-rolled SQL where it earns its keep. | Evolution, not rebuild. Migrations machinery, R2 binding, MCP surface all carry over. |
 | D | **Async work** | **Cloudflare Queues + a consumer Worker.** | Transcription, extraction, embeddings run off the request path. |
-| E | **Web client** | **Next.js on Cloudflare Pages**, Worker exposes a JSON API alongside. | The dense block-editor workspace outgrows server-rendered HTML strings. |
+| E | **Web client** | **Next.js static export, co-deployed from the Worker's `[assets]` binding** — one origin. | The dense block-editor workspace outgrows server-rendered HTML strings. Co-deploy (not Pages) because it is an **auth** decision: see below. |
 | F | **AI pipeline** | **Claude structured tool-use.** Auto-approve **only** high-confidence *metadata* (tags, type hints); every canonical record stays a reviewable proposal. | Matches spec §3.2 "AI proposes, user approves" with the one allowance in §7.9. |
 | G | **Block editor** | **Port the existing `ui.ts` block model**, don't adopt TipTap/Lexical. | We already own a working block parser/serializer; product-specific blocks extend it. |
+
+### Why co-deploy, not two origins (Decision E)
+
+The client could have shipped to Pages and called the Worker cross-origin. That
+would have been an auth change disguised as a hosting change:
+
+- `Access-Control-Allow-Origin: *` and credentials are **mutually exclusive** per
+  the fetch spec, so the wildcard would have to become an echoed allowlist.
+- The `et_al_session` cookie would need `SameSite=None; Secure`, which is exactly
+  the attribute that currently makes CSRF a non-issue — so CSRF tokens or strict
+  origin checks would have to be added back.
+- Every mutation would pay a preflight `OPTIONS` round-trip.
+
+Co-deploying buys all of that back for free: same origin, cookie stays
+`SameSite=Lax`, zero CORS configuration, no preflight.
+
+**Mechanism.** `wrangler.toml` points `[assets]` at `client/out` (Next
+`output: "export"`). `run_worker_first = ["/api/*", "/mcp", "/mcp/*", "/health"]`
+sends those paths to the Worker; everything else falls through to the static
+bundle, and `not_found_handling = "single-page-application"` serves the app shell
+for client-side routes. Verified against the shipped `wrangler/config-schema.json`
+rather than from memory.
+
+**If this is ever reversed** — pointing the client at an absolute API origin —
+all three items above must be done together. `client/lib/api.ts` carries a note
+saying so, because using relative paths is what silently keeps this working.
+
+**A third option exists** if a custom domain is ever added: two deployments can
+still share one origin by routing `example.com/api/*` to the Worker and
+`example.com/*` to the client. That is not possible across `*.workers.dev` and
+`*.pages.dev`, which is why it is not the current choice.
 
 ### What this explicitly is NOT
 

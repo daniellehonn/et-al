@@ -6,11 +6,13 @@
   "scripts": {
     "dev": "wrangler dev",
     "predeploy": "git diff --quiet HEAD || (echo '\\nRefusing to deploy: working tree is dirty. Commit first, or the deployed schema will not match HEAD.\\n' && exit 1)",
-    "deploy": "wrangler deploy",
+    "deploy": "npm run build:client && wrangler deploy",
     "db:create": "wrangler d1 create et-al",
     "db:migrate:local": "wrangler d1 migrations apply et-al --local",
     "db:migrate:remote": "wrangler d1 migrations apply et-al --remote",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:client": "cd client && npm install --silent && npm run build",
+    "dev:client": "cd client && npm run dev"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260719.1",

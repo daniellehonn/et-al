@@ -6,7 +6,6 @@
 
 import { createMcpHandler } from "agents/mcp";
 import { createEtAlMcpServer } from "./mcp.ts";
-import { renderStatusPage } from "./status.ts";
 import { SCHEMA_INFO } from "./schema.ts";
 import { RESOURCES, readFilters, getHome, getReview } from "./api.ts";
 import { runJob, sweepJobs } from "./pipeline.ts";
@@ -35,7 +34,6 @@ export default {
         return createMcpHandler(createEtAlMcpServer(env))(request, env, ctx);
       }
 
-      if (path === "/") return htmlResponse(renderStatusPage(env.APP_NAME ?? "et al."));
       if (path === "/health") return json({ ok: true, service: "et-al", schema_version: SCHEMA_INFO.version });
       if (path === "/api/schema") return json(SCHEMA_INFO);
 
@@ -310,7 +308,4 @@ async function readJson(request: Request): Promise<any> {
 }
 function json(body: unknown, status = 200, extraHeaders: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body, null, 2), { status, headers: { ...jsonHeaders, ...extraHeaders } });
-}
-function htmlResponse(body: string): Response {
-  return new Response(body, { headers: { "content-type": "text/html; charset=utf-8" } });
 }

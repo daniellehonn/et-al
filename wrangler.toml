@@ -40,10 +40,21 @@ max_retries = 2
 [triggers]
 crons = ["*/5 * * * *"]
 
-# Static files (logo). Assets are matched first; "/" has no index.html,
-# so the Worker still renders the app itself.
+# CO-DEPLOY: the Next client is served from this Worker, so the client and the
+# API share ONE origin. That is an auth decision as much as a hosting one — the
+# `et_al_session` cookie can stay `SameSite=Lax` (CSRF protection intact), no CORS
+# allowlist is needed, and mutations skip the preflight round-trip.
+#
+# `client/out` is Next's static export (`output: "export"`); build it before
+# deploying — `npm run deploy` does both.
 [assets]
-directory = "src/public"
+directory = "client/out"
+# API, MCP, and health hit the Worker. Everything else falls through to the
+# static bundle. Without this the asset router would answer /api/* first.
+run_worker_first = ["/api/*", "/mcp", "/mcp/*", "/health"]
+# Client-side routes have no matching file on disk, so unmatched paths serve the
+# app shell instead of a 404.
+not_found_handling = "single-page-application"
 
 [vars]
 APP_NAME = "et al."

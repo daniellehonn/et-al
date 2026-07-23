@@ -7,3 +7,7 @@ dist
 
 .lavish/
 .backups/
+
+# Next static export (built at deploy time)
+client/out
+client/.next
