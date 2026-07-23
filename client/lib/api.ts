@@ -280,3 +280,18 @@ export const createSeedFrom = async (
   });
   return item;
 };
+
+// ---- deletion ----
+// Every entity supported delete server-side from Phase 1; none of it was
+// reachable from the UI, which is worse than not having it. These are the
+// client bindings for the generic DELETE route.
+export const deleteProject = (id: string) => api.delete<{ ok: boolean }>(`/api/projects/${id}`);
+export const deleteNote = (id: string) => api.delete<{ ok: boolean }>(`/api/notes/${id}`);
+export const deleteGoal = (id: string) => api.delete<{ ok: boolean }>(`/api/goals/${id}`);
+export const deleteTool = (id: string) => api.delete<{ ok: boolean }>(`/api/tools/${id}`);
+export const deleteSource = (id: string) => api.delete<{ ok: boolean }>(`/api/sources/${id}`);
+export const deleteContent = (id: string) => api.delete<{ ok: boolean }>(`/api/content/${id}`);
+export const deleteLog = (id: string) => api.delete<{ ok: boolean }>(`/api/logs/${id}`);
+export const deleteArea = (id: string) => api.delete<{ ok: boolean }>(`/api/areas/${id}`);
+export const completeReview = (steps_completed: number) =>
+  api.post<{ ok: boolean }>("/api/review/complete", { steps_completed });

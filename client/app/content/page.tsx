@@ -9,7 +9,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import BodyEditor from "@/components/BodyEditor";
-import { getContent, createContent, updateContent, ApiError, type ContentItem } from "@/lib/api";
+import DeleteButton from "@/components/DeleteButton";
+import { getContent, createContent, updateContent, deleteContent, ApiError, type ContentItem } from "@/lib/api";
 
 const STATUSES = ["idea", "draft", "review", "scheduled", "published", "archived"] as const;
 const FORMATS = ["short-post", "thread", "video", "article", "newsletter", "case-study"] as const;
@@ -90,7 +91,8 @@ export default function ContentPage() {
 
         <div className="detail-pane">
           {selectedId
-            ? <ContentDetail id={selectedId} items={items ?? []} onSaved={() => load(filter || undefined)} />
+            ? <ContentDetail id={selectedId} items={items ?? []} onSaved={() => load(filter || undefined)}
+                onDeleted={() => { select(null); load(filter || undefined); }} />
             : <div className="card"><div className="empty">
                 <strong>Select an item</strong>Its draft and publishing details live here.
               </div></div>}
@@ -101,8 +103,8 @@ export default function ContentPage() {
 }
 
 function ContentDetail({
-  id, items, onSaved,
-}: { id: string; items: ContentItem[]; onSaved: () => void }) {
+  id, items, onSaved, onDeleted,
+}: { id: string; items: ContentItem[]; onSaved: () => void; onDeleted: () => void }) {
   const [item, setItem] = useState<ContentItem | null>(null);
   const [url, setUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -138,6 +140,10 @@ function ContentDetail({
           <button key={s} className={item.status === s ? "on" : ""}
             onClick={() => patch({ status: s })}>{s}</button>
         ))}
+      </div>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+        <DeleteButton what="this item"
+          onDelete={async () => { await deleteContent(id); onDeleted(); }} />
       </div>
       <div className="pick" style={{ marginBottom: 10 }}>
         {FORMATS.map((f) => (

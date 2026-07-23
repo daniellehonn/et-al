@@ -9,8 +9,9 @@
 // verbatim when it is missing.
 
 import { useCallback, useEffect, useState } from "react";
+import DeleteButton from "@/components/DeleteButton";
 import {
-  getTools, createTool, updateTool, getSources,
+  getTools, createTool, updateTool, deleteTool, getSources, deleteSource,
   ApiError, type Tool, type Source,
 } from "@/lib/api";
 
@@ -103,6 +104,8 @@ function Tools() {
               <button className="btn" onClick={() => setOpenId(openId === t.id ? null : t.id)}>
                 {openId === t.id ? "Close" : "Advance"}
               </button>
+              <DeleteButton what="this tool"
+                onDelete={async () => { await deleteTool(t.id); load(filter || undefined); }} />
             </div>
             {openId === t.id && (
               <ToolAdvance tool={t} onSaved={() => { load(filter || undefined); }} />
@@ -167,7 +170,8 @@ function ToolAdvance({ tool, onSaved }: { tool: Tool; onSaved: () => void }) {
 
 function Sources() {
   const [sources, setSources] = useState<Source[] | null>(null);
-  useEffect(() => { getSources().then((r) => setSources(r.sources)).catch(() => setSources([])); }, []);
+  const load = () => getSources().then((r) => setSources(r.sources)).catch(() => setSources([]));
+  useEffect(() => { load(); }, []);
 
   return (
     <div className="card">
@@ -186,6 +190,8 @@ function Sources() {
             <div className="meta">{[s.platform, s.author].filter(Boolean).join(" · ")}</div>
           </div>
           <span className="chip">{s.platform}</span>
+          <DeleteButton what="this source"
+            onDelete={async () => { await deleteSource(s.id); load(); }} />
         </div>
       ))}
     </div>

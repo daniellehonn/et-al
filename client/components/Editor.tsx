@@ -51,6 +51,8 @@ export default function Editor({
   const [menu, setMenu] = useState<MenuState | null>(null);
   const refs = useRef<Array<HTMLTextAreaElement | null>>([]);
   const [focused, setFocused] = useState<number | null>(null);
+  /** Index whose block handle menu is open (Notion's ⋮⋮ affordance). */
+  const [handleAt, setHandleAt] = useState<number | null>(null);
 
   const update = useCallback((index: number, patch: Partial<BlockDraft>) => {
     onChange(blocks.map((b, i) => (i === index ? { ...b, ...patch } : b)));
@@ -62,6 +64,22 @@ export default function Editor({
     onChange(next);
     // Focus the new block after React commits it.
     requestAnimationFrame(() => refs.current[index + 1]?.focus());
+  }, [blocks, onChange]);
+
+  const duplicateAt = useCallback((index: number) => {
+    const copy = { ...blocks[index], id: undefined };
+    const next = [...blocks];
+    next.splice(index + 1, 0, copy);
+    onChange(next);
+  }, [blocks, onChange]);
+
+  const moveBy = useCallback((index: number, delta: number) => {
+    const target = index + delta;
+    if (target < 0 || target >= blocks.length) return;
+    const next = [...blocks];
+    const [item] = next.splice(index, 1);
+    next.splice(target, 0, item);
+    onChange(next);
   }, [blocks, onChange]);
 
   const removeAt = useCallback((index: number) => {
@@ -219,6 +237,14 @@ export default function Editor({
     <div className="editor">
       {blocks.map((block, index) => (
         <div key={block.id ?? index} className={`blk blk-${block.type}`}>
+          <button
+            type="button"
+            className={`blk-handle ${handleAt === index ? "open" : ""}`}
+            aria-label="Block actions"
+            aria-expanded={handleAt === index}
+            onClick={() => setHandleAt(handleAt === index ? null : index)}
+          >⋮⋮</button>
+
           <BlockAffix block={block} onToggle={() => update(index, {
             type: block.type === "todo" ? "todo-done" : "todo",
           })} />
@@ -273,6 +299,20 @@ export default function Editor({
           </div>
 
           {block.is_ai && <span className="chip warn ai-flag">AI</span>}
+
+          {handleAt === index && (
+            <BlockActions
+              canMoveUp={index > 0}
+              canMoveDown={index < blocks.length - 1}
+              onClose={() => setHandleAt(null)}
+              onDuplicate={() => { duplicateAt(index); setHandleAt(null); }}
+              onMoveUp={() => { moveBy(index, -1); setHandleAt(null); }}
+              onMoveDown={() => { moveBy(index, 1); setHandleAt(null); }}
+              onDelete={() => { removeAt(index); setHandleAt(null); }}
+              onTurnInto={(type) => { update(index, { type }); setHandleAt(null); }}
+              current={block.type}
+            />
+          )}
 
           {menu?.index === index && menuItems.length > 0 && (
             <Menu
@@ -334,6 +374,63 @@ function ProductFields({
         </label>
       ))}
     </div>
+  );
+}
+
+/**
+ * The per-block actions Notion puts behind its drag handle. Delete lives here
+ * because the alternative — backspace-merging an empty block — is invisible
+ * unless you already know the trick.
+ */
+function BlockActions({
+  canMoveUp, canMoveDown, current, onClose, onDuplicate, onMoveUp, onMoveDown, onDelete, onTurnInto,
+}: {
+  canMoveUp: boolean; canMoveDown: boolean; current: string;
+  onClose: () => void;
+  onDuplicate: () => void; onMoveUp: () => void; onMoveDown: () => void; onDelete: () => void;
+  onTurnInto: (type: string) => void;
+}) {
+  const TURN_INTO = ["paragraph", "heading", "bullet", "todo", "quote", "callout", "code"];
+  return (
+    <>
+      {/* Click-away layer, so the menu closes without a global listener. */}
+      <div
+        style={{ position: "fixed", inset: 0, zIndex: 30 }}
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      <div className="blk-menu" role="menu" style={{ left: 0 }}>
+        <div className="blk-menu-head">Turn into</div>
+        {TURN_INTO.filter((t) => t !== current).map((t) => (
+          <button key={t} type="button" role="menuitem"
+            onMouseDown={(e) => { e.preventDefault(); onTurnInto(t); }}>
+            <span className="mi">¶</span><span className="mt">{labelFor(t)}</span>
+          </button>
+        ))}
+        <div className="sep" />
+        <button type="button" role="menuitem"
+          onMouseDown={(e) => { e.preventDefault(); onDuplicate(); }}>
+          <span className="mi">⧉</span><span className="mt">Duplicate</span>
+        </button>
+        {canMoveUp && (
+          <button type="button" role="menuitem"
+            onMouseDown={(e) => { e.preventDefault(); onMoveUp(); }}>
+            <span className="mi">↑</span><span className="mt">Move up</span>
+          </button>
+        )}
+        {canMoveDown && (
+          <button type="button" role="menuitem"
+            onMouseDown={(e) => { e.preventDefault(); onMoveDown(); }}>
+            <span className="mi">↓</span><span className="mt">Move down</span>
+          </button>
+        )}
+        <div className="sep" />
+        <button type="button" role="menuitem" className="destructive"
+          onMouseDown={(e) => { e.preventDefault(); onDelete(); }}>
+          <span className="mi">✕</span><span className="mt">Delete block</span>
+        </button>
+      </div>
+    </>
   );
 }
 

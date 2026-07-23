@@ -13,9 +13,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import BodyEditor from "@/components/BodyEditor";
+import DeleteButton from "@/components/DeleteButton";
 import {
   getProjects, getProject, createProject, updateProject,
-  getLogs, createLog, getBacklinks, getCompletion, createSeedFrom,
+  getLogs, createLog, getBacklinks, getCompletion, createSeedFrom, deleteProject, deleteLog,
   ApiError, type Project, type ProjectLog, type Relation, type CompletionChecklist,
 } from "@/lib/api";
 
@@ -103,7 +104,8 @@ export default function ProjectsPage() {
 
         <div className="detail-pane">
           {selectedId
-            ? <ProjectDetail id={selectedId} onSaved={() => load(filter || undefined)} />
+            ? <ProjectDetail id={selectedId} onSaved={() => load(filter || undefined)}
+                onDeleted={() => { select(null); load(filter || undefined); }} />
             : <div className="card"><div className="empty">
                 <strong>Select a project</strong>
                 Its overview, engineer log, and connections live here.
@@ -137,7 +139,7 @@ function NewProject({ onCreated }: { onCreated: (p: Project) => void }) {
   );
 }
 
-function ProjectDetail({ id, onSaved }: { id: string; onSaved: () => void }) {
+function ProjectDetail({ id, onSaved, onDeleted }: { id: string; onSaved: () => void; onDeleted: () => void }) {
   const [project, setProject] = useState<Project | null>(null);
   const [tab, setTab] = useState<(typeof TABS)[number]>("Overview");
   const [error, setError] = useState<string | null>(null);
@@ -176,11 +178,16 @@ function ProjectDetail({ id, onSaved }: { id: string; onSaved: () => void }) {
         aria-label="Project title"
       />
 
-      <div className="pick" style={{ margin: "8px 0 12px" }}>
-        {STATUSES.map((s) => (
-          <button key={s} className={project.status === s ? "on" : ""}
-            onClick={() => patch({ status: s })}>{s}</button>
-        ))}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "8px 0 12px", flexWrap: "wrap" }}>
+        <div className="pick">
+          {STATUSES.map((s) => (
+            <button key={s} className={project.status === s ? "on" : ""}
+              onClick={() => patch({ status: s })}>{s}</button>
+          ))}
+        </div>
+        <span style={{ flex: 1 }} />
+        <DeleteButton what="this project"
+          onDelete={async () => { await deleteProject(id); onDeleted(); }} />
       </div>
 
       {error && <div className="error-box" style={{ marginBottom: 12 }}>{error}</div>}
@@ -261,6 +268,8 @@ function ProjectLogTab({ projectId }: { projectId: string }) {
             <button className="btn" onClick={() => setOpenId(openId === log.id ? null : log.id)}>
               {openId === log.id ? "Close" : "Open"}
             </button>
+            <DeleteButton label="Delete" what="this entry"
+              onDelete={async () => { await deleteLog(log.id); load(); }} />
           </div>
           {openId === log.id && (
             <div style={{ padding: "10px 14px 14px" }}>

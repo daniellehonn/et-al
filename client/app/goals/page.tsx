@@ -7,7 +7,8 @@
 // intention, not a goal, and is flagged as such.
 
 import { useCallback, useEffect, useState } from "react";
-import { getGoals, createGoal, updateGoal, getAreas, getProjects,
+import DeleteButton from "@/components/DeleteButton";
+import { getGoals, createGoal, updateGoal, deleteGoal, getAreas, getProjects,
   type Goal, type Area, type Project } from "@/lib/api";
 
 const TYPES = ["outcome", "habit", "identity"] as const;
@@ -89,6 +90,8 @@ export default function GoalsPage() {
                     onClick={async () => { await updateGoal(g.id, { status: s }); load(); }}>{s}</button>
                 ))}
               </div>
+              <DeleteButton what="this goal"
+                onDelete={async () => { await deleteGoal(g.id); load(); }} />
             </div>
           );
         })}

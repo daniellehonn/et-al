@@ -76,6 +76,24 @@ export default function HomePage() {
       </form>
       {flash && <p style={{ color: "var(--accent)", fontSize: 13, marginTop: -16 }}>{flash}</p>}
 
+      {data && isEmpty(data) && (
+        <div className="orient">
+          <h2>How this works</h2>
+          <ol>
+            <li><b>Capture</b> anything above — a thought or a link. Links are fetched
+              automatically. Nothing needs to be filed straight away.</li>
+            <li><b>Projects</b> are things you are actually doing. One becomes
+              &ldquo;active&rdquo; only when you can name the next physical step.</li>
+            <li><b>Knowledge</b> is what you can explain. Write it in your own words;
+              mastery moves up when you can, not when you saved it.</li>
+            <li><b>Library</b> holds tools to test — each needs a verdict before it
+              counts as tested.</li>
+            <li><b>Content</b> and <b>Identity</b> turn finished work into things
+              worth sharing.</li>
+          </ol>
+        </div>
+      )}
+
       {error && <div className="error-box" style={{ marginBottom: 20 }}>{error}</div>}
       {!data && !error && <Loading />}
 
@@ -166,6 +184,12 @@ export default function HomePage() {
       )}
     </>
   );
+}
+
+/** True while nothing has been created — drives the first-run orientation. */
+function isEmpty(d: HomeData): boolean {
+  return d.active_projects.length === 0 && d.inbox_count === 0 &&
+    d.recent_learning.length === 0 && d.test_queue.length === 0;
 }
 
 function Section({ kicker, count, children }: { kicker: string; count: number; children: React.ReactNode }) {

@@ -335,3 +335,42 @@ code, .mono {
   background: transparent; border: none; color: var(--ink); padding: 0; margin-bottom: 4px;
 }
 .title-field:focus { outline: none; }
+
+/* Destructive actions announce themselves only once armed, so the default
+   state never invites a mis-click. */
+.btn.danger {
+  background: var(--error); color: #fff; border-color: var(--error);
+}
+.btn.danger:hover { opacity: 0.9; color: #fff; }
+
+/* ---- block handle (Notion-style) ---- */
+.blk-handle {
+  flex: 0 0 18px; width: 18px; height: 22px; margin-top: 3px;
+  border: none; background: none; cursor: pointer; padding: 0;
+  color: var(--ink-2); opacity: 0; transition: opacity 0.12s;
+  font-size: 13px; line-height: 1; border-radius: 4px;
+}
+.blk:hover .blk-handle, .blk-handle:focus, .blk-handle.open { opacity: 1; }
+.blk-handle:hover { background: var(--accent-soft); color: var(--ink); }
+@media (hover: none) { .blk-handle { opacity: 0.5; } }
+
+.blk-menu button.destructive { color: var(--error); }
+.blk-menu .sep { height: 1px; background: var(--border); margin: 4px 6px; }
+
+.nav-group { margin-bottom: 10px; }
+.nav-group-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--ink-2); font-weight: 700; padding: 6px 10px 3px; opacity: 0.75;
+}
+@media (max-width: 720px) {
+  .nav-group { display: flex; margin-bottom: 0; align-items: center; }
+  .nav-group-label { display: none; }
+}
+
+/* First-run orientation. Shown only while the system is empty, so it never
+   becomes clutter for someone who already knows the loop. */
+.orient { border: 1px dashed var(--border); border-radius: var(--r-card); padding: 16px 18px; margin-bottom: 22px; }
+.orient h2 { font-size: 15px; margin-bottom: 8px; }
+.orient ol { margin: 0; padding-left: 20px; color: var(--ink-2); font-size: 13.5px; }
+.orient li { margin: 5px 0; }
+.orient b { color: var(--ink); }

@@ -8,8 +8,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import BodyEditor from "@/components/BodyEditor";
+import DeleteButton from "@/components/DeleteButton";
 import { Connections } from "../projects/page";
-import { getNotes, createNote, updateNote, type Note } from "@/lib/api";
+import { getNotes, createNote, updateNote, deleteNote, type Note } from "@/lib/api";
 
 const MASTERY = ["captured", "learning", "understood", "applied"] as const;
 const NOTE_TYPES = ["concept", "how-to", "reference", "comparison", "question", "mental-model"] as const;
@@ -83,6 +84,7 @@ export default function KnowledgePage() {
         <div className="detail-pane">
           {selectedId
             ? <NoteDetail id={selectedId} notes={notes ?? []} onSaved={() => load(mastery || undefined)}
+                onDeleted={() => { select(null); load(mastery || undefined); }}
                 onOpenLink={(title) => {
                   const match = (notes ?? []).find((n) => n.title.toLowerCase() === title.toLowerCase());
                   if (match) select(match.id);
@@ -114,8 +116,8 @@ function NewNote({ onCreated }: { onCreated: (n: Note) => void }) {
 }
 
 function NoteDetail({
-  id, notes, onSaved, onOpenLink,
-}: { id: string; notes: Note[]; onSaved: () => void; onOpenLink: (t: string) => void }) {
+  id, notes, onSaved, onDeleted, onOpenLink,
+}: { id: string; notes: Note[]; onSaved: () => void; onDeleted: () => void; onOpenLink: (t: string) => void }) {
   const [note, setNote] = useState<Note | null>(null);
   const [tab, setTab] = useState<"Note" | "Connections">("Note");
 
@@ -160,10 +162,15 @@ function NoteDetail({
         </div>
       </div>
 
-      <div className="pick" style={{ marginBottom: 14 }}>
-        {(["Note", "Connections"] as const).map((t) => (
-          <button key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>{t}</button>
-        ))}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
+        <div className="pick">
+          {(["Note", "Connections"] as const).map((t) => (
+            <button key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>{t}</button>
+          ))}
+        </div>
+        <span style={{ flex: 1 }} />
+        <DeleteButton what="this note"
+          onDelete={async () => { await deleteNote(id); onDeleted(); }} />
       </div>
 
       {tab === "Note" ? (
