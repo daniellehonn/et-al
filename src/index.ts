@@ -42,7 +42,18 @@ export default {
         );
       }
 
-      if (path === "/health") return json({ ok: true, service: "et-al", schema_version: SCHEMA_INFO.version });
+      if (path === "/health") {
+        // Reports which optional bindings are live. Semantic search degrades
+        // silently by design, so without this a misconfiguration is invisible.
+        return json({
+          ok: true, service: "et-al", schema_version: SCHEMA_INFO.version,
+          bindings: {
+            d1: Boolean(env.DB), r2: Boolean(env.VAULT), queue: Boolean(env.JOBS),
+            ai: Boolean(env.AI), vectorize: Boolean(env.VECTORIZE),
+          },
+          semantic_search: store.semanticAvailable(env),
+        });
+      }
       if (path === "/api/schema") return json(SCHEMA_INFO);
 
       // ---- session ----
