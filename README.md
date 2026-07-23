@@ -180,9 +180,22 @@ et-al/
 ```bash
 npm install
 wrangler r2 bucket create et-al-vault    # assets + Markdown exports
-npm run db:migrate:local                 # applies through 0007 (the v6 schema)
+npm run db:migrate:local                 # applies all migrations
 npm run dev
 ```
+
+Semantic search needs two one-time Cloudflare resources. **Both** are required —
+Vectorize returns zero matches (not an error) when filtering on a property that
+has no metadata index, which makes a missing second step look like "semantic
+search found nothing":
+
+```bash
+wrangler vectorize create et-al-index --dimensions 768 --metric cosine
+wrangler vectorize create-metadata-index et-al-index --property-name=user_id --type=string
+```
+
+`GET /health` reports which optional bindings are live, so a misconfiguration is
+visible rather than silent. Without them, search degrades to keyword-only.
 
 Then seed the default Life Areas and open the Worker URL Wrangler prints:
 

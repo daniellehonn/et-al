@@ -16,6 +16,19 @@ import { embeddings } from "../schema.ts";
 import { type Env, getDb, now, newId } from "./db.ts";
 import type { SubjectType } from "../schema.ts";
 
+// SETUP — both steps are required, and the second is easy to miss:
+//
+//   wrangler vectorize create et-al-index --dimensions 768 --metric cosine
+//   wrangler vectorize create-metadata-index et-al-index \
+//     --property-name=user_id --type=string
+//
+// Vectorize refuses to FILTER on a metadata property that has no metadata index,
+// and it does so by returning zero matches rather than an error. Combined with
+// the graceful fallback below, that failure is completely silent: search simply
+// behaves as if semantic matching found nothing. The metadata index also only
+// applies to vectors upserted AFTER it exists, so creating it later requires a
+// re-backfill (POST /api/embeddings/backfill after clearing the embeddings table).
+
 /** 768-dimension model; the index must be created with matching dimensions. */
 export const EMBEDDING_MODEL = "@cf/baai/bge-base-en-v1.5";
 export const EMBEDDING_DIMENSIONS = 768;
