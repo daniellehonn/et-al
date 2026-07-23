@@ -53,9 +53,23 @@ export default function Editor({
   const [focused, setFocused] = useState<number | null>(null);
   /** Index whose block handle menu is open (Notion's ⋮⋮ affordance). */
   const [handleAt, setHandleAt] = useState<number | null>(null);
-  /** Block being dragged, and where it would land. */
+  /**
+   * Block being dragged, and where it would land.
+   *
+   * The index is held in a ref as well as state: `dragover` can fire in the same
+   * tick as `dragstart`, before React has flushed, and a handler reading stale
+   * state would drop the very first move. State drives rendering; the ref is
+   * what the handlers actually trust.
+   */
+  const dragIndexRef = useRef<number | null>(null);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropAt, setDropAt] = useState<{ index: number; after: boolean } | null>(null);
+
+  const endDrag = useCallback(() => {
+    dragIndexRef.current = null;
+    setDragIndex(null);
+    setDropAt(null);
+  }, []);
 
   const update = useCallback((index: number, patch: Partial<BlockDraft>) => {
     onChange(blocks.map((b, i) => (i === index ? { ...b, ...patch } : b)));
@@ -268,7 +282,7 @@ export default function Editor({
             dropAt?.index === index ? (dropAt.after ? "drop-after" : "drop-before") : "",
           ].filter(Boolean).join(" ")}
           onDragOver={(e) => {
-            if (dragIndex === null) return;
+            if (dragIndexRef.current === null) return;
             e.preventDefault();
             e.dataTransfer.dropEffect = "move";
             const rect = e.currentTarget.getBoundingClientRect();
@@ -276,11 +290,11 @@ export default function Editor({
           }}
           onDrop={(e) => {
             e.preventDefault();
-            if (dragIndex !== null && dropAt) {
-              moveTo(dragIndex, dropAt.index + (dropAt.after ? 1 : 0));
+            const from = dragIndexRef.current;
+            if (from !== null && dropAt) {
+              moveTo(from, dropAt.index + (dropAt.after ? 1 : 0));
             }
-            setDragIndex(null);
-            setDropAt(null);
+            endDrag();
           }}
         >
           <button
@@ -290,6 +304,7 @@ export default function Editor({
             aria-expanded={handleAt === index}
             draggable
             onDragStart={(e) => {
+              dragIndexRef.current = index;
               setDragIndex(index);
               setHandleAt(null);
               e.dataTransfer.effectAllowed = "move";
@@ -298,7 +313,7 @@ export default function Editor({
               const row = e.currentTarget.parentElement;
               if (row) e.dataTransfer.setDragImage(row, 12, 12);
             }}
-            onDragEnd={() => { setDragIndex(null); setDropAt(null); }}
+            onDragEnd={endDrag}
             onClick={() => setHandleAt(handleAt === index ? null : index)}
           >⋮⋮</button>
 
