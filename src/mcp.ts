@@ -13,7 +13,7 @@ import {
   PROJECT_STATUS, PRIORITY, GOAL_TYPE, GOAL_TIMEFRAME, GOAL_STATUS,
   LOG_ENTRY_TYPE, NOTE_TYPE, MASTERY, TOOL_STATUS, SOURCE_PLATFORM,
   CONTENT_STATUS, CONTENT_FORMAT, CONTENT_CHANNEL, RELATION_TYPE, SUBJECT_TYPE,
-  CAPTURE_INPUT_TYPE,
+  CAPTURE_INPUT_TYPE, CLASSIFICATION,
 } from "./schema.ts";
 import * as store from "./store/index.ts";
 import type { Env } from "./store/index.ts";
@@ -97,6 +97,25 @@ export function createEtAlMcpServer(env: Env): McpServer {
   }, guard(async ({ capture_id }) => store.resetForRetry(env, await user(), capture_id)));
 
   // ---- areas & goals ----
+  server.registerTool("triage_capture", {
+    description:
+      "Resolve a capture in the inbox. Set review_status to 'accepted' once you have created whatever it should " +
+      "become (a note, tool, project, or source), or 'dismissed' if it needs nothing. The raw capture is kept " +
+      "either way as the anchor its provenance points back to — triage never deletes the original.",
+    inputSchema: {
+      capture_id: z.string().min(1),
+      review_status: z.enum(["accepted", "partially-accepted", "dismissed"]),
+      classification: z.enum(CLASSIFICATION).optional().describe("What this capture turned out to be"),
+    },
+  }, guard(async ({ capture_id, ...updates }) => store.updateCapture(env, await user(), capture_id, updates)));
+
+  server.registerTool("get_agent_activity", {
+    description:
+      "What has been created or changed by an agent (actor='ai'), newest first. Every write made through this " +
+      "MCP server is attributed automatically, so this is the honest record of what you did on the user's behalf.",
+    inputSchema: { limit: z.number().int().min(1).max(200).optional() },
+  }, guard(async ({ limit }) => ({ activity: await store.listAgentActivity(env, await user(), limit ?? 50) })));
+
   server.registerTool("list_areas", {
     description: "Life Areas — long-term identities and responsibilities. Areas are filters and context, not folders; a project may belong to several.",
     inputSchema: {},
@@ -241,6 +260,19 @@ export function createEtAlMcpServer(env: Env): McpServer {
   }, guard(async ({ id, ...updates }) => store.updateNote(env, await user(), id, updates)));
 
   // ---- tools (test later) ----
+  server.registerTool("get_note", {
+    description: "One knowledge note with its mastery and which sections are AI-generated.",
+    inputSchema: { id: z.string().min(1) },
+  }, guard(async ({ id }) => (await store.getNote(env, await user(), id)) ?? { error: "Note not found" }));
+
+  server.registerTool("find_note_by_title", {
+    description:
+      "Look up a note by exact title before creating one. Use this to avoid duplicates — the same concept " +
+      "written twice under slightly different titles is the main way a knowledge base rots.",
+    inputSchema: { title: z.string().min(1) },
+  }, guard(async ({ title }) =>
+    (await store.findNoteByTitle(env, await user(), title)) ?? { found: false }));
+
   server.registerTool("list_tools", {
     description: "Saved tools and their test lifecycle state.",
     inputSchema: { status: z.enum(TOOL_STATUS).optional() },
@@ -285,6 +317,21 @@ export function createEtAlMcpServer(env: Env): McpServer {
     },
   }, guard(async (input) => store.createSource(env, await user(), input)));
 
+  server.registerTool("list_sources", {
+    description:
+      "External material already ingested — videos, articles, papers. Each carries the title, author, and " +
+      "fetched text. Use this to find something to digest into knowledge notes.",
+    inputSchema: { platform: z.enum(SOURCE_PLATFORM).optional(), limit: z.number().int().min(1).max(200).optional() },
+  }, guard(async (opts) => ({ sources: await store.listSources(env, await user(), opts) })));
+
+  server.registerTool("get_source", {
+    description:
+      "One source INCLUDING its fetched transcript or article text. This is the raw material for writing " +
+      "knowledge notes from a video or article. The text was fetched deterministically; any summary you write " +
+      "from it is yours and must be recorded as an AI section on the note, not passed off as the user's words.",
+    inputSchema: { id: z.string().min(1) },
+  }, guard(async ({ id }) => (await store.getSource(env, await user(), id)) ?? { error: "Source not found" }));
+
   server.registerTool("list_content", {
     description: "Content items from idea through published.",
     inputSchema: { status: z.enum(CONTENT_STATUS).optional() },
@@ -305,6 +352,23 @@ export function createEtAlMcpServer(env: Env): McpServer {
     },
   }, guard(async ({ origin_type, origin_id, ...input }) =>
     store.createSeedFrom(env, await user(), { type: origin_type, id: origin_id }, input)));
+
+  server.registerTool("update_content", {
+    description:
+      "Update a content item, including moving it along idea -> draft -> review -> scheduled -> published. " +
+      "Marking something published REQUIRES a published_url: claiming work shipped without evidence is exactly " +
+      "the drift this system exists to prevent.",
+    inputSchema: {
+      id: z.string().min(1),
+      title: z.string().optional(),
+      status: z.enum(CONTENT_STATUS).optional(),
+      format: z.enum(CONTENT_FORMAT).nullable().optional(),
+      channel: z.enum(CONTENT_CHANNEL).nullable().optional(),
+      hook: z.string().nullable().optional(),
+      audience: z.string().nullable().optional(),
+      published_url: z.string().nullable().optional(),
+    },
+  }, guard(async ({ id, ...updates }) => store.updateContent(env, await user(), id, updates)));
 
   // ---- graph & search ----
   server.registerTool("relate", {
@@ -349,6 +413,33 @@ export function createEtAlMcpServer(env: Env): McpServer {
       "Read an object's document body as ordered blocks. Blocks carry an is_ai flag; generated content must stay labeled.",
     inputSchema: { document_id: z.string().min(1) },
   }, guard(async ({ document_id }) => (await store.getDocument(env, document_id)) ?? { error: "Document not found" }));
+
+  server.registerTool("open_body", {
+    description:
+      "Read an object's document body by its OWN id, creating the document if it does not exist yet. Prefer this " +
+      "over get_body: it takes the project/note/log/content id you already have, and returns the document_id you " +
+      "need for write_body.",
+    inputSchema: {
+      resource: z.enum(["projects", "notes", "logs", "content"]),
+      id: z.string().min(1),
+    },
+  }, guard(async ({ resource, id }) => {
+    const u = await user();
+    const map = {
+      projects: { type: "project", get: store.getProject, set: store.setProjectDocument },
+      notes: { type: "knowledge_note", get: store.getNote, set: store.setNoteDocument },
+      logs: { type: "project_log", get: store.getLog, set: store.setLogDocument },
+      content: { type: "content_item", get: store.getContent, set: store.setContentDocument },
+    } as const;
+    const entry = map[resource];
+    const record = (await entry.get(env, u, id)) as { body_document_id?: string | null } | null;
+    if (!record) return { error: `${resource} not found: ${id}` };
+    const documentId = await store.ensureDocument(
+      env, u, record.body_document_id ?? null, entry.type as store.SubjectType, id,
+    );
+    if (documentId !== record.body_document_id) await entry.set(env, u, id, documentId);
+    return store.getDocument(env, documentId);
+  }));
 
   server.registerTool("write_body", {
     description:

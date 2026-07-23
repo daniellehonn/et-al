@@ -12,6 +12,7 @@ export type {
   CaptureInputType, ProcessingStatus, Classification, ReviewStatus, SourcePlatform,
 } from "../schema.ts";
 
+export * from "./context.ts";
 export * from "./db.ts";
 export * from "./documents.ts";
 export * from "./areas.ts";

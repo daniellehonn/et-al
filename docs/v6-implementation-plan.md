@@ -23,7 +23,7 @@ These came out of the architecture review (`/.lavish/v6-architecture-review.html
 | C | **Backend** | **Cloudflare Worker, kept.** Drizzle (D1 dialect) replaces hand-rolled SQL where it earns its keep. | Evolution, not rebuild. Migrations machinery, R2 binding, MCP surface all carry over. |
 | D | **Async work** | **Cloudflare Queues + a consumer Worker.** | Transcription, extraction, embeddings run off the request path. |
 | E | **Web client** | **Next.js static export, co-deployed from the Worker's `[assets]` binding** — one origin. | The dense block-editor workspace outgrows server-rendered HTML strings. Co-deploy (not Pages) because it is an **auth** decision: see below. |
-| F | **AI pipeline** | **Claude structured tool-use.** Auto-approve **only** high-confidence *metadata* (tags, type hints); every canonical record stays a reviewable proposal. | Matches spec §3.2 "AI proposes, user approves" with the one allowance in §7.9. |
+| F | **AI** | **No AI inside the platform.** Claude works with et al. from the outside, through the MCP server and skills. | Revised after Phase 3. The platform stays deterministic; the intelligence is the agent the user is already talking to. Attribution replaces the proposal queue — see below. |
 | G | **Block editor** | **Port the existing `ui.ts` block model**, don't adopt TipTap/Lexical. | We already own a working block parser/serializer; product-specific blocks extend it. |
 
 ### Why co-deploy, not two origins (Decision E)
@@ -246,12 +246,53 @@ than a half-built guess.
   product-specific block types, persist as `document_blocks` JSON.
 - **Exit:** the daily-driver workspace exists.
 
-### Phase 4 — AI proposal pipeline (the defining bet)
-- Extraction jobs, zod-validated Claude tool-use, dedupe via Vectorize + FTS.
-- `proposal_bundles` / `proposed_changes`, granular approval endpoint,
-  transactional apply + `audit_events`.
-- **Exit:** the prototype scenario (save a video → propose tool + 2 notes →
-  approve selected → link project) runs end-to-end (spec §7.4).
+### Phase 4 — Agent-native interface ✅ COMPLETE
+
+**Scope changed before this phase started.** The original plan put an AI
+extraction pipeline inside the Worker: an Anthropic key, extraction jobs, and a
+server-side proposal queue the user would approve in the app. That is not what
+the user wants — they work with Claude directly (Cowork), so the AI belongs
+*outside* the platform and reaches it through MCP.
+
+Nothing had to be removed: Phase 4 had not started, so no AI SDK ever landed.
+
+What this changes about the spec's core principle. §3.2 says AI must never
+silently write canonical records. With a server-side pipeline that meant a
+proposal queue. With the agent outside, the human is already in the loop at the
+conversation — a second approval queue inside et al. would be pure friction for
+a single-user system. The equivalent guarantee is **attribution**:
+
+- `src/store/context.ts` carries a request-scoped actor via `AsyncLocalStorage`
+  (available because `nodejs_compat` is on). Threading an `actor` argument
+  through every store function would have touched dozens of signatures for a
+  value none of them use.
+- The Worker wraps the whole MCP handler in `runAs({ actor: "ai" })`, so **every**
+  write arriving over MCP is recorded as `actor: 'ai'` with the agent name. A
+  store function cannot forget to attribute itself.
+- `get_agent_activity` / `listAgentActivity` answer "what did Claude do".
+
+The `proposal_bundles` / `proposed_changes` tables are left in place but unused.
+They cost nothing and remain the right shape if batch review is ever wanted.
+
+**MCP surface: 34 → 42 tools.** The gaps that actually blocked agent work:
+- `list_sources` / `get_source` — Claude could not read a fetched transcript at
+  all, which made "digest this video" impossible.
+- `triage_capture` — no way to resolve an inbox item over MCP.
+- `open_body` — takes the object id you already have and creates the document if
+  needed, instead of requiring a `document_id` you had no way to obtain.
+- `get_note`, `find_note_by_title` (duplicate avoidance), `update_content`,
+  `get_agent_activity`.
+
+**Skills** in `.claude/skills/`, versioned with the repo:
+- `et-al` — the object model, the enforced rules, and the rules about the agent
+  itself (never write the user's explanation, never advance mastery for them,
+  label generated content, check for duplicates first).
+- `et-al-inbox` — triage, biased explicitly toward *fewer* records.
+- `et-al-digest` — source → knowledge notes, leaving the user's sections empty.
+- `et-al-review` — the guided weekly review.
+
+**Exit:** the user can point Claude at the MCP endpoint and work the whole loop
+conversationally, with every agent write attributable.
 
 ### Phase 5 — Tools, content seeds, hybrid search, weekly review
 - Test-Later lifecycle + verdict prompts (spec §3.6).

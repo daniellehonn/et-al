@@ -31,7 +31,12 @@ export default {
     try {
       if (path.startsWith("/mcp")) {
         assertMcpAuthorized(request, env);
-        return createMcpHandler(createEtAlMcpServer(env))(request, env, ctx);
+        // Everything an MCP client writes is attributed to `ai` in the audit
+        // trail, so agent-made records stay distinguishable from your own.
+        return store.runAs(
+          { actor: "ai", agent: request.headers.get("x-agent") ?? "mcp" },
+          () => createMcpHandler(createEtAlMcpServer(env))(request, env, ctx),
+        );
       }
 
       if (path === "/health") return json({ ok: true, service: "et-al", schema_version: SCHEMA_INFO.version });

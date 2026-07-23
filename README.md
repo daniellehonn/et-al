@@ -8,8 +8,8 @@ This is intentionally not a Notion or Obsidian clone. The core idea is a private
 
 - messy capture is valid input
 - saved material should become tested knowledge, not a link graveyard
-- Claude/Codex can read, write, sort, and review through MCP — but proposes
-  rather than silently writing
+- **the AI lives outside the platform**: Claude works with et al. through MCP and
+  skills, and every write it makes is attributed as `actor: 'ai'`
 - the UI stays small enough to keep using after the novelty wears off
 
 ## Current Shape (v6 — typed life operating system)
@@ -30,6 +30,9 @@ The storage model inverted from v5:
 - Rules enforced in the store, not just the UI: an **active project must have a
   next action**; a tool needs a **written verdict** before `tested`; a capture's
   raw input is **immutable**; every write leaves an **audit event**
+- **No AI provider inside the Worker.** Ingestion is deterministic (fetch,
+  oEmbed, parse); the intelligence is Claude, reached over MCP. Anything an agent
+  writes is recorded as `actor: 'ai'` — see `get_agent_activity`.
 - Streamable HTTP MCP endpoint for AI agents
 
 ### Modules
@@ -127,6 +130,37 @@ agent loop is:
 Read tools are safe. The create/update tools mutate immediately, so agents should
 confirm before broad or destructive changes — and per the product's core rule, AI
 never writes canonical records the user has not approved.
+
+## Working with Claude
+
+The AI interface is the MCP server plus a set of skills, versioned in
+`.claude/skills/`:
+
+| Skill | Use it for |
+|---|---|
+| `et-al` | The object model, the enforced rules, and the rules about the agent itself. Load first. |
+| `et-al-inbox` | Triaging the capture queue — biased toward *fewer* records, not more. |
+| `et-al-digest` | Turning a saved video or article into connected knowledge notes. |
+| `et-al-review` | The guided weekly review. |
+
+To use them elsewhere (Claude Cowork, another machine), copy the folders into
+`~/.claude/skills/` and connect the MCP endpoint above.
+
+### What the agent may and may not do
+
+The spec's rule is that AI never silently writes canonical records. Since the
+agent sits outside the platform, the human is already in the loop at the
+conversation — so instead of an in-app approval queue, et al. guarantees
+**attribution**: the Worker wraps the entire MCP handler so every write through
+it is stored as `actor: 'ai'`, with the agent name in the audit detail. A store
+function cannot forget to attribute itself.
+
+The skills also encode limits that matter more than any of the above:
+
+- never write the user's own explanation, or advance a note's mastery for them
+- label generated content (`is_ai` on blocks, `ai_sections` on notes)
+- check for duplicates before creating a note
+- when the destination is unclear, `capture` rather than inventing structure
 
 ## Project Layout
 

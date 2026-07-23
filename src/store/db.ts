@@ -8,14 +8,15 @@
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
 import { eq, and } from "drizzle-orm";
 import * as schema from "../schema.ts";
+import { currentActor, currentAgent } from "./context.ts";
 import { users } from "../schema.ts";
 
 export interface Env {
   DB: D1Database;
   VAULT: R2Bucket;                 // assets + Markdown exports (no longer truth)
-  VECTORIZE?: VectorizeIndex;      // semantic search (Phase 4)
   JOBS?: Queue;                    // durable processing queue (Phase 2)
-  ANTHROPIC_API_KEY?: string;
+  // No AI provider key: the AI lives OUTSIDE the platform (Claude via MCP).
+  // See docs/v6-implementation-plan.md, Decision F.
   ET_AL_API_KEY?: string;
   SECOND_BRAIN_API_KEY?: string;
   APP_NAME?: string;
@@ -135,17 +136,37 @@ export interface AuditInput {
 
 /**
  * Records who/what changed a record. Spec §3.2 requires that every AI-created or
- * AI-modified object be traceable back to the proposal responsible for it.
+ * AI-modified object stay traceable.
+ *
+ * The actor is taken from the request context rather than each call site, so a
+ * write arriving over MCP is attributed to `ai` automatically — a store function
+ * cannot forget to say who it was acting for.
  */
 export async function audit(env: Env, input: AuditInput): Promise<void> {
+  const agent = currentAgent();
+  const detail = agent ? { ...(input.detail ?? {}), agent } : (input.detail ?? {});
   await env.DB.prepare(
     `INSERT INTO audit_events (user_id, subject_type, subject_id, action, actor, bundle_id, change_id, detail, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).bind(
     input.userId, input.subjectType, input.subjectId, input.action,
-    input.actor ?? "user", input.bundleId ?? null, input.changeId ?? null,
-    JSON.stringify(input.detail ?? {}), now(),
+    input.actor ?? currentActor(), input.bundleId ?? null, input.changeId ?? null,
+    JSON.stringify(detail), now(),
   ).run();
+}
+
+/** Everything an agent touched, newest first — the "what did Claude do" view. */
+export async function listAgentActivity(
+  env: Env, userId: string, limit = 50,
+): Promise<Array<{ subject_type: string; subject_id: string; action: string; detail: string; created_at: number }>> {
+  const result = await env.DB.prepare(
+    `SELECT subject_type, subject_id, action, detail, created_at
+     FROM audit_events WHERE user_id = ? AND actor = 'ai'
+     ORDER BY created_at DESC LIMIT ?`,
+  ).bind(userId, Math.min(limit, 200)).all<{
+    subject_type: string; subject_id: string; action: string; detail: string; created_at: number;
+  }>();
+  return result.results ?? [];
 }
 
 // ---------------------------------------------------------------------------
