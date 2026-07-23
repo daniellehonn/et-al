@@ -18,6 +18,7 @@ import {
   type Env, getDb, now, newId, requireText, optionalText, optionalEnum, requireEnum,
   audit, NotFoundError,
 } from "./db.ts";
+import { enqueueJob, listJobs, resetJob } from "./jobs.ts";
 
 export interface CaptureInput {
   raw_input?: string;
@@ -113,6 +114,14 @@ export async function createCapture(env: Env, userId: string, input: CaptureInpu
   };
   await getDb(env).insert(captures).values(row);
   await audit(env, { userId, subjectType: "capture", subjectId: row.id, action: "created" });
+
+  // Processing is scheduled, never awaited: the capture must be durable and
+  // confirmed to the user immediately (spec §3.1, "immediate confirmation"),
+  // and a fetch that fails later must not fail the save.
+  await enqueueJob(env, {
+    userId, jobType: "fetch", subjectType: "capture", subjectId: row.id,
+  });
+
   return view(row as typeof captures.$inferSelect);
 }
 
@@ -137,10 +146,21 @@ export async function updateCapture(env: Env, userId: string, id: string, input:
 }
 
 /**
- * Clears a failed run so it can be retried without creating a second capture
- * (spec §3.1: "failed processing can be retried without duplicate captures").
+ * Retries processing without creating a second capture (spec §3.1).
+ *
+ * Resets the *existing* job rather than enqueuing a new one: the job key is
+ * idempotent per pipeline version, so a fresh enqueue would return the spent
+ * job untouched and silently do nothing.
  */
 export async function resetForRetry(env: Env, userId: string, id: string): Promise<CaptureDoc> {
+  const capture = await getCapture(env, userId, id);
+  if (!capture) throw new NotFoundError(`Capture not found: ${id}`);
+
+  const jobs = await listJobs(env, userId, { subject_id: id, limit: 10 });
+  const fetchJob = jobs.find((j) => j.job_type === "fetch");
+  if (fetchJob) await resetJob(env, userId, fetchJob.id);
+  else await enqueueJob(env, { userId, jobType: "fetch", subjectType: "capture", subjectId: id });
+
   return updateCapture(env, userId, id, {
     processing_status: "unprocessed",
     processing_error: null,

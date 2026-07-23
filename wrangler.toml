@@ -20,6 +20,26 @@ database_id = "2ff89323-c48e-4c15-809a-7187b1bde9dc"
 binding = "VAULT"
 bucket_name = "et-al-vault"
 
+# Durable processing queue (v6 Phase 2): transcription, extraction, embeddings.
+# The queue is only a TRIGGER — the `processing_jobs` table in D1 is the record
+# of intent, so losing a message delays work but never drops it.
+[[queues.producers]]
+binding = "JOBS"
+queue = "et-al-jobs"
+
+[[queues.consumers]]
+queue = "et-al-jobs"
+max_batch_size = 10
+max_batch_timeout = 5
+# Job attempts are counted in D1, so queue-level retries stay low to avoid
+# double-counting against MAX_ATTEMPTS.
+max_retries = 2
+
+# Safety net for anything the queue missed: never-delivered messages, failed
+# jobs with attempts remaining, and jobs stranded in `running`.
+[triggers]
+crons = ["*/5 * * * *"]
+
 # Static files (logo). Assets are matched first; "/" has no index.html,
 # so the Worker still renders the app itself.
 [assets]

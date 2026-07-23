@@ -77,6 +77,25 @@ export function createEtAlMcpServer(env: Env): McpServer {
     inputSchema: { limit: z.number().int().min(1).max(200).optional() },
   }, guard(async ({ limit }) => ({ inbox: await store.listInbox(env, await user(), limit ?? 50) })));
 
+  server.registerTool("get_capture_status", {
+    description:
+      "Processing state for a capture and its jobs. A capture whose fetch failed is still fully reviewable — " +
+      "the raw input is always preserved — so report the failure rather than treating the capture as lost.",
+    inputSchema: { capture_id: z.string().min(1) },
+  }, guard(async ({ capture_id }) => {
+    const u = await user();
+    const capture = await store.getCapture(env, u, capture_id);
+    if (!capture) return { error: "Capture not found" };
+    return { capture, jobs: await store.listJobs(env, u, { subject_id: capture_id }) };
+  }));
+
+  server.registerTool("retry_capture", {
+    description:
+      "Re-run processing for a capture whose fetch failed. Never creates a duplicate capture or a duplicate " +
+      "downstream record — the existing job is reset rather than a new one enqueued.",
+    inputSchema: { capture_id: z.string().min(1) },
+  }, guard(async ({ capture_id }) => store.resetForRetry(env, await user(), capture_id)));
+
   // ---- areas & goals ----
   server.registerTool("list_areas", {
     description: "Life Areas — long-term identities and responsibilities. Areas are filters and context, not folders; a project may belong to several.",

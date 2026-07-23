@@ -168,12 +168,42 @@ Rules enforced in the store and verified against a running Worker:
 sources for Phase 3 (block editor) and Phase 6 (Markdown export). Both carry a
 header saying so. Their v5 constants are superseded by `src/schema.ts`.
 
-### Phase 2 — Capture & Inbox
-- `/api/captures` POST (text/url/file/audio), R2 for binary payloads.
-- `processing_jobs` + a Queues consumer Worker (`src/consumer.ts`, second
-  `wrangler` entry) for fetch/transcribe/parse.
-- Immutable-raw + retry semantics; Inbox list endpoint.
-- **Exit:** captures survive processing failure & offline queue (spec §7.10).
+### Phase 2 — Capture & Inbox ✅ COMPLETE
+
+Delivered:
+- `src/store/jobs.ts` — durable job records. **The `processing_jobs` table, not
+  the queue, is the system of record**; a queue message is only a trigger, so a
+  lost message delays work but never drops it.
+- `src/store/assets.ts` — R2 payloads for image/audio/file captures, with the
+  D1 `assets` row canonical and the object as its payload.
+- `src/ingest.ts` — deterministic metadata extraction: oEmbed where a provider
+  offers it (YouTube, TikTok), HTML/OpenGraph parsing otherwise, byte-capped and
+  timeout-bounded. No AI — that is deliberately Phase 4.
+- `src/pipeline.ts` — `runJob` (named stages, never throws, always records the
+  outcome) and `sweepJobs` (the cron safety net).
+- `src/index.ts` — `queue()` consumer and `scheduled()` cron handlers, plus
+  `/api/captures/upload`, `/api/captures/{id}/retry`, `/api/jobs`,
+  `/api/jobs/sweep`, `/api/jobs/{id}/retry`, `/api/assets/{id}`.
+- `wrangler.toml` — `et-al-jobs` queue producer/consumer + a 5-minute cron.
+- MCP: `get_capture_status`, `retry_capture`.
+
+Guarantees, verified against a running Worker:
+- a capture is durable and confirmed **before** any processing (spec §3.1);
+- a failed fetch leaves `raw_input` intact and the capture still reviewable —
+  verified with a real 404: status `failed`, `failure_stage: fetch`, raw input
+  byte-identical;
+- retry creates **no duplicate capture and no duplicate job** (the existing job
+  is reset, since the idempotent key would otherwise return the spent job);
+- idempotency holds: re-running a succeeded job produces no second Source;
+- `failed`/`running` jobs are only swept after a stale window, which doubles as
+  backoff against a permanently broken URL and avoids stealing a job from a
+  merely-slow Worker;
+- text captures complete without fabricating a Source; uploads round-trip
+  through R2; YouTube captures resolve real title and author via oEmbed.
+
+**Not yet done here (by design):** transcription and AI classification. A
+`classification` on a capture stays null until Phase 4 — an explicit gap rather
+than a half-built guess.
 
 ### Phase 3 — Projects, logs, knowledge, relations
 - Project lifecycle + **next-action enforcement** (active project rejects save
@@ -236,19 +266,28 @@ header saying so. Their v5 constants are superseded by `src/schema.ts`.
 
 ## 7. Status and next step
 
-**Phase 1 is complete and green under `wrangler dev`** (see §5). The full
-transformation loop was exercised end-to-end against the local Worker: capture →
-tool saved → tested with a verdict → project log → content seed, with the
-`created-from` provenance edge readable as a backlink on the tool.
+**Phases 1 and 2 are complete and deployed.** Migration `0007` has been applied
+to remote D1 and the v6 Worker is live. The v5 markdown files remain untouched in
+the R2 vault — a D1 migration is SQL against D1 and cannot modify R2 — and the
+pre-migration D1 rows are dumped under `.backups/` (gitignored).
 
-Two defects found and fixed during Phase 1 verification, worth remembering:
+Defects found and fixed during verification, worth remembering:
 - `rebuildSearchIndex` used a 6-branch `UNION ALL`, which D1 rejects ("too many
   terms in compound SELECT"). It now queries per entity.
-- The same function deleted the FTS table *before* gathering rows, so the
-  failure above left search silently empty. It now gathers first and swaps.
+- The same function deleted the FTS table *before* gathering rows, so the failure
+  above left search silently empty. It now gathers first, then swaps.
+- `resetForRetry` originally only cleared the capture's status. Because the job
+  key is idempotent per pipeline version, a re-enqueue would have returned the
+  spent job and silently done nothing; it now resets the existing job.
 
-**Next: Phase 2 (Capture & Inbox).** Before starting it, two things to confirm:
-1. Applying `0007` to the **remote** D1 wipes the live v5 vault data. Nothing has
-   been applied remotely yet — only `--local`. Confirm before deploying.
+**Next: Phase 3 (Projects, logs, knowledge, relations + the block editor port).**
+Two things to settle first:
+1. The client decision (Next.js on Cloudflare Pages) means deciding whether the
+   Next app calls the Worker cross-origin or co-deploys — resolve before the
+   client work starts.
 2. Verify current Claude model ids (via the `claude-api` skill) before wiring
    extraction in Phase 4; this document names `claude-sonnet-5` provisionally.
+
+Housekeeping: the pre-v5 `items` / `items_fts*` tables still sit in remote D1
+(27 rows, unused since v5). They are harmless and are the oldest copy of the
+original data, so they have been left alone rather than dropped.
