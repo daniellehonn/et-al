@@ -1,7 +1,21 @@
+// RETAINED v5 MODULE — not wired into the v6 runtime.
+//
+// v6 moved the source of truth into D1 (see src/schema.ts + src/store/), so the
+// frontmatter round-trip below no longer defines storage. This file is kept
+// deliberately, not by accident, because two pieces of it are still needed:
+//
+//   * `extractBodyLinks` / `rewriteWikiLink` — wikilink parsing for relation
+//     extraction when the block editor is ported (Phase 3).
+//   * `serializePage` / `parsePage` — the Markdown export/import format (Phase 6),
+//     which is now the real backup path.
+//
+// The TYPE_KEYS / STATUS_KEYS / SEED_SPACES constants below are v5 vocabulary and
+// are superseded by the per-entity enums in src/schema.ts. Do not import them
+// into new code.
+
 // Pure, runtime-free module: frontmatter + wikilink parsing/serialization and
 // the block model. No Cloudflare or DOM dependencies, so it is unit-testable
-// directly with `node --experimental-strip-types`. The R2 vault stores exactly
-// what these functions emit; the D1 index is derived from what they parse.
+// directly with `node --experimental-strip-types`.
 
 export const SCHEMA_VERSION = 5;
 

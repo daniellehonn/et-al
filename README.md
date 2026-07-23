@@ -7,38 +7,50 @@ A small, forgiving personal knowledge system built for capture first and agent-a
 This is intentionally not a Notion or Obsidian clone. The core idea is a private, Cloudflare-native memory layer that can grow with you:
 
 - messy capture is valid input
-- everything is an item
-- Claude/Codex can eventually read, write, sort, and review items through MCP
+- saved material should become tested knowledge, not a link graveyard
+- Claude/Codex can read, write, sort, and review through MCP — but proposes
+  rather than silently writing
 - the UI stays small enough to keep using after the novelty wears off
 
-## Current Shape (v5 — nested R2 vault)
+## Current Shape (v6 — typed life operating system)
 
-The system is an **Obsidian-style markdown vault with nested folders** (see
-[`docs/architecture-r2.md`](docs/architecture-r2.md)):
+v6 turns the generic vault into a **typed personal operating system** built
+around one loop: **Capture → Organize → Act → Document → Learn → Publish →
+Reflect**. See [`docs/v6-implementation-plan.md`](docs/v6-implementation-plan.md).
 
-- Cloudflare Worker backend
-- **R2 bucket (`VAULT`) is the source of truth** — a directory tree of markdown
-  files. **Folders are spaces/subspaces** (nest freely); a page's space is the
-  folder it lives in. Each folder may hold an optional `_space.md` (metadata +
-  overview note)
-- **D1 is a derived, rebuildable index** (space tree, titles, link graph, FTS).
-  Losing it is recoverable via `POST /api/reindex`; the bucket always wins
-- **Three distinct structures:** folder = area, `parent:` link = goal breakdown,
-  inline `[[wikilink]]` = lateral reference
-- **Notion-style block editor** with `/` slash commands, `[[` page autocomplete,
-  a folder tree nav, breadcrumbs, and seamless live backlinks + goal-children
-- REST API for browser/mobile usage
+The storage model inverted from v5:
+
+- Cloudflare Worker backend (unchanged)
+- **D1 is the source of truth** — ~20 typed tables, not a derived index
+- **R2 holds assets and Markdown exports/snapshots**, no longer the truth
+- **Vectorize** for semantic search (Phase 4); D1 FTS5 for full text today
+- **Typed objects, not one `page` type:** Life Areas → Goals → Projects, with
+  Project Logs, Knowledge Notes, Captures, Tools, Sources, and Content Items,
+  each with its own lifecycle vocabulary
+- Rules enforced in the store, not just the UI: an **active project must have a
+  next action**; a tool needs a **written verdict** before `tested`; a capture's
+  raw input is **immutable**; every write leaves an **audit event**
 - Streamable HTTP MCP endpoint for AI agents
 
 ### Modules
 
 ```text
-src/markdown.ts  frontmatter + wikilink + block parse/serialize (pure, unit-tested)
-src/store.ts     R2 writes + D1 index sync + rename propagation + reindex
-src/mcp.ts       MCP tool surface over the store
-src/ui.ts        the block-editor single-page app
-src/index.ts     router, auth, REST, identity graph
+src/schema.ts       typed object model + per-entity lifecycle vocabularies
+src/store/          one module per entity; rules live next to the data
+  db.ts             bindings, validation, audit trail, FTS maintenance
+  documents.ts      documents + ordered blocks (the writing surface)
+  areas/goals/projects/logs/notes/tools/sources/content/captures.ts
+  relations.ts      the semantic graph + backlinks + unresolved wikilinks
+  search.ts         FTS5 today, hybrid ranking later
+src/api.ts          resource registry + /api/home and /api/review aggregates
+src/index.ts        Worker router, auth, REST
+src/mcp.ts          MCP tool surface (typed vocabulary)
+src/status.ts       interim root page until the Phase 3 client lands
 ```
+
+Retained but **not wired in**, as port sources for later phases:
+`src/ui.ts` (block editor → Phase 3) and `src/markdown.ts` (Markdown
+export/wikilink parsing → Phase 6). Both carry a header explaining this.
 
 ## Cloudflare
 
@@ -58,22 +70,38 @@ URL: https://et-al.daniellehonnn.workers.dev/mcp
 Authorization: Bearer <ET_AL_API_KEY>
 ```
 
-Available tools (v5, operating over the nested vault):
+Available tools (v6, operating over the typed object model):
 
-- `get_schema` — canonical enums + the three structures (folder / parent / wikilink)
-- `list_spaces` — the full folder tree with page counts
-- `get_space` / `create_space` / `update_space` / `delete_space` — folders + `_space.md`
-- `move_space` — move or rename a folder, carrying its pages and subspaces (the only way to reorganize the tree; `update_space` changes a display name, never a path)
-- `list_pages` — filter by `space_path` (+`recursive` for subtrees), type, status, parent
-- `get_page`
-- `create_page` — into a `space_path`; `parent` is the goal it breaks down
-- `update_page` — moving `space_path` moves the file; renaming rewrites `[[old title]]` everywhere
-- `delete_page`
-- `search_pages`
-- `get_backlinks` — who links here, with context + parent/inline kind
-- `get_children` — pages whose `parent` goal-link resolves here
-- `list_unresolved_links` — `[[titles]]` with no page yet (growth edges)
-- `reindex_vault` — rebuild the D1 index from the R2 bucket
+**Orientation**
+- `get_schema` — the object model, per-entity vocabularies, and the product's rules
+- `get_home` — what matters now / next / needs review
+- `get_weekly_review` — the guided review as ordered steps with their items
+
+**Capture & inbox**
+- `capture` — save a raw thought or link immediately (stored immutably)
+- `list_inbox` — captures still awaiting review
+
+**Structure & execution**
+- `list_areas` / `create_area` — Life Areas (filters and context, not folders)
+- `list_goals` / `create_goal` — measurable direction inside an Area
+- `list_projects` / `get_project` / `create_project` / `update_project`
+  — activating a project without a `next_action` is rejected
+- `list_stale_projects` — active work that has quietly stalled
+- `add_log` / `list_logs` — the engineer's log (decision, experiment, problem, learning, reflection)
+
+**Knowledge, tools, content**
+- `list_notes` / `create_note` / `update_note` — mastery captured → learning → understood → applied
+- `list_tools` / `save_tool` / `update_tool` — a written verdict is required before `tested`
+- `create_source` — external material, distinct from the knowledge made from it
+- `list_content` / `create_content_seed` — turn real work into a draft, preserving provenance
+
+**Graph, search, documents**
+- `relate` — typed semantic edges (learned-from, used-in, created-from, …)
+- `get_backlinks` — everything referencing an object
+- `search` — full text across every entity
+- `list_unresolved_links` — referenced titles with nothing behind them yet
+- `get_body` / `write_body` — ordered blocks; generated blocks stay flagged `is_ai`
+- `rebuild_search_index` — repairs FTS from canonical D1 (not a recovery path in v6)
 
 The endpoint uses Streamable HTTP through Cloudflare's Agents SDK. It shares the same store functions as the REST API.
 
@@ -87,24 +115,29 @@ Authorization: Bearer <ET_AL_API_KEY>
 
 The endpoint also accepts the existing `x-api-key` header for clients that cannot set `Authorization`. A request without either valid credential receives `401 Unauthorized`. Keep the API key in the client's secret or environment configuration rather than committing it to a config file.
 
-After connecting, verify that the client discovers `list_items` and `get_daily_review`. A useful agent loop is:
+After connecting, verify the client discovers `get_schema` and `get_home`. A good
+agent loop is:
 
-1. Call `triage_inbox` to preview a small queue.
-2. Confirm proposed changes with the user.
-3. Apply accepted decisions with `update_item` or `bulk_update`.
-4. Call `suggest_related_items`, then write accepted relationships with `update_item`.
-5. Use `summarize_space` or `get_daily_review` for a compact review.
+1. `get_home` to orient on what matters now.
+2. `capture` anything new before deciding where it belongs.
+3. Propose typed records to the user, then write them with the `create_*` tools.
+4. `relate` the results so applied knowledge becomes visible.
+5. `get_weekly_review` for a compact, step-by-step review.
 
-The three suggestion/summary tools are read-only. The create, update, bulk-update, and delete tools mutate data immediately, so agents should ask before making destructive or broad changes.
+Read tools are safe. The create/update tools mutate immediately, so agents should
+confirm before broad or destructive changes — and per the product's core rule, AI
+never writes canonical records the user has not approved.
 
 ## Project Layout
 
 ```text
 et-al/
-  docs/architecture.md
-  migrations/0001_initial.sql
-  src/index.ts
-  package.json
+  docs/
+    Life_Organization_System_Product_Specification.pdf   the product spec
+    v6-implementation-plan.md                            the build plan (start here)
+    architecture-r2.md, data-model.md                    v5 history
+  migrations/0007_v6_schema.sql                          the v6 schema
+  src/                                                   see Modules above
   wrangler.toml
 ```
 
@@ -112,32 +145,16 @@ et-al/
 
 ```bash
 npm install
-wrangler r2 bucket create et-al-vault    # one-time: create the vault bucket
-npm run db:migrate:local                 # builds the derived index tables
+wrangler r2 bucket create et-al-vault    # assets + Markdown exports
+npm run db:migrate:local                 # applies through 0007 (the v6 schema)
 npm run dev
 ```
 
-### One-time migration from the old D1 model
-
-If you have existing rows in the legacy `items` table, seed the vault from them,
-then verify:
+Then seed the default Life Areas and open the Worker URL Wrangler prints:
 
 ```bash
-curl -X POST -H "x-api-key: $ET_AL_API_KEY" https://<worker>/api/migrate-from-d1
-curl -X POST -H "x-api-key: $ET_AL_API_KEY" https://<worker>/api/reindex
+curl -X POST -H "x-api-key: $ET_AL_API_KEY" http://localhost:8787/api/bootstrap
 ```
-
-`migrate-from-d1` writes one markdown file per legacy item into the matching
-top-level folder (`work→career`, `ideas→projects`, and the old `identity` items
-fold into `life/` — re-file them anywhere once it's all folders), converting
-`related`/`parent_id` UUIDs into `[[Title]]` links and any `metadata.checklist`
-into `- [ ]` task lines. It is safe to re-run. Once the vault looks right, the
-`items` table can be dropped.
-
-Note: the current index migration is `0006_nested_spaces.sql` (schema v5). Apply
-migrations through 0006 before deploying the v5 worker.
-
-Then open the local Worker URL shown by Wrangler.
 
 Set a local API key for mutating requests:
 
@@ -146,6 +163,11 @@ npx wrangler secret put ET_AL_API_KEY
 ```
 
 For development, if the secret is missing, the Worker accepts `dev-key`.
+
+> **Migrating from v5:** there is no conversion path. `0007_v6_schema.sql` drops
+> the v5 `pages`/`spaces`/`links` tables, because one generic `page` type cannot
+> be mechanically split into the v6 typed entities without inventing data. Export
+> anything you want to keep before applying it remotely.
 
 ## Deploy
 

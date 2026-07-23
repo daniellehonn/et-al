@@ -1,3 +1,11 @@
+// RETAINED v5 UI — not served by the v6 Worker (see src/status.ts).
+//
+// Kept as the PORT SOURCE for the block editor (Decision G in
+// docs/v6-implementation-plan.md): `parseBlocks`, `serializeBlocks`, and
+// `renderInline` below are what Phase 3 lifts into the Next.js client rather
+// than adopting TipTap/Lexical. The surrounding app shell targets the v5
+// single-`page` model and does not apply to v6.
+
 // Notion-style block editor over the nested R2 vault. Folders are the nav tree
 // (spaces/subspaces); a page's space is the folder it lives in. Blocks are the
 // editing unit; markdown is always the wire format. Links are [[Title]]
