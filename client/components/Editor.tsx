@@ -53,6 +53,9 @@ export default function Editor({
   const [focused, setFocused] = useState<number | null>(null);
   /** Index whose block handle menu is open (Notion's ⋮⋮ affordance). */
   const [handleAt, setHandleAt] = useState<number | null>(null);
+  /** Block being dragged, and where it would land. */
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dropAt, setDropAt] = useState<{ index: number; after: boolean } | null>(null);
 
   const update = useCallback((index: number, patch: Partial<BlockDraft>) => {
     onChange(blocks.map((b, i) => (i === index ? { ...b, ...patch } : b)));
@@ -79,6 +82,27 @@ export default function Editor({
     const next = [...blocks];
     const [item] = next.splice(index, 1);
     next.splice(target, 0, item);
+    onChange(next);
+  }, [blocks, onChange]);
+
+  /**
+   * Drag-to-reorder.
+   *
+   * Only the handle is draggable — making whole blocks draggable would fight
+   * text selection inside the textareas. The drop target is the block row, and
+   * the insertion point is decided by which half of it the pointer is over, so
+   * a drop lands where the indicator says it will rather than always before.
+   *
+   * HTML5 drag events do not fire on touch, which is why Move up / Move down
+   * remain in the handle menu — that is also the keyboard-accessible path the
+   * spec asks for (§5.10).
+   */
+  const moveTo = useCallback((from: number, to: number) => {
+    if (from === to) return;
+    const next = [...blocks];
+    const [item] = next.splice(from, 1);
+    // Removing the dragged block shifts everything after it down by one.
+    next.splice(from < to ? to - 1 : to, 0, item);
     onChange(next);
   }, [blocks, onChange]);
 
@@ -236,12 +260,45 @@ export default function Editor({
   return (
     <div className="editor">
       {blocks.map((block, index) => (
-        <div key={block.id ?? index} className={`blk blk-${block.type}`}>
+        <div
+          key={block.id ?? index}
+          className={[
+            "blk", `blk-${block.type}`,
+            dragIndex === index ? "dragging" : "",
+            dropAt?.index === index ? (dropAt.after ? "drop-after" : "drop-before") : "",
+          ].filter(Boolean).join(" ")}
+          onDragOver={(e) => {
+            if (dragIndex === null) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "move";
+            const rect = e.currentTarget.getBoundingClientRect();
+            setDropAt({ index, after: e.clientY > rect.top + rect.height / 2 });
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            if (dragIndex !== null && dropAt) {
+              moveTo(dragIndex, dropAt.index + (dropAt.after ? 1 : 0));
+            }
+            setDragIndex(null);
+            setDropAt(null);
+          }}
+        >
           <button
             type="button"
             className={`blk-handle ${handleAt === index ? "open" : ""}`}
-            aria-label="Block actions"
+            aria-label="Drag to reorder, or click for block actions"
             aria-expanded={handleAt === index}
+            draggable
+            onDragStart={(e) => {
+              setDragIndex(index);
+              setHandleAt(null);
+              e.dataTransfer.effectAllowed = "move";
+              e.dataTransfer.setData("text/plain", String(index));
+              // Drag the whole block, not the tiny handle glyph.
+              const row = e.currentTarget.parentElement;
+              if (row) e.dataTransfer.setDragImage(row, 12, 12);
+            }}
+            onDragEnd={() => { setDragIndex(null); setDropAt(null); }}
             onClick={() => setHandleAt(handleAt === index ? null : index)}
           >⋮⋮</button>
 

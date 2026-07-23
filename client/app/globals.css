@@ -382,3 +382,19 @@ code, .mono {
   display: flex; align-items: flex-start; justify-content: center; padding: 12vh 16px;
 }
 .gate-backdrop .unlock { margin: 0; box-shadow: 0 12px 40px rgba(0,0,0,.14); }
+
+/* ---- drag to reorder ---- */
+.blk-handle { cursor: grab; }
+.blk-handle:active { cursor: grabbing; }
+
+.blk.dragging { opacity: 0.4; }
+
+/* The insertion line shows exactly where the block will land, so a drop is
+   never a guess. */
+.blk.drop-before, .blk.drop-after { position: relative; }
+.blk.drop-before::before, .blk.drop-after::after {
+  content: ""; position: absolute; left: 18px; right: 0; height: 2px;
+  background: var(--accent); border-radius: 2px; pointer-events: none;
+}
+.blk.drop-before::before { top: -1px; }
+.blk.drop-after::after { bottom: -1px; }
