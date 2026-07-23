@@ -6,19 +6,28 @@ account_id = "e4ea14de30df5be2da9c9e22e8e377ed"
 workers_dev = true
 preview_urls = false
 
-# D1 is now a DERIVED, rebuildable index (see docs/architecture-r2.md).
-# The source of truth is the R2 vault below. Losing DB is recoverable via
-# POST /api/reindex.
+# v6: D1 is the CANONICAL store, not a derived index. Losing it loses data —
+# the recovery path is the Markdown snapshots written nightly to R2 by the
+# `0 4 * * *` cron below. `POST /api/reindex` only repairs the search index.
 [[d1_databases]]
 binding = "DB"
 database_name = "et-al"
 database_id = "2ff89323-c48e-4c15-809a-7187b1bde9dc"
 
-# The vault: one markdown file per page, canonical source of truth.
-# Create it once with:  wrangler r2 bucket create et-al-vault
+# Assets, uploads, and Markdown export snapshots. No longer the source of truth.
 [[r2_buckets]]
 binding = "VAULT"
 bucket_name = "et-al-vault"
+
+# Semantic search (Phase 5). Embeddings run on Workers AI — a Cloudflare binding,
+# not an external provider — so no AI vendor key enters the platform. Both are
+# optional at runtime: without them, search falls back to keyword-only.
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "et-al-index"
+
+[ai]
+binding = "AI"
 
 # Durable processing queue (v6 Phase 2): transcription, extraction, embeddings.
 # The queue is only a TRIGGER — the `processing_jobs` table in D1 is the record
