@@ -41,6 +41,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       data && typeof data === "object" && "error" in data
         ? String((data as { error: unknown }).error)
         : "";
+
+    // Reads are open but writes need the session cookie, so an expired or
+    // never-established session makes every save fail while the page still
+    // looks completely healthy. Announce it globally instead of letting each
+    // call site discover it alone — a silent 401 is indistinguishable from a
+    // broken app.
+    if (response.status === 401 && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("et-al:unauthorized"));
+    }
     throw new ApiError(fromBody || `Request failed (${response.status})`, response.status);
   }
   return data as T;

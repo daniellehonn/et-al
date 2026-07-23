@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import AuthGate from "@/components/AuthGate";
 
 export const metadata: Metadata = {
   title: "et al.",
@@ -63,6 +64,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </nav>
           <main className="main">{children}</main>
         </div>
+        {/* Sits above every page: writing needs the session, and a silent 401
+            is indistinguishable from a broken app. */}
+        <AuthGate />
       </body>
     </html>
   );

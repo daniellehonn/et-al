@@ -374,3 +374,11 @@ code, .mono {
 .orient ol { margin: 0; padding-left: 20px; color: var(--ink-2); font-size: 13.5px; }
 .orient li { margin: 5px 0; }
 .orient b { color: var(--ink); }
+
+.gate-backdrop {
+  position: fixed; inset: 0; z-index: 100;
+  background: color-mix(in srgb, var(--canvas) 82%, transparent);
+  backdrop-filter: blur(2px);
+  display: flex; align-items: flex-start; justify-content: center; padding: 12vh 16px;
+}
+.gate-backdrop .unlock { margin: 0; box-shadow: 0 12px 40px rgba(0,0,0,.14); }

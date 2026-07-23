@@ -7,14 +7,11 @@
 // assembles the answer. Everything on this page is an action, not a statistic.
 
 import { useCallback, useEffect, useState } from "react";
-import {
-  getHome, createCapture, getSession, login, ApiError, type HomeData,
-} from "@/lib/api";
+import { getHome, createCapture, ApiError, type HomeData } from "@/lib/api";
 
 export default function HomePage() {
   const [data, setData] = useState<HomeData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [locked, setLocked] = useState(false);
   const [capture, setCapture] = useState("");
   const [saving, setSaving] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
@@ -29,7 +26,6 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    getSession().then((s) => setLocked(!s.authenticated)).catch(() => {});
     load();
   }, [load]);
 
@@ -47,14 +43,15 @@ export default function HomePage() {
       setTimeout(() => setFlash(null), 2600);
       load();
     } catch (e) {
-      if (e instanceof ApiError && e.status === 401) setLocked(true);
-      else setError(e instanceof Error ? e.message : "Could not save");
+      // A 401 raises the global unlock prompt via AuthGate; anything else is
+      // this page's problem to report.
+      if (!(e instanceof ApiError && e.status === 401)) {
+        setError(e instanceof Error ? e.message : "Could not save");
+      }
     } finally {
       setSaving(false);
     }
   }
-
-  if (locked) return <Unlock onUnlocked={() => { setLocked(false); load(); }} />;
 
   return (
     <>
@@ -224,39 +221,3 @@ function ProcessingChip({ status }: { status: string }) {
   return <span className="chip">{status}</span>;
 }
 
-function Unlock({ onUnlocked }: { onUnlocked: () => void }) {
-  const [key, setKey] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    try {
-      await login(key);
-      onUnlocked();
-    } catch {
-      setError("That key was not accepted.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <form className="unlock" onSubmit={submit}>
-      <h2>Unlock</h2>
-      <p style={{ color: "var(--ink-2)", fontSize: 13.5, margin: "6px 0 0" }}>
-        Reading is open; writing needs the API key. The session cookie is
-        same-origin, so it is set once and stays.
-      </p>
-      <input
-        type="password" value={key} onChange={(e) => setKey(e.target.value)}
-        placeholder="API key" aria-label="API key"
-      />
-      {error && <div className="error-box" style={{ marginBottom: 10 }}>{error}</div>}
-      <button className="btn primary" type="submit" disabled={busy || !key}>
-        {busy ? "Checking…" : "Unlock"}
-      </button>
-    </form>
-  );
-}

@@ -20,6 +20,7 @@ export default function DeleteButton({
 }) {
   const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Disarm on its own, so a half-pressed delete never sits waiting for a stray
@@ -33,7 +34,27 @@ export default function DeleteButton({
   async function click() {
     if (!armed) { setArmed(true); return; }
     setBusy(true);
-    try { await onDelete(); } finally { setBusy(false); setArmed(false); }
+    setError(null);
+    try {
+      await onDelete();
+    } catch (e) {
+      // Previously this had no catch, so a rejected delete (a 401, most often)
+      // did nothing at all and said nothing — the button simply reset and the
+      // record stayed. Failing loudly is the whole point of a delete button.
+      setError(e instanceof Error ? e.message : "Could not delete");
+    } finally {
+      setBusy(false);
+      setArmed(false);
+    }
+  }
+
+  if (error) {
+    return (
+      <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+        <span style={{ color: "var(--error)", fontSize: 12 }}>{error}</span>
+        <button type="button" className="btn" onClick={() => setError(null)}>Dismiss</button>
+      </span>
+    );
   }
 
   return (
