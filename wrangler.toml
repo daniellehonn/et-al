@@ -48,10 +48,9 @@ crons = ["*/5 * * * *", "0 4 * * *"]
 APP_NAME = "et al."
 
 # CO-DEPLOY (web app): the Next client is served from this Worker so the app and
-# API share one origin. The Notion-style client is the next build phase; until it
-# lands, `public/` holds a placeholder shell. When the client returns, point this
-# at `client/out` (Next static export) and restore the client build in `deploy`.
+# API share one origin — which lets the `et_al_session` cookie stay SameSite=Lax
+# with no CORS. `client/out` is Next's static export; `npm run deploy` builds it.
 [assets]
-directory = "public"
+directory = "client/out"
 run_worker_first = ["/api/*", "/mcp", "/mcp/*", "/health"]
 not_found_handling = "single-page-application"

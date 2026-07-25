@@ -15,23 +15,46 @@ function validKey(env: Env, provided: string | null): boolean {
   return provided === expected;
 }
 
-function bearerOrApiKey(req: Request): string | null {
+// A credential can arrive three ways: Bearer, x-api-key, or the session cookie
+// the web app sets after login (so the browser never holds the key in JS).
+function credential(req: Request): string | null {
   const auth = req.headers.get("Authorization") ?? "";
   if (auth.startsWith("Bearer ")) return auth.slice(7);
-  return req.headers.get("x-api-key");
+  const header = req.headers.get("x-api-key");
+  if (header) return header;
+  const cookie = req.headers.get("Cookie") ?? "";
+  const match = cookie.match(/(?:^|;\s*)et_al_session=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
 }
 
-// Reads are open; mutations require the API key. Actor defaults to 'human'.
+// Reads are open; mutations require a valid credential. Actor defaults to
+// 'human'. Login/logout/session manage the cookie and bypass the mutation gate.
 app.use("/api/*", async (c, next) => {
   c.set("actor", "human");
+  const path = new URL(c.req.url).pathname;
+  if (path === "/api/login" || path === "/api/logout" || path === "/api/session") return next();
   const method = c.req.method;
   if (method !== "GET" && method !== "HEAD") {
-    if (!validKey(c.env, bearerOrApiKey(c.req.raw))) {
+    if (!validKey(c.env, credential(c.req.raw))) {
       return c.json({ error: "unauthorized" }, 401);
     }
   }
   await next();
 });
+
+// Exchange the API key for an httpOnly session cookie (single-user auth).
+app.post("/api/login", async (c) => {
+  const { key } = await c.req.json<{ key?: string }>().catch(() => ({ key: undefined }));
+  if (!validKey(c.env, key ?? null)) return c.json({ error: "invalid key" }, 401);
+  const secure = new URL(c.req.url).protocol === "https:";
+  c.header("Set-Cookie", `et_al_session=${encodeURIComponent(key!)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=31536000${secure ? "; Secure" : ""}`);
+  return c.json({ ok: true });
+});
+app.post("/api/logout", (c) => {
+  c.header("Set-Cookie", "et_al_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+  return c.json({ ok: true });
+});
+app.get("/api/session", (c) => c.json({ authed: validKey(c.env, credential(c.req.raw)) }));
 
 // Map rule violations to clean status codes.
 app.onError((err, c) => {
@@ -71,7 +94,7 @@ app.route("/api", api);
 
 // MCP: Bearer/x-api-key required for every call. The client name becomes the actor.
 app.all("/mcp", async (c) => {
-  if (!validKey(c.env, bearerOrApiKey(c.req.raw))) {
+  if (!validKey(c.env, credential(c.req.raw))) {
     return c.json({ error: "unauthorized" }, 401);
   }
   const agentName = c.req.header("x-mcp-client") ?? "claude";

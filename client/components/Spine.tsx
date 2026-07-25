@@ -19,7 +19,7 @@ export function Spine() {
   const renderTree = (parent: string | null, depth: number): React.ReactNode =>
     (byParent.get(parent) ?? []).map((w) => (
       <div key={w.id}>
-        <a href="#" style={{ paddingLeft: `${depth * 0.85 + 0.9}rem` }} className="et-ws">
+        <a href={`/workspace/?id=${w.id}`} style={{ paddingLeft: `${depth * 0.85 + 0.9}rem` }} className="et-ws">
           <span className="et-ws-dot" data-type={w.type} />
           {w.title}
         </a>
