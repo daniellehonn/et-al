@@ -62,6 +62,24 @@ export async function getWeeklyReview(c: Ctx): Promise<WeeklyReview> {
   return { inbox, stale_projects: stale, completed_this_week: completed, health };
 }
 
+// Every event touching a workspace or any entity that belongs to it.
+export function getWorkspaceTimeline(c: Ctx, workspaceId: string, limit = 60): Promise<RecentEvent[]> {
+  const w = workspaceId;
+  return all<RecentEvent>(
+    c,
+    `SELECT id, actor, action, entity_type, entity_id, created_at FROM event
+      WHERE entity_id = ?
+         OR entity_id IN (SELECT id FROM task WHERE workspace_id = ?)
+         OR entity_id IN (SELECT id FROM document WHERE workspace_id = ?)
+         OR entity_id IN (SELECT id FROM objective WHERE workspace_id = ?)
+         OR entity_id IN (SELECT id FROM decision WHERE workspace_id = ?)
+         OR entity_id IN (SELECT id FROM source WHERE workspace_id = ?)
+         OR entity_id IN (SELECT id FROM insight WHERE workspace_id = ?)
+      ORDER BY created_at DESC LIMIT ?`,
+    w, w, w, w, w, w, w, limit,
+  );
+}
+
 export function getAgentActivity(c: Ctx, limit = 50): Promise<RecentEvent[]> {
   return all<RecentEvent>(c, `SELECT id, actor, action, entity_type, entity_id, created_at FROM event WHERE actor LIKE 'ai:%' ORDER BY created_at DESC LIMIT ?`, limit);
 }

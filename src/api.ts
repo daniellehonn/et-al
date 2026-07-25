@@ -67,6 +67,7 @@ api.post("/patches/:id/resolve", async (c) => {
 
 // ---- decisions / graph / search / health ------------------------------------
 api.get("/workspaces/:id/decisions", async (c) => c.json(await store.listDecisions(ctx(c), c.req.param("id"))));
+api.get("/workspaces/:id/timeline", async (c) => c.json(await store.getWorkspaceTimeline(ctx(c), c.req.param("id"))));
 api.post("/decisions", async (c) => c.json(await store.recordDecision(ctx(c), await c.req.json())));
 api.post("/relate", async (c) => c.json(await store.relate(ctx(c), await c.req.json())));
 api.get("/backlinks", async (c) => c.json(await store.getBacklinks(ctx(c), c.req.query("type")!, c.req.query("id")!)));

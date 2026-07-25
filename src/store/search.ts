@@ -8,6 +8,22 @@ export interface SearchHit {
   entity_id: string;
   title: string;
   snippet: string;
+  workspace_id: string | null; // for deep-linking; null when unfiled/unknown
+}
+
+// Which table carries each searchable entity's workspace_id.
+const WS_TABLE: Record<string, string> = {
+  document: "document", task: "task", insight: "insight", source: "source", decision: "decision",
+};
+
+async function withWorkspace(c: Ctx, hits: Omit<SearchHit, "workspace_id">[]): Promise<SearchHit[]> {
+  return Promise.all(hits.map(async (h) => {
+    if (h.entity_type === "workspace") return { ...h, workspace_id: h.entity_id };
+    const table = WS_TABLE[h.entity_type];
+    if (!table) return { ...h, workspace_id: null };
+    const row = await c.db.prepare(`SELECT workspace_id FROM ${table} WHERE id = ?`).bind(h.entity_id).first<{ workspace_id: string | null }>();
+    return { ...h, workspace_id: row?.workspace_id ?? null };
+  }));
 }
 
 // FTS5 treats several characters as operators; quote each term to search literally.
@@ -24,16 +40,15 @@ export async function search(
   const match = sanitize(query);
   if (!match) return [];
   const limit = opts.limit ?? 30;
-  const rows = await all<SearchHit>(
+  const rows = await all<Omit<SearchHit, "workspace_id">>(
     c,
     `SELECT entity_type, entity_id, title, snippet(search_fts, 3, '[', ']', '…', 12) AS snippet
        FROM search_fts WHERE search_fts MATCH ? ORDER BY rank LIMIT ?`,
     match,
     limit,
   );
-  if (opts.types?.length) {
-    const set = new Set<string>(opts.types);
-    return rows.filter((r) => set.has(r.entity_type));
-  }
-  return rows;
+  const filtered = opts.types?.length
+    ? rows.filter((r) => new Set<string>(opts.types!).has(r.entity_type))
+    : rows;
+  return withWorkspace(c, filtered);
 }

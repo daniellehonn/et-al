@@ -84,7 +84,19 @@ export interface Source {
   url: string | null; raw: string | null; status: string; created_at: number;
 }
 export interface SearchHit {
-  entity_type: string; entity_id: string; title: string; snippet: string;
+  entity_type: string; entity_id: string; title: string; snippet: string; workspace_id: string | null;
+}
+
+// Where a search hit navigates. Documents deep-open in their workspace tab.
+export function hitHref(h: SearchHit): string | null {
+  const tabFor: Record<string, string> = { task: "Tasks", decision: "Decisions", document: "Documents" };
+  if (h.entity_type === "workspace") return `/workspace/?id=${h.entity_id}`;
+  if (h.entity_type === "insight") return "/knowledge/";
+  if (h.entity_type === "source") return "/inbox/";
+  if (!h.workspace_id) return null;
+  const tab = tabFor[h.entity_type];
+  const doc = h.entity_type === "document" ? `&doc=${h.entity_id}` : "";
+  return `/workspace/?id=${h.workspace_id}${tab ? `&tab=${tab}` : ""}${doc}`;
 }
 
 // One block operation, mirrors src/schema BlockOp.

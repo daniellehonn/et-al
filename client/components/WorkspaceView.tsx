@@ -1,14 +1,14 @@
 "use client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
-import { api, type Workspace, type Task, type Objective, type Document, type Decision } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { api, type Workspace, type Task, type Objective, type Document, type Decision, type RecentEvent } from "@/lib/api";
 import { BlockEditor } from "./BlockEditor";
 
-const TABS = ["Overview", "Objectives", "Tasks", "Documents", "Decisions"] as const;
+const TABS = ["Overview", "Objectives", "Tasks", "Documents", "Decisions", "Timeline"] as const;
 type Tab = (typeof TABS)[number];
 
-export function WorkspaceView({ id }: { id: string }) {
-  const [tab, setTab] = useState<Tab>("Overview");
+export function WorkspaceView({ id, initialTab, initialDoc }: { id: string; initialTab?: string; initialDoc?: string }) {
+  const [tab, setTab] = useState<Tab>((TABS as readonly string[]).includes(initialTab ?? "") ? (initialTab as Tab) : "Overview");
   const { data: workspace, isLoading } = useQuery({ queryKey: ["workspace", id], queryFn: () => api.get<Workspace>(`/workspaces/${id}`) });
   const { data: all } = useQuery({ queryKey: ["workspaces"], queryFn: () => api.get<Workspace[]>("/workspaces") });
 
@@ -48,8 +48,9 @@ export function WorkspaceView({ id }: { id: string }) {
         {tab === "Overview" && <Overview id={id} workspace={workspace} setTab={setTab} />}
         {tab === "Objectives" && <Objectives id={id} />}
         {tab === "Tasks" && <Tasks id={id} />}
-        {tab === "Documents" && <Documents id={id} />}
+        {tab === "Documents" && <Documents id={id} initialDoc={initialDoc} />}
         {tab === "Decisions" && <Decisions id={id} />}
+        {tab === "Timeline" && <Timeline id={id} />}
       </div>
 
       <WorkspaceStyles />
@@ -87,26 +88,58 @@ function Overview({ id, workspace, setTab }: { id: string; workspace: Workspace;
   );
 }
 
-// ── Objectives ──────────────────────────────────────────────────────────────
+// ── Objectives (planning view: tasks nested under each objective) ────────────
 function Objectives({ id }: { id: string }) {
   const qc = useQueryClient();
-  const { data } = useQuery({ queryKey: ["objectives", id], queryFn: () => api.get<Objective[]>(`/workspaces/${id}/objectives`) });
+  const { data: objectives } = useQuery({ queryKey: ["objectives", id], queryFn: () => api.get<Objective[]>(`/workspaces/${id}/objectives`) });
+  const { data: tasks } = useQuery({ queryKey: ["tasks", id], queryFn: () => api.get<Task[]>(`/workspaces/${id}/tasks`) });
   const [title, setTitle] = useState("");
   const add = useMutation({
     mutationFn: () => api.post("/objectives", { workspace_id: id, title }),
     onSuccess: () => { setTitle(""); qc.invalidateQueries({ queryKey: ["objectives", id] }); },
   });
+  const toggle = useMutation({
+    mutationFn: (t: Task) => api.patch(`/tasks/${t.id}`, { status: t.status === "done" ? "todo" : "done" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks", id] }),
+  });
+  const tasksFor = (oid: string) => (tasks ?? []).filter((t) => t.objective_id === oid);
+
   return (
     <div>
-      {(data ?? []).map((o) => (
-        <div key={o.id} className="et-list-row">
-          <span className="et-prio" data-p={o.priority} />
-          <span>{o.title}</span>
-          <span className="eyebrow et-status">{o.status}</span>
-        </div>
+      {(objectives ?? []).map((o) => (
+        <ObjectiveGroup key={o.id} workspaceId={id} objective={o} tasks={tasksFor(o.id)} onToggle={(t) => toggle.mutate(t)} />
       ))}
-      {data?.length === 0 && <div className="et-empty">No objectives yet — the &ldquo;why&rdquo; behind the work.</div>}
+      {objectives?.length === 0 && <div className="et-empty">No objectives yet — the &ldquo;why&rdquo; behind the work. Break one into tasks below.</div>}
       <QuickAdd value={title} setValue={setTitle} onAdd={() => title.trim() && add.mutate()} placeholder="New objective — why does this matter?" pending={add.isPending} />
+    </div>
+  );
+}
+
+function ObjectiveGroup({ workspaceId, objective, tasks, onToggle }: { workspaceId: string; objective: Objective; tasks: Task[]; onToggle: (t: Task) => void }) {
+  const qc = useQueryClient();
+  const [taskTitle, setTaskTitle] = useState("");
+  const addTask = useMutation({
+    mutationFn: () => api.post("/tasks", { workspace_id: workspaceId, objective_id: objective.id, title: taskTitle }),
+    onSuccess: () => { setTaskTitle(""); qc.invalidateQueries({ queryKey: ["tasks", workspaceId] }); },
+  });
+  const open = tasks.filter((t) => t.status !== "done");
+  const done = tasks.filter((t) => t.status === "done");
+  return (
+    <div className="et-obj-group">
+      <div className="et-obj-head">
+        <span className="et-prio" data-p={objective.priority} />
+        <span className="et-obj-title">{objective.title}</span>
+        <span className="eyebrow et-status">{open.length} open{done.length ? ` · ${done.length} done` : ""}</span>
+      </div>
+      <div className="et-obj-tasks">
+        {[...open, ...done].map((t) => (
+          <button key={t.id} className="et-task-row" data-done={t.status === "done" || undefined} onClick={() => onToggle(t)}>
+            <span className="et-check" {...(t.status === "done" ? { "data-checked": true } : {})} />
+            <span className="et-task-title">{t.title}</span>
+          </button>
+        ))}
+        <QuickAdd value={taskTitle} setValue={setTaskTitle} onAdd={() => taskTitle.trim() && addTask.mutate()} placeholder="Add a task to this objective" pending={addTask.isPending} />
+      </div>
     </div>
   );
 }
@@ -153,10 +186,19 @@ function Tasks({ id }: { id: string }) {
 }
 
 // ── Documents (+ editor) ─────────────────────────────────────────────────────
-function Documents({ id }: { id: string }) {
+function Documents({ id, initialDoc }: { id: string; initialDoc?: string }) {
   const qc = useQueryClient();
   const { data } = useQuery({ queryKey: ["documents", id], queryFn: () => api.get<Document[]>(`/workspaces/${id}/documents`) });
   const [openDoc, setOpenDoc] = useState<Document | null>(null);
+  const [deepLinked, setDeepLinked] = useState(false);
+
+  // Deep-link: open the document named in the URL once, when documents load.
+  useEffect(() => {
+    if (deepLinked || !initialDoc || !data) return;
+    const match = data.find((d) => d.id === initialDoc);
+    setDeepLinked(true);
+    if (match) setOpenDoc(match);
+  }, [data, initialDoc, deepLinked]);
   const [title, setTitle] = useState("");
   const add = useMutation({
     mutationFn: () => api.post<Document>("/documents", { workspace_id: id, title }),
@@ -212,6 +254,23 @@ function Decisions({ id }: { id: string }) {
         <input value={rationale} onChange={(e) => setRationale(e.target.value)} placeholder="Rationale — why" />
         <button disabled={!title.trim() || !rationale.trim() || add.isPending} onClick={() => add.mutate()}>Record</button>
       </div>
+    </div>
+  );
+}
+
+// ── Timeline ─────────────────────────────────────────────────────────────────
+function Timeline({ id }: { id: string }) {
+  const { data, isLoading } = useQuery({ queryKey: ["timeline", id], queryFn: () => api.get<RecentEvent[]>(`/workspaces/${id}/timeline`) });
+  return (
+    <div className="et-timeline">
+      {(data ?? []).map((e) => (
+        <div key={e.id} className="et-tl-row">
+          <span className="et-tl-mark" data-ai={e.actor.startsWith("ai:")}>{e.actor.startsWith("ai:") ? "&" : "·"}</span>
+          <span className="et-tl-text">{e.action.replace(/_/g, " ")} <span className="et-tl-type">{e.entity_type}</span></span>
+          <span className="eyebrow et-tl-time">{new Date(e.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
+        </div>
+      ))}
+      {!isLoading && (data?.length ?? 0) === 0 && <div className="et-empty">Nothing has happened here yet.</div>}
     </div>
   );
 }
@@ -284,6 +343,20 @@ function WorkspaceStyles() {
       .et-decision-form input:focus { outline: none; border-color: var(--color-iris); }
       .et-decision-form button { align-self: flex-start; background: var(--color-iris); color: #fff; border: none; border-radius: 8px; padding: 0.5rem 1.1rem; font: inherit; cursor: pointer; }
       .et-decision-form button:disabled { opacity: 0.4; cursor: default; }
+
+      .et-obj-group { margin-bottom: 1.6rem; }
+      .et-obj-head { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0; border-bottom: 1px solid var(--line-strong); }
+      .et-obj-title { font-weight: 500; flex: 1; }
+      .et-obj-tasks { padding-left: 1.1rem; margin-top: 0.2rem; }
+      .et-obj-tasks .et-task-row { border-bottom: 1px solid var(--line); }
+
+      .et-timeline { display: flex; flex-direction: column; }
+      .et-tl-row { display: grid; grid-template-columns: 1rem 1fr auto; align-items: baseline; gap: 0.6rem; padding: 0.45rem 0; border-bottom: 1px solid var(--line); font-size: 0.88rem; }
+      .et-tl-mark { font-family: var(--font-display); color: var(--ink-faint); text-align: center; }
+      .et-tl-mark[data-ai="true"] { color: var(--color-iris); }
+      .et-tl-text { color: var(--ink-soft); }
+      .et-tl-type { color: var(--ink); }
+      .et-tl-time { color: var(--ink-faint); }
 
       .et-empty { color: var(--ink-faint); font-size: 0.9rem; padding: 0.6rem 0; font-style: italic; }
     `}</style>
