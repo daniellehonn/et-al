@@ -3,7 +3,7 @@
 // ingest (fetch/parse/embed) by the Worker — never interpreted here.
 import { z } from "zod";
 import { captureInput, INLINE_SOURCE_KINDS } from "../schema";
-import { Ctx, all, first, ftsUpsert, id, logEvent, now } from "./db";
+import { Ctx, RuleError, all, first, ftsUpsert, id, logEvent, now } from "./db";
 
 export interface Source {
   id: string;
@@ -26,6 +26,28 @@ export function getSource(c: Ctx, sid: string): Promise<Source | null> {
 
 export function listInbox(c: Ctx): Promise<Source[]> {
   return all<Source>(c, `SELECT * FROM source WHERE status = 'inbox' ORDER BY created_at DESC`);
+}
+
+/** Assign a capture to a workspace and/or move it out of the inbox. `raw` is
+ *  never touched — only the routing fields are mutable. */
+export async function updateSource(
+  c: Ctx,
+  sid: string,
+  patch: { workspace_id?: string | null; status?: string },
+): Promise<Source> {
+  const existing = await getSource(c, sid);
+  if (!existing) throw new RuleError(`source ${sid} not found`, 404);
+  await c.db
+    .prepare(`UPDATE source SET workspace_id = ?, status = ?, updated_at = ? WHERE id = ?`)
+    .bind(
+      patch.workspace_id === undefined ? existing.workspace_id : patch.workspace_id,
+      patch.status ?? existing.status,
+      now(),
+      sid,
+    )
+    .run();
+  await logEvent(c, "update", "source", sid, patch);
+  return (await getSource(c, sid))!;
 }
 
 /** Save a raw input immediately. Never blocks on a fetch; queues async ingest. */

@@ -47,6 +47,7 @@ api.post("/daily3/confirm", async (c) => c.json(await store.confirmDaily3(ctx(c)
 api.get("/inbox", async (c) => c.json(await store.listInbox(ctx(c))));
 api.post("/capture", async (c) => c.json(await store.capture(ctx(c), await c.req.json())));
 api.get("/sources/:id", async (c) => c.json(await store.getSource(ctx(c), c.req.param("id"))));
+api.patch("/sources/:id", async (c) => c.json(await store.updateSource(ctx(c), c.req.param("id"), await c.req.json())));
 api.post("/insights", async (c) => c.json(await store.createInsight(ctx(c), await c.req.json())));
 api.get("/insights", async (c) => c.json(await store.listInsights(ctx(c), c.req.query("workspace_id"))));
 

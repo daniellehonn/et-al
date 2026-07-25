@@ -1,10 +1,19 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
+import { usePathname } from "next/navigation";
 import { api, type Workspace } from "@/lib/api";
 
 // The Spine: the workspace tree IS the navigation and the AI's context boundary,
 // so it lives permanently on the left. The & mark anchors the top.
+const NAV = [
+  { href: "/", label: "Home" },
+  { href: "/inbox/", label: "Inbox" },
+  { href: "/search/", label: "Search" },
+  { href: "/knowledge/", label: "Knowledge" },
+];
+
 export function Spine() {
+  const pathname = usePathname();
   const { data: workspaces } = useQuery({
     queryKey: ["workspaces"],
     queryFn: () => api.get<Workspace[]>("/workspaces"),
@@ -34,10 +43,12 @@ export function Spine() {
       </a>
 
       <nav className="et-nav">
-        <a href="/" className="et-nav-item" data-active>Home</a>
-        <a href="#" className="et-nav-item">Inbox</a>
-        <a href="#" className="et-nav-item">Search</a>
-        <a href="#" className="et-nav-item">Knowledge</a>
+        {NAV.map((n) => (
+          <a key={n.href} href={n.href} className="et-nav-item"
+            {...((n.href === "/" ? pathname === "/" : pathname.startsWith(n.href)) ? { "data-active": true } : {})}>
+            {n.label}
+          </a>
+        ))}
       </nav>
 
       <div className="et-spine-label eyebrow">Workspaces</div>

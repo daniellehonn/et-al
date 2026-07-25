@@ -81,7 +81,10 @@ export interface Insight {
 }
 export interface Source {
   id: string; workspace_id: string | null; kind: string; title: string | null;
-  url: string | null; status: string; created_at: number;
+  url: string | null; raw: string | null; status: string; created_at: number;
+}
+export interface SearchHit {
+  entity_type: string; entity_id: string; title: string; snippet: string;
 }
 
 // One block operation, mirrors src/schema BlockOp.
