@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+/* ── et al. design tokens ──────────────────────────────────────────────────
+   "instrument for a life": calm command surface, iris brand, amber signal.   */
+@theme {
+  --color-paper: #f5f4f0;
+  --color-paper-raised: #fbfaf7;
+  --color-ink: #17171a;
+  --color-ink-soft: #55555e;
+  --color-ink-faint: #8a8a93;
+  --color-line: #e4e2dc;
+  --color-line-strong: #d4d1c8;
+
+  --color-iris: #5d57e4;
+  --color-iris-soft: #ecebfc;
+  --color-amber: #d98a3d;
+  --color-sage: #4e9e7f;
+
+  --font-display: "Instrument Serif", Georgia, serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+:root {
+  --paper: var(--color-paper);
+  --paper-raised: var(--color-paper-raised);
+  --ink: var(--color-ink);
+  --ink-soft: var(--color-ink-soft);
+  --ink-faint: var(--color-ink-faint);
+  --line: var(--color-line);
+  --line-strong: var(--color-line-strong);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #101013;
+    --paper-raised: #17171b;
+    --ink: #ececee;
+    --ink-soft: #a0a0a8;
+    --ink-faint: #6b6b74;
+    --line: #26262c;
+    --line-strong: #34343c;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { padding: 0; margin: 0; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* An eyebrow: monospace, tracked-out, faint — the utility voice of the system. */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.serif { font-family: var(--font-display); font-weight: 400; letter-spacing: -0.01em; }
+
+::selection { background: var(--color-iris); color: #fff; }
+
+*:focus-visible { outline: 2px solid var(--color-iris); outline-offset: 2px; border-radius: 3px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
