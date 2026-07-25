@@ -6,22 +6,21 @@ account_id = "e4ea14de30df5be2da9c9e22e8e377ed"
 workers_dev = true
 preview_urls = false
 
-# v6: D1 is the CANONICAL store, not a derived index. Losing it loses data —
-# the recovery path is the Markdown snapshots written nightly to R2 by the
-# `0 4 * * *` cron below. `POST /api/reindex` only repairs the search index.
+# v7: D1 is the source of truth for the whole personal OS — workspaces,
+# objectives, tasks, documents/blocks, sources, insights, decisions, the graph.
 [[d1_databases]]
 binding = "DB"
 database_name = "et-al"
 database_id = "2ff89323-c48e-4c15-809a-7187b1bde9dc"
 
-# Assets, uploads, and Markdown export snapshots. No longer the source of truth.
+# Assets (uploads, images) and Markdown export snapshots.
 [[r2_buckets]]
 binding = "VAULT"
 bucket_name = "et-al-vault"
 
-# Semantic search (Phase 5). Embeddings run on Workers AI — a Cloudflare binding,
-# not an external provider — so no AI vendor key enters the platform. Both are
-# optional at runtime: without them, search falls back to keyword-only.
+# Semantic search over Insights. Embeddings run on Workers AI — a Cloudflare
+# binding, not an external provider — so no AI vendor key enters the platform.
+# Optional at runtime: without it, search is keyword-only (D1 FTS5).
 [[vectorize]]
 binding = "VECTORIZE"
 index_name = "et-al-index"
@@ -29,9 +28,8 @@ index_name = "et-al-index"
 [ai]
 binding = "AI"
 
-# Durable processing queue (v6 Phase 2): transcription, extraction, embeddings.
-# The queue is only a TRIGGER — the `processing_jobs` table in D1 is the record
-# of intent, so losing a message delays work but never drops it.
+# Deterministic ingest queue: fetch/parse a captured source, embed an insight.
+# Only url/pdf/video captures enqueue; notes/ideas are complete on capture.
 [[queues.producers]]
 binding = "JOBS"
 queue = "et-al-jobs"
@@ -40,30 +38,20 @@ queue = "et-al-jobs"
 queue = "et-al-jobs"
 max_batch_size = 10
 max_batch_timeout = 5
-# Job attempts are counted in D1, so queue-level retries stay low to avoid
-# double-counting against MAX_ATTEMPTS.
 max_retries = 2
 
-# Safety net for anything the queue missed: never-delivered messages, failed
-# jobs with attempts remaining, and jobs stranded in `running`.
+# Safety-net sweep + nightly markdown snapshots (snapshots land in a later phase).
 [triggers]
 crons = ["*/5 * * * *", "0 4 * * *"]
 
-# CO-DEPLOY: the Next client is served from this Worker, so the client and the
-# API share ONE origin. That is an auth decision as much as a hosting one — the
-# `et_al_session` cookie can stay `SameSite=Lax` (CSRF protection intact), no CORS
-# allowlist is needed, and mutations skip the preflight round-trip.
-#
-# `client/out` is Next's static export (`output: "export"`); build it before
-# deploying — `npm run deploy` does both.
-[assets]
-directory = "client/out"
-# API, MCP, and health hit the Worker. Everything else falls through to the
-# static bundle. Without this the asset router would answer /api/* first.
-run_worker_first = ["/api/*", "/mcp", "/mcp/*", "/health"]
-# Client-side routes have no matching file on disk, so unmatched paths serve the
-# app shell instead of a 404.
-not_found_handling = "single-page-application"
-
 [vars]
 APP_NAME = "et al."
+
+# CO-DEPLOY (web app): the Next client is served from this Worker so the app and
+# API share one origin. The Notion-style client is the next build phase; until it
+# lands, `public/` holds a placeholder shell. When the client returns, point this
+# at `client/out` (Next static export) and restore the client build in `deploy`.
+[assets]
+directory = "public"
+run_worker_first = ["/api/*", "/mcp", "/mcp/*", "/health"]
+not_found_handling = "single-page-application"
