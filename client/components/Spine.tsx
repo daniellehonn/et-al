@@ -27,6 +27,15 @@ export function Spine() {
   useEffect(() => { setCollapsed(localStorage.getItem("et-spine-collapsed") === "1"); }, []);
   const toggleCollapsed = () => setCollapsed((c) => { const n = !c; try { localStorage.setItem("et-spine-collapsed", n ? "1" : "0"); } catch { /* ignore */ } return n; });
 
+  // Which tree nodes are collapsed (default: everything expanded). Persisted.
+  const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
+  useEffect(() => { try { setCollapsedNodes(new Set(JSON.parse(localStorage.getItem("et-tree-collapsed") || "[]"))); } catch { /* ignore */ } }, []);
+  const toggleNode = (wid: string) => setCollapsedNodes((prev) => {
+    const n = new Set(prev); n.has(wid) ? n.delete(wid) : n.add(wid);
+    try { localStorage.setItem("et-tree-collapsed", JSON.stringify([...n])); } catch { /* ignore */ }
+    return n;
+  });
+
   // `creating` holds the parent id we're adding under; null = root; false = idle.
   const [creating, setCreating] = useState<string | null | false>(false);
   const [title, setTitle] = useState("");
@@ -73,9 +82,12 @@ export function Spine() {
 
   const renderTree = (parent: string | null, depth: number): React.ReactNode => (
     <>
-      {(byParent.get(parent) ?? []).map((w) => (
+      {(byParent.get(parent) ?? []).map((w) => {
+        const hasKids = (byParent.get(w.id) ?? []).length > 0;
+        const open = !collapsedNodes.has(w.id);
+        return (
         <div key={w.id}>
-          <div className="et-ws-row" style={{ paddingLeft: `${depth * 0.85 + 0.9}rem` }}
+          <div className="et-ws-row" style={{ paddingLeft: `${depth * 0.85 + 0.3}rem` }}
             draggable
             data-dragging={dragId === w.id || undefined}
             data-drop={dropId === w.id || undefined}
@@ -84,6 +96,9 @@ export function Spine() {
             onDragOver={(e) => { if (dragId && dragId !== w.id) { e.preventDefault(); setDropId(w.id); } }}
             onDragLeave={() => setDropId((cur) => (cur === w.id ? undefined : cur))}
             onDrop={(e) => { e.preventDefault(); drop(w.id); }}>
+            {hasKids
+              ? <button className="et-ws-caret" onClick={(e) => { e.preventDefault(); toggleNode(w.id); }} aria-label={open ? "Collapse" : "Expand"}>{open ? "▾" : "▸"}</button>
+              : <span className="et-ws-caret et-ws-caret-empty" />}
             <a href={`/workspace/?id=${w.id}`} className="et-ws">
               {w.icon ? <span className="et-ws-icon">{w.icon}</span> : <span className="et-ws-dot" data-type={w.type} />}
               {w.title}
@@ -91,10 +106,11 @@ export function Spine() {
             <button className="et-ws-add" title="Add sub-workspace"
               onClick={(e) => { e.preventDefault(); setTitle(""); setCreating(w.id); }}>+</button>
           </div>
-          {renderTree(w.id, depth + 1)}
+          {hasKids && open && renderTree(w.id, depth + 1)}
           {creating === w.id && newInput(w.id, depth + 1)}
         </div>
-      ))}
+        );
+      })}
     </>
   );
 
@@ -181,6 +197,9 @@ const spineCss = `
         .et-spine-label { padding: 0.9rem 0.6rem 0.4rem; display: flex; align-items: center; justify-content: space-between; }
         .et-tree { display: flex; flex-direction: column; }
         .et-ws-row { display: flex; align-items: center; }
+        .et-ws-caret { background: none; border: none; color: var(--ink-faint); cursor: pointer; font-size: 0.58rem; line-height: 1; width: 1rem; flex: none; padding: 0.2rem 0; text-align: center; border-radius: 4px; }
+        .et-ws-caret:hover { color: var(--ink); background: var(--paper-raised); }
+        .et-ws-caret-empty { visibility: hidden; cursor: default; }
         .et-ws {
           flex: 1; min-width: 0; display: flex; align-items: center; gap: 0.5rem;
           text-decoration: none; color: var(--ink-soft);
