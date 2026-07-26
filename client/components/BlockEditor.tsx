@@ -259,18 +259,28 @@ export function BlockEditor({ documentId }: { documentId: string }) {
     });
   }, [editingId]);
 
+  // A failed write is never silent: surface it and re-check auth so the Unlock
+  // banner reappears if the session lapsed (the usual cause of "nothing happens").
+  const onWriteError = useCallback((e: unknown) => {
+    const msg = e instanceof Error ? e.message : String(e);
+    qc.invalidateQueries({ queryKey: ["session"] });
+    alert(/unauthor/i.test(msg) ? "You're in read-only mode — click Unlock at the top and enter your API key, then try again." : `Couldn't save: ${msg}`);
+  }, [qc]);
+
   const applyOps = useCallback(async (ops: BlockOp[]) => {
-    await api.post(`/documents/${documentId}/blocks`, { ops });
-    qc.invalidateQueries({ queryKey: ["blocks", documentId] });
-  }, [documentId, qc]);
+    try { await api.post(`/documents/${documentId}/blocks`, { ops }); }
+    catch (e) { onWriteError(e); }
+    finally { qc.invalidateQueries({ queryKey: ["blocks", documentId] }); }
+  }, [documentId, qc, onWriteError]);
 
   // Delete a block reliably: remove it from the cache immediately (optimistic),
   // then persist. The block vanishes on click regardless of any re-render.
   const deleteBlock = useCallback((id: string) => {
     qc.setQueryData<Block[]>(["blocks", documentId], (old) => (old ?? []).filter((b) => b.id !== id));
     api.post(`/documents/${documentId}/blocks`, { ops: [{ op: "delete", id }] })
+      .catch(onWriteError)
       .finally(() => qc.invalidateQueries({ queryKey: ["blocks", documentId] }));
-  }, [documentId, qc]);
+  }, [documentId, qc, onWriteError]);
 
   const saveText = useCallback((b: Block, value: string) => {
     clearTimeout(debounce.current[b.id]);
