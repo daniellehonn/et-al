@@ -169,6 +169,15 @@ function TableWidget({ config, onChange }: { config: Config; onChange?: (c: Conf
   const setColType = (colId: string, type: ColType) => update({ columns: cols.map((c) => c.id === colId ? { ...c, type } : c) });
   const delRow = (r: Row) => update({ rows: rows.filter((x) => x.id !== r.id) });
   const delCol = (colId: string) => update({ columns: cols.filter((c) => c.id !== colId), rows: rows.map((r) => { const { [colId]: _, ...rest } = r.cells; return { ...r, cells: rest }; }) });
+  const [dragCol, setDragCol] = useState<string | null>(null);
+  const moveCol = (fromId: string, toId: string) => {
+    if (fromId === toId) return;
+    const arr = [...cols];
+    const from = arr.findIndex((c) => c.id === fromId), to = arr.findIndex((c) => c.id === toId);
+    if (from < 0 || to < 0) return;
+    const [m] = arr.splice(from, 1); arr.splice(to, 0, m);
+    update({ columns: arr });
+  };
 
   return (
     <div className="et-table-wrap">
@@ -176,8 +185,11 @@ function TableWidget({ config, onChange }: { config: Config; onChange?: (c: Conf
         <thead>
           <tr>
             {cols.map((c) => (
-              <th key={c.id}>
+              <th key={c.id} data-dragover={dragCol && dragCol !== c.id ? undefined : undefined}
+                onDragOver={(e) => { if (dragCol && dragCol !== c.id) e.preventDefault(); }}
+                onDrop={(e) => { e.preventDefault(); if (dragCol) moveCol(dragCol, c.id); setDragCol(null); }}>
                 <span className="et-th">
+                  {!readOnly && <span className="et-th-drag" draggable onDragStart={() => setDragCol(c.id)} onDragEnd={() => setDragCol(null)} title="Drag to reorder column">⠿</span>}
                   {readOnly ? c.name : <EditableText value={c.name} onSave={(n) => renameCol(c.id, n)} />}
                   {!readOnly && (
                     <details className="et-col-menu">
@@ -435,6 +447,8 @@ function OverviewStyles() {
       .et-table th, .et-table td { border: 1px solid var(--line); padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
       .et-table th { background: var(--paper); font-weight: 500; font-size: 0.82rem; }
       .et-th { display: flex; align-items: center; gap: 0.3rem; justify-content: space-between; }
+      .et-th-drag { cursor: grab; color: var(--ink-faint); font-size: 0.72rem; opacity: 0; }
+      .et-table th:hover .et-th-drag { opacity: 1; }
       .et-th-add, .et-td-del { width: 1.5rem; text-align: center; }
       .et-th-add button { background: none; border: none; color: var(--ink-faint); font-size: 1rem; cursor: pointer; }
       .et-table-addrow { margin-top: 0.5rem; background: none; border: none; color: var(--ink-soft); font: inherit; font-size: 0.85rem; cursor: pointer; }

@@ -25,7 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           ["--font-mono" as string]: "var(--font-jetbrains)",
         }}>
         <Providers>
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 15rem) minmax(0, 1fr)", minHeight: "100vh" }} className="et-shell">
+          <div style={{ display: "grid", gridTemplateColumns: "auto minmax(0, 1fr)", minHeight: "100vh" }} className="et-shell">
             <Spine />
             <main style={{ minWidth: 0 }}>
               <AuthGate />

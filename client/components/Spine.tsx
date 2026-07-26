@@ -1,7 +1,7 @@
 "use client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, type Workspace } from "@/lib/api";
 
 // The Spine: the workspace tree IS the navigation and the AI's context boundary,
@@ -21,6 +21,11 @@ export function Spine() {
     queryKey: ["workspaces"],
     queryFn: () => api.get<Workspace[]>("/workspaces"),
   });
+
+  // Collapsible rail — persisted across sessions.
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => { setCollapsed(localStorage.getItem("et-spine-collapsed") === "1"); }, []);
+  const toggleCollapsed = () => setCollapsed((c) => { const n = !c; try { localStorage.setItem("et-spine-collapsed", n ? "1" : "0"); } catch { /* ignore */ } return n; });
 
   // `creating` holds the parent id we're adding under; null = root; false = idle.
   const [creating, setCreating] = useState<string | null | false>(false);
@@ -93,11 +98,24 @@ export function Spine() {
     </>
   );
 
+  if (collapsed) {
+    return (
+      <aside className="et-spine" data-collapsed>
+        <button className="et-collapse" onClick={toggleCollapsed} title="Expand sidebar" aria-label="Expand sidebar">»</button>
+        <a href="/" className="et-amp-only serif" aria-label="et al. home">&amp;</a>
+        <style>{spineCss}</style>
+      </aside>
+    );
+  }
+
   return (
     <aside className="et-spine">
-      <a href="/" className="et-brand" aria-label="et al. home">
-        <span className="serif">et al.</span><span className="et-amp">&amp;</span>
-      </a>
+      <div className="et-spine-top">
+        <a href="/" className="et-brand" aria-label="et al. home">
+          <span className="serif">et al.</span><span className="et-amp">&amp;</span>
+        </a>
+        <button className="et-collapse" onClick={toggleCollapsed} title="Collapse sidebar" aria-label="Collapse sidebar">«</button>
+      </div>
 
       <nav className="et-nav">
         {NAV.map((n) => (
@@ -126,14 +144,25 @@ export function Spine() {
         {creating === null && newInput(null, 0)}
       </div>
 
-      <style>{`
+      <style>{spineCss}</style>
+    </aside>
+  );
+}
+
+const spineCss = `
         .et-spine {
+          width: 15rem;
           border-right: 1px solid var(--line);
           padding: 1.4rem 0.7rem 2rem;
           display: flex; flex-direction: column; gap: 0.35rem;
           position: sticky; top: 0; height: 100vh; overflow-y: auto;
           background: var(--paper);
         }
+        .et-spine[data-collapsed] { width: 3rem; padding: 1.4rem 0.4rem; align-items: center; gap: 0.8rem; }
+        .et-spine-top { display: flex; align-items: center; justify-content: space-between; }
+        .et-collapse { background: none; border: none; color: var(--ink-faint); font-size: 1.05rem; line-height: 1; cursor: pointer; padding: 0.1rem 0.35rem; border-radius: 6px; }
+        .et-collapse:hover { color: var(--ink); background: var(--paper-raised); }
+        .et-amp-only { color: var(--color-iris); font-size: 1.5rem; text-decoration: none; }
         .et-brand {
           display: flex; align-items: baseline; gap: 0.15rem;
           text-decoration: none; color: var(--ink);
@@ -178,7 +207,4 @@ export function Spine() {
         .et-ws-dot[data-type="project"] { background: var(--color-iris); }
         .et-ws-dot[data-type="area"] { background: var(--color-sage); }
         .et-ws-dot[data-type="course"] { background: var(--color-amber); }
-      `}</style>
-    </aside>
-  );
-}
+`;
