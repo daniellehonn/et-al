@@ -514,7 +514,7 @@ export function BlockEditor({ documentId }: { documentId: string }) {
           ) : (
             <div className="et-block-render" id={b.type === "heading" ? `hb-${b.id}` : undefined}
               data-empty={!text[b.id] || undefined} onClick={() => setEditingId(b.id)}>
-              {text[b.id] ? renderInline(text[b.id]) : "Empty — click to edit"}
+              {text[b.id] ? renderInline(text[b.id]) : " "}
             </div>
           )}
         </div>
