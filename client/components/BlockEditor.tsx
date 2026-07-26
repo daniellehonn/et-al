@@ -133,6 +133,11 @@ function ResumeBulletBlock({ contentJson, onSave }: { contentJson: string; onSav
 
 function ProjectBlock({ contentJson, onSave }: { contentJson: string; onSave: (c: Record<string, unknown>) => void }) {
   const c = parseContent(contentJson) as Record<string, string>;
+  // tech may arrive as an array (MCP-authored) or a comma-separated string.
+  const rawTech = (c as Record<string, unknown>).tech;
+  const techList = Array.isArray(rawTech) ? rawTech.map(String) : typeof rawTech === "string" ? rawTech.split(",") : [];
+  const techPills = techList.map((t) => t.trim()).filter(Boolean);
+  const techStr = techPills.join(", ");
   const field = (k: string, label: string) => (
     <div className="et-star-field">
       <span className="et-star-label">{label}</span>
@@ -150,12 +155,10 @@ function ProjectBlock({ contentJson, onSave }: { contentJson: string; onSave: (c
       </div>
       <div className="et-star-field">
         <span className="et-star-label">Tech</span>
-        <EditableText multiline value={c.tech ?? ""} placeholder="Tech… (comma separated)" onSave={(v) => onSave({ ...c, tech: v })}
-          render={c.tech ? (
+        <EditableText multiline value={techStr} placeholder="Tech… (comma separated)" onSave={(v) => onSave({ ...c, tech: v })}
+          render={techPills.length ? (
             <span className="et-pills">
-              {c.tech.split(",").map((t) => t.trim()).filter(Boolean).map((t, i) => (
-                <span key={i} className="et-pill">{t}</span>
-              ))}
+              {techPills.map((t, i) => <span key={i} className="et-pill">{t}</span>)}
             </span>
           ) : undefined} />
       </div>
