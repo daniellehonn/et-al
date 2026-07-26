@@ -393,15 +393,22 @@ function OverviewStyles() {
       .et-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
       .et-table th, .et-table td { border: 1px solid var(--line); padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
       .et-table th { background: var(--paper); font-weight: 500; font-size: 0.82rem; }
-      .et-th { display: flex; align-items: center; gap: 0.3rem; justify-content: space-between; }
-      .et-th-drag { cursor: grab; color: var(--ink-faint); font-size: 0.72rem; opacity: 0; }
+      .et-th { display: flex; align-items: center; gap: 0.3rem; }
+      .et-th > :nth-child(2) { flex: 1; }
+      .et-th-drag { cursor: grab; color: var(--ink-faint); font-size: 0.72rem; opacity: 0; transition: opacity 0.12s; }
       .et-table th:hover .et-th-drag { opacity: 1; }
-      .et-th-add, .et-td-del { width: 1.5rem; text-align: center; }
-      .et-th-add button { background: none; border: none; color: var(--ink-faint); font-size: 1rem; cursor: pointer; }
-      .et-table-addrow { margin-top: 0.5rem; background: none; border: none; color: var(--ink-soft); font: inherit; font-size: 0.85rem; cursor: pointer; }
+      /* Add-column and row-delete cells are chrome: no border, reveal on hover. */
+      .et-th-add, .et-td-del { width: 1.6rem; text-align: center; border: none !important; padding: 0 !important; }
+      .et-th-add button { background: none; border: none; color: var(--ink-faint); font-size: 1rem; cursor: pointer; opacity: 0; transition: opacity 0.12s; }
+      .et-table:hover .et-th-add button { opacity: 1; }
+      .et-th-add button:hover { color: var(--ink); }
+      .et-td-del { opacity: 0; transition: opacity 0.12s; }
+      .et-table tr:hover .et-td-del { opacity: 1; }
+      .et-table-addrow { margin-top: 0.35rem; background: none; border: none; color: var(--ink-faint); font: inherit; font-size: 0.85rem; cursor: pointer; padding: 0.2rem 0; }
       .et-table-addrow:hover { color: var(--color-iris); }
       .et-col-menu { position: relative; }
-      .et-col-menu summary { list-style: none; cursor: pointer; color: var(--ink-faint); font-size: 0.7rem; width: 1.1rem; height: 1.1rem; display: inline-grid; place-items: center; border-radius: 4px; }
+      .et-col-menu summary { list-style: none; cursor: pointer; color: var(--ink-faint); font-size: 0.7rem; width: 1.1rem; height: 1.1rem; display: inline-grid; place-items: center; border-radius: 4px; opacity: 0; transition: opacity 0.12s; }
+      .et-table th:hover .et-col-menu summary, .et-col-menu[open] summary { opacity: 1; }
       .et-col-menu summary::-webkit-details-marker { display: none; }
       .et-col-menu summary:hover { background: var(--paper); color: var(--ink); }
       .et-col-list { position: absolute; z-index: 20; top: 1.4rem; right: 0; background: var(--paper-raised); border: 1px solid var(--line-strong); border-radius: 9px; padding: 0.3rem; display: flex; flex-direction: column; min-width: 8rem; box-shadow: 0 8px 24px rgba(0,0,0,0.14); }
