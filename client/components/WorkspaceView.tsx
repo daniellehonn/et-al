@@ -110,6 +110,7 @@ function Tasks({ id }: { id: string }) {
   const { data: tasks } = useQuery({ queryKey: ["tasks", id], queryFn: () => api.get<Task[]>(`/workspaces/${id}/tasks`) });
   const { data: objectives } = useQuery({ queryKey: ["objectives", id], queryFn: () => api.get<Objective[]>(`/workspaces/${id}/objectives`) });
   const [groupBy, setGroupBy] = useState<"none" | "objective">("objective");
+  const [view, setView] = useState<"list" | "board" | "calendar">("list");
   const [title, setTitle] = useState("");
   const invalidate = () => { qc.invalidateQueries({ queryKey: ["tasks", id] }); qc.invalidateQueries({ queryKey: ["objectives", id] }); };
 
@@ -121,6 +122,13 @@ function Tasks({ id }: { id: string }) {
   const patch = useMutation({ mutationFn: ({ tid, body }: { tid: string; body: Partial<Task> }) => api.patch(`/tasks/${tid}`, body), onSuccess: invalidate });
   const del = useMutation({ mutationFn: (tid: string) => api.del(`/tasks/${tid}`), onSuccess: invalidate });
   const addObj = useMutation({ mutationFn: (t: string) => api.post("/objectives", { workspace_id: id, title: t }), onSuccess: invalidate });
+  const addAt = useMutation({
+    mutationFn: async ({ title: t, status }: { title: string; status: string }) => {
+      const created = await api.post<Task>("/tasks", { workspace_id: id, title: t });
+      if (status !== "todo") await api.patch(`/tasks/${created.id}`, { status });
+    },
+    onSuccess: invalidate,
+  });
 
   const handlers = {
     objectives: objectives ?? [],
@@ -138,14 +146,27 @@ function Tasks({ id }: { id: string }) {
   return (
     <div>
       <div className="et-tasks-toolbar">
-        <span className="eyebrow">Group by</span>
         <div className="et-seg">
-          <button data-on={groupBy === "none"} onClick={() => setGroupBy("none")}>None</button>
-          <button data-on={groupBy === "objective"} onClick={() => setGroupBy("objective")}>Objective</button>
+          <button data-on={view === "list"} onClick={() => setView("list")}>List</button>
+          <button data-on={view === "board"} onClick={() => setView("board")}>Board</button>
+          <button data-on={view === "calendar"} onClick={() => setView("calendar")}>Calendar</button>
         </div>
+        {view === "list" && (
+          <>
+            <span className="eyebrow" style={{ marginLeft: "auto" }}>Group by</span>
+            <div className="et-seg">
+              <button data-on={groupBy === "none"} onClick={() => setGroupBy("none")}>None</button>
+              <button data-on={groupBy === "objective"} onClick={() => setGroupBy("objective")}>Objective</button>
+            </div>
+          </>
+        )}
       </div>
 
-      {groupBy === "none" ? (
+      {view === "board" ? (
+        <TaskBoard tasks={all} onStatus={(tid, status) => patch.mutate({ tid, body: { status } })} onToggle={handlers.onToggle} onDelete={handlers.onDelete} onAdd={(t, s) => addAt.mutate({ title: t, status: s })} />
+      ) : view === "calendar" ? (
+        <TaskCalendar tasks={all} onToggle={handlers.onToggle} />
+      ) : groupBy === "none" ? (
         <>
           {open.map((t) => <TaskRow key={t.id} task={t} showObjective {...handlers} />)}
           {open.length === 0 && <div className="et-empty">Nothing open.</div>}
@@ -243,6 +264,95 @@ function ObjectiveSection({ workspaceId, objective, tasks, invalidate, addTask, 
 function NewObjective({ onAdd, pending }: { onAdd: (title: string) => void; pending: boolean }) {
   const [title, setTitle] = useState("");
   return <QuickAdd value={title} setValue={setTitle} onAdd={() => title.trim() && (onAdd(title), setTitle(""))} placeholder="New objective — the “why” behind a group of tasks" pending={pending} />;
+}
+
+// ── Board view: kanban columns by status, drag cards between them ─────────────
+const BOARD_COLS: Array<[string, string]> = [["todo", "To do"], ["doing", "Doing"], ["blocked", "Blocked"], ["done", "Done"]];
+function TaskBoard({ tasks, onStatus, onToggle, onDelete, onAdd }: {
+  tasks: Task[]; onStatus: (tid: string, status: string) => void; onToggle: (t: Task) => void; onDelete: (tid: string) => void; onAdd: (title: string, status: string) => void;
+}) {
+  const [drag, setDrag] = useState<string | null>(null);
+  const [over, setOver] = useState<string | null>(null);
+  return (
+    <div className="et-board">
+      {BOARD_COLS.map(([s, label]) => {
+        const col = tasks.filter((t) => t.status === s);
+        return (
+          <div key={s} className="et-board-col" data-over={over === s || undefined}
+            onDragOver={(e) => { if (drag) { e.preventDefault(); setOver(s); } }}
+            onDragLeave={() => setOver((c) => (c === s ? null : c))}
+            onDrop={(e) => { e.preventDefault(); if (drag) onStatus(drag, s); setDrag(null); setOver(null); }}>
+            <div className="et-board-head"><span>{label}</span><span className="eyebrow">{col.length}</span></div>
+            {col.map((t) => {
+              const overdue = t.due_date && t.due_date < Date.now() && t.status !== "done";
+              return (
+                <div key={t.id} className="et-card" draggable onDragStart={() => setDrag(t.id)} onDragEnd={() => { setDrag(null); setOver(null); }}>
+                  <div className="et-card-top">
+                    <span className="et-prio" data-p={t.priority} />
+                    <span className="et-card-title" onClick={() => onToggle(t)} style={t.status === "done" ? { textDecoration: "line-through", color: "var(--ink-faint)" } : {}}>{t.title}</span>
+                    <DeleteButton onDelete={() => onDelete(t.id)} />
+                  </div>
+                  {t.due_date && <span className="et-card-due" data-overdue={overdue || undefined}>{new Date(t.due_date).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>}
+                </div>
+              );
+            })}
+            <BoardAdd onAdd={(title) => onAdd(title, s)} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function BoardAdd({ onAdd }: { onAdd: (title: string) => void }) {
+  const [v, setV] = useState("");
+  return (
+    <form className="et-board-add" onSubmit={(e) => { e.preventDefault(); if (v.trim()) { onAdd(v.trim()); setV(""); } }}>
+      <input value={v} onChange={(e) => setV(e.target.value)} placeholder="+ Add" />
+    </form>
+  );
+}
+
+// ── Calendar view: tasks placed on their due dates ───────────────────────────
+function TaskCalendar({ tasks, onToggle }: { tasks: Task[]; onToggle: (t: Task) => void }) {
+  const [cur, setCur] = useState(() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() }; });
+  const startDow = new Date(cur.y, cur.m, 1).getDay();
+  const daysIn = new Date(cur.y, cur.m + 1, 0).getDate();
+  const byDay = new Map<number, Task[]>();
+  for (const t of tasks) {
+    if (!t.due_date) continue;
+    const d = new Date(t.due_date);
+    if (d.getFullYear() === cur.y && d.getMonth() === cur.m) (byDay.get(d.getDate()) ?? byDay.set(d.getDate(), []).get(d.getDate())!).push(t);
+  }
+  const cells: Array<number | null> = [...Array(startDow).fill(null), ...Array.from({ length: daysIn }, (_, i) => i + 1)];
+  const monthLabel = new Date(cur.y, cur.m, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  const shift = (n: number) => setCur(({ y, m }) => { const d = new Date(y, m + n, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
+  const today = new Date();
+  return (
+    <div className="et-cal">
+      <div className="et-cal-head">
+        <button onClick={() => shift(-1)} aria-label="Previous month">‹</button>
+        <span className="serif et-cal-month">{monthLabel}</span>
+        <button onClick={() => shift(1)} aria-label="Next month">›</button>
+      </div>
+      <div className="et-cal-grid">
+        {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => <div key={i} className="et-cal-dow eyebrow">{d}</div>)}
+        {cells.map((day, i) => {
+          const isToday = day && today.getFullYear() === cur.y && today.getMonth() === cur.m && today.getDate() === day;
+          return (
+            <div key={i} className="et-cal-cell" data-empty={day === null || undefined} data-today={isToday || undefined}>
+              {day && <span className="et-cal-num">{day}</span>}
+              {(byDay.get(day ?? -1) ?? []).map((t) => (
+                <span key={t.id} className="et-cal-task" data-done={t.status === "done" || undefined} onClick={() => onToggle(t)} title={t.title}>
+                  <span className="et-prio" data-p={t.priority} />{t.title}
+                </span>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 // ── Documents (+ editor) ─────────────────────────────────────────────────────
@@ -475,6 +585,30 @@ function WorkspaceStyles() {
       .et-task-row:hover .et-task-due, .et-task-due:focus, .et-task-due[data-set] { opacity: 1; }
       .et-task-due[data-overdue] { color: #c0392b; border-color: color-mix(in srgb, #c0392b 40%, transparent); }
       .et-obj-none { color: var(--ink-faint); font-style: italic; }
+      .et-board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(11rem, 1fr); gap: 0.9rem; overflow-x: auto; padding-bottom: 0.5rem; align-items: start; }
+      .et-board-col { background: var(--paper-raised); border: 1px solid var(--line); border-radius: 12px; padding: 0.7rem; display: flex; flex-direction: column; gap: 0.5rem; min-height: 5rem; }
+      .et-board-col[data-over] { border-color: var(--color-iris); box-shadow: inset 0 0 0 1px var(--color-iris); }
+      .et-board-head { display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; font-weight: 500; padding: 0 0.1rem 0.2rem; }
+      .et-card { background: var(--paper); border: 1px solid var(--line); border-radius: 9px; padding: 0.5rem 0.6rem; cursor: grab; display: flex; flex-direction: column; gap: 0.3rem; }
+      .et-card:hover { border-color: var(--line-strong); }
+      .et-card-top { display: flex; align-items: center; gap: 0.45rem; }
+      .et-card-title { flex: 1; font-size: 0.88rem; cursor: pointer; }
+      .et-card-due { font-family: var(--font-mono); font-size: 0.72rem; color: var(--ink-faint); align-self: flex-start; }
+      .et-card-due[data-overdue] { color: #c0392b; }
+      .et-board-add input { width: 100%; background: none; border: none; font: inherit; font-size: 0.85rem; color: var(--ink-soft); padding: 0.3rem 0.2rem; }
+      .et-board-add input:focus { outline: none; }
+
+      .et-cal-head { display: flex; align-items: center; justify-content: center; gap: 1rem; margin-bottom: 0.8rem; }
+      .et-cal-head button { background: none; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--ink-soft); font-size: 1.1rem; line-height: 1; width: 1.8rem; height: 1.8rem; cursor: pointer; }
+      .et-cal-month { font-size: 1.3rem; min-width: 11rem; text-align: center; }
+      .et-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+      .et-cal-dow { background: var(--paper-raised); text-align: center; padding: 0.4rem 0; }
+      .et-cal-cell { background: var(--paper); min-height: 5.5rem; padding: 0.3rem; display: flex; flex-direction: column; gap: 0.15rem; }
+      .et-cal-cell[data-empty] { background: var(--paper-raised); }
+      .et-cal-num { font-size: 0.78rem; color: var(--ink-faint); }
+      .et-cal-cell[data-today] .et-cal-num { color: #fff; background: var(--color-iris); border-radius: 50%; width: 1.3rem; height: 1.3rem; display: grid; place-items: center; }
+      .et-cal-task { display: flex; align-items: center; gap: 0.3rem; font-size: 0.74rem; background: var(--color-iris-soft); border-radius: 5px; padding: 0.1rem 0.3rem; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .et-cal-task[data-done] { text-decoration: line-through; color: var(--ink-faint); background: var(--paper-raised); }
       .et-obj-group { margin-bottom: 1.6rem; }
       .et-obj-head { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0; border-bottom: 1px solid var(--line-strong); }
       .et-obj-title { font-weight: 500; flex: 1; }
