@@ -213,6 +213,51 @@ export async function writeBlocks(c: Ctx, documentId: string, ops: BlockOp[]): P
   return getBlocks(c, documentId);
 }
 
+// Repair older documents: merge runs of paragraph blocks that form a markdown
+// table (header, |---| separator, rows) into a single table block. Only touches
+// table runs; every other block is preserved as-is.
+export async function reparseDocumentTables(c: Ctx, documentId: string): Promise<{ changed: boolean; tables: number }> {
+  const doc = await getDocument(c, documentId);
+  if (!doc) throw new RuleError(`document ${documentId} not found`, 404);
+  const blocks = await getBlocks(c, documentId);
+  const textOf = (b: Block) => { try { return String(JSON.parse(b.content_json).text ?? ""); } catch { return ""; } };
+
+  const seq: Array<{ type: string; content: Record<string, unknown> }> = [];
+  let tables = 0, i = 0;
+  while (i < blocks.length) {
+    const b = blocks[i];
+    const t = textOf(b).trim();
+    if (b.type === "paragraph" && t.startsWith("|") && i + 1 < blocks.length && isTableSep(textOf(blocks[i + 1]))) {
+      const columns = cells(t);
+      const rows: string[][] = [];
+      let j = i + 2;
+      while (j < blocks.length && blocks[j].type === "paragraph" && textOf(blocks[j]).trim().startsWith("|")) {
+        rows.push(cells(textOf(blocks[j]))); j++;
+      }
+      seq.push({ type: "table", content: { columns, rows } });
+      tables++; i = j;
+    } else {
+      seq.push({ type: b.type, content: (() => { try { return JSON.parse(b.content_json); } catch { return { text: "" }; } })() });
+      i++;
+    }
+  }
+  if (tables === 0) return { changed: false, tables: 0 };
+
+  const t = now();
+  await c.db.prepare(`DELETE FROM block_revision WHERE block_id IN (SELECT id FROM block WHERE document_id = ?)`).bind(documentId).run();
+  await c.db.prepare(`DELETE FROM block WHERE document_id = ?`).bind(documentId).run();
+  let pos = 1;
+  for (const b of seq) {
+    await c.db
+      .prepare(`INSERT INTO block (id, document_id, type, content_json, position, version, is_ai, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?)`)
+      .bind(id("blk"), documentId, b.type, JSON.stringify(b.content), pos++, t, t)
+      .run();
+  }
+  await c.db.prepare(`UPDATE document SET updated_at = ? WHERE id = ?`).bind(t, documentId).run();
+  await logEvent(c, "update", "document", documentId, { reparsed_tables: tables });
+  return { changed: true, tables };
+}
+
 // ---- patches (the ONLY way an agent changes a document) ---------------------
 
 export async function proposePatch(c: Ctx, documentId: string, ops: BlockOp[], summary: string): Promise<DocumentPatch> {

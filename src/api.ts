@@ -67,6 +67,7 @@ api.post("/documents/:id/blocks", async (c) => {
   const { ops } = await c.req.json();
   return c.json(await store.writeBlocks(ctx(c), c.req.param("id"), ops));
 });
+api.post("/documents/:id/reparse", async (c) => c.json(await store.reparseDocumentTables(ctx(c), c.req.param("id"))));
 api.get("/documents/:id/patches", async (c) => c.json(await store.listPatches(ctx(c), c.req.param("id"), c.req.query("status"))));
 api.post("/patches/:id/resolve", async (c) => {
   const { accept } = await c.req.json();
