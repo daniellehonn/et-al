@@ -158,6 +158,9 @@ export const blockOp = z.discriminatedUnion("op", [
   z.object({ op: z.literal("update"), id: z.string(), type: z.enum(BLOCK_TYPES).optional(), content: z.record(z.string(), z.any()) }),
   z.object({ op: z.literal("delete"), id: z.string() }),
   z.object({ op: z.literal("move"), id: z.string(), after: z.string().nullish() }),
+  // Replace the entire document body from a markdown (or plain-text) string —
+  // what an agent most naturally proposes. Parsed into blocks on apply.
+  z.object({ op: z.literal("replace_content"), content: z.string() }),
 ]);
 export type BlockOp = z.infer<typeof blockOp>;
 

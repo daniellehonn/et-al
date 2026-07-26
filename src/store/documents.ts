@@ -6,7 +6,7 @@
 // write, but only after acceptance. Prior block content is kept in
 // block_revision so any change is reversible.
 import { z } from "zod";
-import { createDocumentInput, type BlockOp } from "../schema";
+import { blockOp, createDocumentInput, type BlockOp } from "../schema";
 import { Ctx, RuleError, all, first, ftsDelete, ftsUpsert, id, logEvent, now } from "./db";
 
 export interface Document {
@@ -101,11 +101,50 @@ async function positionAfter(c: Ctx, documentId: string, afterId: string | null 
   return next ? (blocks[idx].position + next.position) / 2 : blocks[idx].position + 1;
 }
 
+// Parse markdown (or plain text) into blocks — enough for what agents write:
+// headings, bullets, numbered items, todos, quotes, fenced code, dividers.
+function markdownToBlocks(md: string): Array<{ type: string; text: string }> {
+  const out: Array<{ type: string; text: string }> = [];
+  const lines = md.replace(/\r\n/g, "\n").split("\n");
+  let inCode = false;
+  let code: string[] = [];
+  for (const line of lines) {
+    if (line.trim().startsWith("```")) {
+      if (inCode) { out.push({ type: "code", text: code.join("\n") }); code = []; inCode = false; }
+      else inCode = true;
+      continue;
+    }
+    if (inCode) { code.push(line); continue; }
+    const s = line.trim();
+    if (s === "") continue;
+    if (/^#{1,6}\s+/.test(s)) out.push({ type: "heading", text: s.replace(/^#{1,6}\s+/, "") });
+    else if (/^(-|\*|\+)\s+\[[ xX]\]\s+/.test(s)) out.push({ type: "todo", text: s.replace(/^(-|\*|\+)\s+\[[ xX]\]\s+/, "") });
+    else if (/^(-|\*|\+)\s+/.test(s)) out.push({ type: "bullet", text: s.replace(/^(-|\*|\+)\s+/, "") });
+    else if (/^\d+\.\s+/.test(s)) out.push({ type: "numbered", text: s.replace(/^\d+\.\s+/, "") });
+    else if (/^>\s?/.test(s)) out.push({ type: "quote", text: s.replace(/^>\s?/, "") });
+    else if (/^(-{3,}|\*{3,}|_{3,})$/.test(s)) out.push({ type: "divider", text: "" });
+    else out.push({ type: "paragraph", text: s });
+  }
+  if (inCode && code.length) out.push({ type: "code", text: code.join("\n") });
+  return out;
+}
+
 async function applyOps(c: Ctx, documentId: string, ops: BlockOp[]): Promise<void> {
   const isAi = c.actor.startsWith("ai:") ? 1 : 0;
   const t = now();
   for (const op of ops) {
-    if (op.op === "insert") {
+    if (op.op === "replace_content") {
+      // Wipe the body and rebuild it from the markdown string.
+      await c.db.prepare(`DELETE FROM block_revision WHERE block_id IN (SELECT id FROM block WHERE document_id = ?)`).bind(documentId).run();
+      await c.db.prepare(`DELETE FROM block WHERE document_id = ?`).bind(documentId).run();
+      let pos = 1;
+      for (const b of markdownToBlocks(op.content)) {
+        await c.db
+          .prepare(`INSERT INTO block (id, document_id, type, content_json, position, version, is_ai, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)`)
+          .bind(id("blk"), documentId, b.type, JSON.stringify({ text: b.text }), pos++, isAi, t, t)
+          .run();
+      }
+    } else if (op.op === "insert") {
       const pos = await positionAfter(c, documentId, op.after);
       await c.db
         .prepare(`INSERT INTO block (id, document_id, type, content_json, position, version, is_ai, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)`)
@@ -152,6 +191,13 @@ export async function writeBlocks(c: Ctx, documentId: string, ops: BlockOp[]): P
 export async function proposePatch(c: Ctx, documentId: string, ops: BlockOp[], summary: string): Promise<DocumentPatch> {
   const doc = await getDocument(c, documentId);
   if (!doc) throw new RuleError(`document ${documentId} not found`, 404);
+  // Validate up front so a malformed patch is rejected here, not silently
+  // ignored on accept. Supported ops: insert/update/delete/move/replace_content.
+  const parsed = z.array(blockOp).safeParse(ops);
+  if (!parsed.success) {
+    throw new RuleError(`invalid document ops — supported ops are insert, update, delete, move, replace_content. ${parsed.error.issues[0]?.message ?? ""}`, 400);
+  }
+  ops = parsed.data;
   const pid = id("pat");
   await c.db
     .prepare(`INSERT INTO document_patch (id, document_id, ops_json, summary, status, actor, created_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)`)

@@ -22,6 +22,7 @@ interface Tool {
 }
 
 const str = { type: "string" };
+const num = { type: "number" };
 const obj = (props: Json, required: string[] = []): Json => ({ type: "object", properties: props, required });
 
 const TOOLS: Tool[] = [
@@ -74,8 +75,8 @@ const TOOLS: Tool[] = [
   { name: "create_objective", description: "Create an objective.", inputSchema: obj({ workspace_id: str, title: str }, ["workspace_id", "title"]), handler: (c, a) => store.createObjective(c, a as never) },
   { name: "update_objective", description: "Update an objective.", inputSchema: obj({ id: str }, ["id"]), handler: (c, a) => store.updateObjective(c, String(a.id), a as never) },
   { name: "list_tasks", description: "List a workspace's tasks (optional status/objective filter).", inputSchema: obj({ workspace_id: str, status: str, objective_id: str }, ["workspace_id"]), handler: (c, a) => store.listTasks(c, String(a.workspace_id), { status: a.status as string, objective_id: a.objective_id as string }) },
-  { name: "create_task", description: "Create a task.", inputSchema: obj({ workspace_id: str, title: str }, ["workspace_id", "title"]), handler: (c, a) => store.createTask(c, a as never) },
-  { name: "update_task", description: "Update a task (status, priority, due date, …).", inputSchema: obj({ id: str }, ["id"]), handler: (c, a) => store.updateTask(c, String(a.id), a as never) },
+  { name: "create_task", description: "Create a task. Pass objective_id to file it under an objective (its parent-objective field, not a relationship edge).", inputSchema: obj({ workspace_id: str, title: str, objective_id: str, priority: num, notes: str, due_date: num }, ["workspace_id", "title"]), handler: (c, a) => store.createTask(c, a as never) },
+  { name: "update_task", description: "Update a task. Set objective_id to move it under an objective (or null to detach); also status, priority, due_date, title, notes.", inputSchema: obj({ id: str, title: str, status: str, objective_id: str, priority: num, notes: str, due_date: num }, ["id"]), handler: (c, a) => store.updateTask(c, String(a.id), a as never) },
   { name: "complete_task", description: "Mark a task done.", inputSchema: obj({ id: str }, ["id"]), handler: (c, a) => store.completeTask(c, String(a.id)) },
   { name: "delete_task", description: "Delete a task. Destructive — confirm with the user first.", inputSchema: obj({ id: str }, ["id"]), handler: async (c, a) => { await store.deleteTask(c, String(a.id)); return { ok: true }; } },
   { name: "delete_objective", description: "Delete an objective (its tasks survive, detached). Destructive — confirm first.", inputSchema: obj({ id: str }, ["id"]), handler: async (c, a) => { await store.deleteObjective(c, String(a.id)); return { ok: true }; } },
@@ -97,7 +98,7 @@ const TOOLS: Tool[] = [
   { name: "list_documents", description: "A workspace's documents.", inputSchema: obj({ workspace_id: str }, ["workspace_id"]), handler: (c, a) => store.listDocuments(c, String(a.workspace_id)) },
   { name: "get_blocks", description: "A document's ordered blocks.", inputSchema: obj({ document_id: str }, ["document_id"]), handler: (c, a) => store.getBlocks(c, String(a.document_id)) },
   { name: "create_document", description: "Create a document.", inputSchema: obj({ workspace_id: str, title: str, type: str }, ["workspace_id", "title"]), handler: (c, a) => store.createDocument(c, a as never) },
-  { name: "propose_document_patch", description: "Propose a git-style change to a document; the human accepts/rejects in the web app. The ONLY way an agent edits a document.", inputSchema: obj({ document_id: str, ops: { type: "array" }, summary: str }, ["document_id", "ops", "summary"]), handler: (c, a) => store.proposePatch(c, String(a.document_id), a.ops as never, String(a.summary)) },
+  { name: "propose_document_patch", description: "Propose a change to a document; the human accepts/rejects in the web app. The ONLY way an agent edits a document. Simplest: one op [{op:'replace_content', content:'<markdown>'}] to replace the whole body (parsed into blocks). Granular ops also supported: insert {after,type,content:{text}}, update {id,content:{text}}, delete {id}, move {id,after}.", inputSchema: obj({ document_id: str, ops: { type: "array", items: { type: "object" } }, summary: str }, ["document_id", "ops", "summary"]), handler: (c, a) => store.proposePatch(c, String(a.document_id), a.ops as never, String(a.summary)) },
   { name: "get_document_patches", description: "Pending/resolved patches for a document.", inputSchema: obj({ document_id: str, status: str }, ["document_id"]), handler: (c, a) => store.listPatches(c, String(a.document_id), a.status as string | undefined) },
   // ---- decisions / graph / search ----
   { name: "record_decision", description: "Record an immutable decision (title, rationale, alternatives, impact).", inputSchema: obj({ workspace_id: str, title: str, rationale: str }, ["workspace_id", "title", "rationale"]), handler: (c, a) => store.recordDecision(c, a as never) },
