@@ -40,6 +40,10 @@ const TYPE_MENU: Array<{ type: string; label: string; kw?: string }> = [
   { type: "backlinks", label: "Backlinks (live)", kw: "widget references" },
 ];
 
+// The ⋮⋮ "turn into" menu only offers text-like conversions — not media, tables,
+// or live widgets (those are inserted fresh via the "/" menu).
+const TURN_INTO = new Set(["paragraph", "heading", "bullet", "numbered", "todo", "quote", "code", "callout", "divider", "toggle", "columns"]);
+
 // The default content a block gets when its type changes.
 function defaultContentFor(type: string, keepText: string): Record<string, unknown> {
   if (type === "table") return { columns: [{ id: "c1", name: "Name", type: "text" }, { id: "c2", name: "Status", type: "status" }], rows: [] };
@@ -292,7 +296,7 @@ export function BlockEditor({ documentId }: { documentId: string }) {
             <details className="et-type-menu">
               <summary aria-label="Change block type" title="Change type">⋮⋮</summary>
               <div className="et-type-list">
-                {TYPE_MENU.map((t) => <button key={t.type} onClick={(e) => { changeType(b, t.type); (e.currentTarget.closest("details") as HTMLDetailsElement).open = false; }}>{t.label}</button>)}
+                {TYPE_MENU.filter((t) => TURN_INTO.has(t.type)).map((t) => <button key={t.type} onClick={(e) => { changeType(b, t.type); (e.currentTarget.closest("details") as HTMLDetailsElement).open = false; }}>{t.label}</button>)}
               </div>
             </details>
             <button className="et-block-del" title="Delete block" aria-label="Delete block"
@@ -519,7 +523,7 @@ function EditorStyles() {
       .et-type-menu { position: relative; }
       .et-type-menu summary { list-style: none; cursor: grab; color: var(--ink-faint); font-size: 0.7rem; user-select: none; line-height: 1; letter-spacing: -1px; }
       .et-type-menu summary::-webkit-details-marker { display: none; }
-      .et-type-list { position: absolute; z-index: 10; top: 1.2rem; left: 0; background: var(--paper-raised); border: 1px solid var(--line-strong); border-radius: 9px; padding: 0.3rem; display: flex; flex-direction: column; min-width: 8rem; box-shadow: 0 8px 24px rgba(0,0,0,0.12); }
+      .et-type-list { position: absolute; z-index: 10; top: 1.2rem; left: 0; background: var(--paper-raised); border: 1px solid var(--line-strong); border-radius: 9px; padding: 0.3rem; display: flex; flex-direction: column; min-width: 8rem; max-height: 60vh; overflow-y: auto; box-shadow: 0 8px 24px rgba(0,0,0,0.12); }
       .et-type-list button { text-align: left; background: none; border: none; font: inherit; font-size: 0.88rem; color: var(--ink-soft); padding: 0.32rem 0.5rem; border-radius: 6px; cursor: pointer; }
       .et-type-list button:hover { background: var(--color-iris-soft); color: var(--ink); }
       .et-type-del { border-top: 1px solid var(--line) !important; margin-top: 0.2rem; color: #c0392b !important; }
