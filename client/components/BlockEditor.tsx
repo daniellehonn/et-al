@@ -1,7 +1,7 @@
 "use client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, blockText, type Block, type BlockOp, type DocumentPatch } from "@/lib/api";
+import { api, blockText, type Block, type BlockOp, type DocumentPatch, type Workspace } from "@/lib/api";
 import { EditableText, DeleteButton } from "./Editable";
 
 // A Notion-style editor over the block model. Each block is an auto-growing
@@ -167,6 +167,19 @@ export function BlockEditor({ documentId }: { documentId: string }) {
   // Slash menu: typing "/" at the start of an empty-ish block opens a type picker.
   const [slash, setSlash] = useState<{ id: string; query: string } | null>(null);
   const slashOptions = (q: string) => TYPE_MENU.filter((t) => `${t.label} ${t.type} ${t.kw ?? ""}`.toLowerCase().includes(q.toLowerCase()));
+
+  // @-mention: typing "@" links another workspace and records a backlink edge.
+  const { data: allWorkspaces } = useQuery({ queryKey: ["workspaces"], queryFn: () => api.get<Workspace[]>("/workspaces") });
+  const [mention, setMention] = useState<{ id: string; query: string } | null>(null);
+  const mentionOptions = (q: string) => (allWorkspaces ?? []).filter((w) => w.title.toLowerCase().includes(q.toLowerCase())).slice(0, 8);
+  const pickMention = (b: Block, w: Workspace) => {
+    const cur = text[b.id] ?? "";
+    const next = cur.replace(/@[^\s@]*$/, `[${w.title}](/workspace/?id=${w.id}) `);
+    setText((s) => ({ ...s, [b.id]: next }));
+    void api.post(`/documents/${documentId}/blocks`, { ops: [{ op: "update", id: b.id, type: b.type, content: { text: next } }] });
+    void api.post("/relate", { source_type: "document", source_id: documentId, target_type: "workspace", target_id: w.id, type: "references" });
+    setMention(null);
+  };
   const pickType = (b: Block, type: string) => {
     setSlash(null);
     setText((s) => ({ ...s, [b.id]: "" }));
@@ -262,6 +275,9 @@ export function BlockEditor({ documentId }: { documentId: string }) {
                   saveText(b, v);
                   if (v.startsWith("/")) setSlash({ id: b.id, query: v.slice(1) });
                   else if (slash?.id === b.id) setSlash(null);
+                  const mm = v.match(/@([^\s@]*)$/);
+                  if (mm) setMention({ id: b.id, query: mm[1] });
+                  else if (mention?.id === b.id) setMention(null);
                   e.target.style.height = "auto";
                   e.target.style.height = `${e.target.scrollHeight}px`;
                 }}
@@ -270,14 +286,25 @@ export function BlockEditor({ documentId }: { documentId: string }) {
                     if (e.key === "Escape") { e.preventDefault(); setSlash(null); return; }
                     if (e.key === "Enter") { e.preventDefault(); const opts = slashOptions(slash.query); if (opts[0]) pickType(b, opts[0].type); return; }
                   }
+                  if (mention?.id === b.id) {
+                    if (e.key === "Escape") { e.preventDefault(); setMention(null); return; }
+                    if (e.key === "Enter") { e.preventDefault(); const opts = mentionOptions(mention.query); if (opts[0]) pickMention(b, opts[0]); return; }
+                  }
                   onKeyDown(e, b);
                 }}
-                onBlur={() => { flush(b); setEditingId(null); setSlash(null); }}
+                onBlur={() => { flush(b); setEditingId(null); setSlash(null); setMention(null); }}
               />
               {slash?.id === b.id && slashOptions(slash.query).length > 0 && (
                 <div className="et-slash-menu">
                   {slashOptions(slash.query).map((t) => (
                     <button key={t.type} onMouseDown={(e) => { e.preventDefault(); pickType(b, t.type); }}>{t.label}</button>
+                  ))}
+                </div>
+              )}
+              {mention?.id === b.id && mentionOptions(mention.query).length > 0 && (
+                <div className="et-slash-menu">
+                  {mentionOptions(mention.query).map((w) => (
+                    <button key={w.id} onMouseDown={(e) => { e.preventDefault(); pickMention(b, w); }}>{w.icon ? `${w.icon} ` : "↗ "}{w.title}</button>
                   ))}
                 </div>
               )}

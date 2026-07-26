@@ -89,6 +89,9 @@ export interface Source {
 export interface SearchHit {
   entity_type: string; entity_id: string; title: string; snippet: string; workspace_id: string | null;
 }
+export interface Relationship {
+  id: string; source_type: string; source_id: string; target_type: string; target_id: string; type: string;
+}
 
 // Where a search hit navigates. Documents deep-open in their workspace tab.
 export function hitHref(h: SearchHit): string | null {

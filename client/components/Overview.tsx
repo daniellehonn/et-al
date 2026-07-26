@@ -1,7 +1,7 @@
 "use client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { api, type Workspace, type Task, type Health, type Objective } from "@/lib/api";
+import { api, type Workspace, type Task, type Health, type Objective, type Document, type Relationship } from "@/lib/api";
 import { EditableText, DeleteButton } from "./Editable";
 
 const FINITE_TYPES = ["project", "course"];
@@ -53,6 +53,7 @@ export function OverviewView({ id, workspace, setTab }: { id: string; workspace:
     ["text", "Text"],
     ["metric", "Metric"],
     ["image", "Image"],
+    ["backlinks", "Backlinks"],
     ...(finite ? ([["progress", "Progress"]] as Array<[string, string]>) : []),
   ];
 
@@ -139,6 +140,7 @@ function WidgetBody({ type, config, workspace, setTab, onConfigChange }: {
   if (type === "links") return <LinksWidget config={config} onChange={onConfigChange} />;
   if (type === "metric") return <MetricWidget config={config} onChange={onConfigChange} />;
   if (type === "image") return <ImageWidget config={config} onChange={onConfigChange} />;
+  if (type === "backlinks") return <BacklinksWidget workspaceId={workspace.id} />;
   return null;
 }
 
@@ -415,9 +417,37 @@ function ImageWidget({ config, onChange }: { config: Config; onChange?: (c: Conf
   );
 }
 
+// What references this workspace (documents that @-mention it, etc.).
+function BacklinksWidget({ workspaceId }: { workspaceId: string }) {
+  const { data: links } = useQuery({ queryKey: ["backlinks", workspaceId], queryFn: () => api.get<Relationship[]>(`/backlinks?type=workspace&id=${workspaceId}`) });
+  const rels = links ?? [];
+  if (rels.length === 0) return <div className="et-empty">Nothing links here yet. @-mention this workspace in a document.</div>;
+  return (
+    <div className="et-backlinks">
+      {rels.map((r) => <BacklinkRow key={r.id} rel={r} />)}
+    </div>
+  );
+}
+
+function BacklinkRow({ rel }: { rel: Relationship }) {
+  const isDoc = rel.source_type === "document";
+  const { data: doc } = useQuery({ queryKey: ["document", rel.source_id], queryFn: () => api.get<Document>(`/documents/${rel.source_id}`), enabled: isDoc });
+  const { data: workspaces } = useQuery({ queryKey: ["workspaces"], queryFn: () => api.get<Workspace[]>("/workspaces"), enabled: !isDoc });
+  if (isDoc) {
+    if (!doc) return <div className="et-backlink-row et-empty">…</div>;
+    return <a className="et-backlink-row" href={`/workspace/?id=${doc.workspace_id}&tab=Documents&doc=${doc.id}`}><span className="et-doc-icon serif">¶</span>{doc.title}</a>;
+  }
+  const w = (workspaces ?? []).find((x) => x.id === rel.source_id);
+  return <a className="et-backlink-row" href={`/workspace/?id=${rel.source_id}`}>{w?.icon ?? "↗"} {w?.title ?? rel.source_id}</a>;
+}
+
 function OverviewStyles() {
   return (
     <style>{`
+      .et-backlinks { display: flex; flex-direction: column; }
+      .et-backlink-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0; border-bottom: 1px solid var(--line); text-decoration: none; color: var(--ink); font-size: 0.9rem; }
+      .et-backlink-row:hover { color: var(--color-iris); }
+      .et-doc-icon { color: var(--color-iris); }
       .et-ov { display: flex; flex-direction: column; gap: 1.2rem; }
       .et-ov-grid { display: flex; flex-flow: row wrap; gap: 1.2rem; align-items: flex-start; }
       .et-widget-wrap { flex: 1 1 100%; min-width: 0; }
