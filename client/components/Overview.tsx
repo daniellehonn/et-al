@@ -1,5 +1,6 @@
 "use client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { api, type Workspace, type Task, type Health } from "@/lib/api";
 import { EditableText, DeleteButton } from "./Editable";
 
@@ -17,8 +18,30 @@ export function OverviewView({ id, workspace, setTab }: { id: string; workspace:
     mutationFn: (type: string) => api.post(`/workspaces/${id}/overview`, { type }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["overview", id] }),
   });
+  const reorder = useMutation({
+    mutationFn: ({ bid, position }: { bid: string; position: number }) => api.patch(`/overview/${bid}`, { position }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["overview", id] }),
+  });
   const finite = FINITE_TYPES.includes(workspace.type);
   const custom = blocks ?? [];
+
+  // Drag a widget by its handle and drop before another (or onto the end zone).
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
+  const dropBefore = (targetId: string | null) => {
+    if (dragId) {
+      let position: number;
+      if (targetId === null) {
+        position = (custom[custom.length - 1]?.position ?? 0) + 1; // end
+      } else {
+        const idx = custom.findIndex((b) => b.id === targetId);
+        const prev = custom[idx - 1];
+        position = prev ? (prev.position + custom[idx].position) / 2 : custom[idx].position - 1;
+      }
+      if (targetId !== dragId) reorder.mutate({ bid: dragId, position });
+    }
+    setDragId(null); setOverId(null);
+  };
 
   const addable: Array<[string, string]> = [
     ["table", "Table"],
@@ -31,7 +54,25 @@ export function OverviewView({ id, workspace, setTab }: { id: string; workspace:
   return (
     <div className="et-ov">
       {custom.length > 0 ? (
-        custom.map((b) => <Widget key={b.id} block={b} workspace={workspace} setTab={setTab} />)
+        <>
+          {custom.map((b) => (
+            <div key={b.id} className="et-widget-wrap" data-over={overId === b.id || undefined} data-dragging={dragId === b.id || undefined}
+              onDragOver={(e) => { if (dragId && dragId !== b.id) { e.preventDefault(); setOverId(b.id); } }}
+              onDragLeave={() => setOverId((c) => (c === b.id ? null : c))}
+              onDrop={(e) => { e.preventDefault(); dropBefore(b.id); }}>
+              <Widget block={b} workspace={workspace} setTab={setTab}
+                drag={{ onStart: () => setDragId(b.id), onEnd: () => { setDragId(null); setOverId(null); } }} />
+            </div>
+          ))}
+          {dragId && (
+            <div className="et-widget-endzone" data-over={overId === "__end" || undefined}
+              onDragOver={(e) => { e.preventDefault(); setOverId("__end"); }}
+              onDragLeave={() => setOverId((c) => (c === "__end" ? null : c))}
+              onDrop={(e) => { e.preventDefault(); dropBefore(null); }}>
+              Drop here to move to the end
+            </div>
+          )}
+        </>
       ) : (
         // No custom layout yet — show a smart default for the type, read-only.
         <div className="et-ov-default">
@@ -55,7 +96,7 @@ export function OverviewView({ id, workspace, setTab }: { id: string; workspace:
 }
 
 // ── a persisted, editable widget (title + remove + body) ─────────────────────
-function Widget({ block, workspace, setTab }: { block: OverviewBlock; workspace: Workspace; setTab: (t: string) => void }) {
+function Widget({ block, workspace, setTab, drag }: { block: OverviewBlock; workspace: Workspace; setTab: (t: string) => void; drag?: { onStart: () => void; onEnd: () => void } }) {
   const qc = useQueryClient();
   const config = parse(block);
   const invalidate = () => qc.invalidateQueries({ queryKey: ["overview", block.workspace_id] });
@@ -66,6 +107,7 @@ function Widget({ block, workspace, setTab }: { block: OverviewBlock; workspace:
   return (
     <section className="et-widget">
       <div className="et-widget-head">
+        {drag && <span className="et-widget-drag" draggable onDragStart={drag.onStart} onDragEnd={drag.onEnd} title="Drag to reorder">⠿</span>}
         <EditableText className="et-widget-title" value={String(config.title ?? "")} placeholder="Untitled widget"
           onSave={(title) => setConfig({ ...config, title })} />
         <DeleteButton onDelete={() => del.mutate()} confirm label="Remove widget" />
@@ -201,9 +243,16 @@ function OverviewStyles() {
       .et-ov { display: flex; flex-direction: column; gap: 1.2rem; }
       .et-ov-default { display: flex; flex-direction: column; gap: 1.4rem; }
       .et-ov-hint { color: var(--ink-faint); font-size: 0.85rem; font-style: italic; margin: 0.2rem 0 0; }
+      .et-widget-wrap { border-radius: 12px; transition: box-shadow 0.1s; }
+      .et-widget-wrap[data-dragging="true"] { opacity: 0.4; }
+      .et-widget-wrap[data-over="true"] { box-shadow: 0 -3px 0 -1px var(--color-iris); }
       .et-widget { border: 1px solid var(--line); border-radius: 12px; padding: 1.1rem 1.2rem; background: var(--paper-raised); }
       .et-widget-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.8rem; }
+      .et-widget-drag { cursor: grab; color: var(--ink-faint); font-size: 0.95rem; line-height: 1; user-select: none; }
+      .et-widget-drag:hover { color: var(--ink); }
       .et-widget-title { font-weight: 500; font-size: 1rem; flex: 1; }
+      .et-widget-endzone { border: 1px dashed var(--line-strong); border-radius: 10px; padding: 0.7rem; text-align: center; color: var(--ink-faint); font-size: 0.82rem; }
+      .et-widget-endzone[data-over="true"] { border-color: var(--color-iris); border-style: solid; background: var(--color-iris-soft); color: var(--color-iris); }
       .et-ov-add { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; padding-top: 0.4rem; }
       .et-ov-add button { background: none; border: 1px dashed var(--line-strong); border-radius: 8px; color: var(--ink-soft); font: inherit; font-size: 0.82rem; padding: 0.3rem 0.7rem; cursor: pointer; }
       .et-ov-add button:hover { border-color: var(--color-iris); color: var(--color-iris); border-style: solid; }
