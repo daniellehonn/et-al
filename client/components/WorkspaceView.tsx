@@ -117,6 +117,7 @@ function Tasks({ id }: { id: string }) {
     onToggle: (t: Task) => toggle.mutate(t),
     onRename: (tid: string, tt: string) => patch.mutate({ tid, body: { title: tt } }),
     onReassign: (tid: string, oid: string | null) => patch.mutate({ tid, body: { objective_id: oid } }),
+    onSetDue: (tid: string, ms: number | null) => patch.mutate({ tid, body: { due_date: ms } }),
     onDelete: (tid: string) => del.mutate(tid),
   };
 
@@ -163,11 +164,14 @@ function Tasks({ id }: { id: string }) {
   );
 }
 
-function TaskRow({ task, objectives, showObjective, onToggle, onRename, onReassign, onDelete }: {
+const dueToInput = (ms: number | null) => { if (!ms) return ""; const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+
+function TaskRow({ task, objectives, showObjective, onToggle, onRename, onReassign, onSetDue, onDelete }: {
   task: Task; objectives: Objective[]; showObjective?: boolean;
   onToggle: (t: Task) => void; onRename: (tid: string, title: string) => void;
-  onReassign: (tid: string, oid: string | null) => void; onDelete: (tid: string) => void;
+  onReassign: (tid: string, oid: string | null) => void; onSetDue: (tid: string, ms: number | null) => void; onDelete: (tid: string) => void;
 }) {
+  const overdue = task.due_date && task.due_date < Date.now() && task.status !== "done";
   return (
     <div className="et-task-row" data-done={task.status === "done" || undefined}>
       <button className="et-check-btn" aria-label="Toggle done" onClick={() => onToggle(task)}>
@@ -175,6 +179,9 @@ function TaskRow({ task, objectives, showObjective, onToggle, onRename, onReassi
       </button>
       {task.status !== "done" && <span className="et-prio" data-p={task.priority} />}
       <EditableText className="et-task-title" value={task.title} onSave={(t) => onRename(task.id, t)} />
+      <input type="date" className="et-task-due" data-set={task.due_date ? true : undefined} data-overdue={overdue || undefined}
+        value={dueToInput(task.due_date)} title="Due date"
+        onChange={(e) => onSetDue(task.id, e.target.value ? new Date(`${e.target.value}T00:00:00`).getTime() : null)} />
       {showObjective && (
         <select className="et-task-obj" value={task.objective_id ?? ""} aria-label="Objective"
           onChange={(e) => onReassign(task.id, e.target.value || null)}>
@@ -187,10 +194,10 @@ function TaskRow({ task, objectives, showObjective, onToggle, onRename, onReassi
   );
 }
 
-function ObjectiveSection({ workspaceId, objective, tasks, invalidate, addTask, objectives, onToggle, onRename, onReassign, onDelete }: {
+function ObjectiveSection({ workspaceId, objective, tasks, invalidate, addTask, objectives, onToggle, onRename, onReassign, onSetDue, onDelete }: {
   workspaceId: string; objective: Objective | null; tasks: Task[]; invalidate: () => void; addTask: (title: string) => void;
   objectives: Objective[]; onToggle: (t: Task) => void; onRename: (tid: string, title: string) => void;
-  onReassign: (tid: string, oid: string | null) => void; onDelete: (tid: string) => void;
+  onReassign: (tid: string, oid: string | null) => void; onSetDue: (tid: string, ms: number | null) => void; onDelete: (tid: string) => void;
 }) {
   const qc = useQueryClient();
   const [taskTitle, setTaskTitle] = useState("");
@@ -215,7 +222,7 @@ function ObjectiveSection({ workspaceId, objective, tasks, invalidate, addTask, 
       </div>
       <div className="et-obj-tasks">
         {[...open, ...done].map((t) => (
-          <TaskRow key={t.id} task={t} objectives={objectives} onToggle={onToggle} onRename={onRename} onReassign={onReassign} onDelete={onDelete} />
+          <TaskRow key={t.id} task={t} objectives={objectives} onToggle={onToggle} onRename={onRename} onReassign={onReassign} onSetDue={onSetDue} onDelete={onDelete} />
         ))}
         <QuickAdd value={taskTitle} setValue={setTaskTitle} onAdd={() => taskTitle.trim() && (addTask(taskTitle), setTaskTitle(""))} placeholder={objective ? "Add a task to this objective" : "Add an unassigned task"} pending={false} />
       </div>
@@ -445,6 +452,9 @@ function WorkspaceStyles() {
       .et-seg button[data-on="true"] { background: var(--color-iris); color: #fff; }
       .et-task-obj { opacity: 0; background: none; border: 1px solid var(--line); border-radius: 6px; font: inherit; font-size: 0.78rem; color: var(--ink-faint); padding: 0.1rem 0.3rem; max-width: 9rem; transition: opacity 0.12s; }
       .et-task-row:hover .et-task-obj, .et-task-obj:focus { opacity: 1; }
+      .et-task-due { opacity: 0; background: none; border: 1px solid var(--line); border-radius: 6px; font: inherit; font-size: 0.78rem; color: var(--ink-soft); padding: 0.1rem 0.3rem; transition: opacity 0.12s; color-scheme: light dark; }
+      .et-task-row:hover .et-task-due, .et-task-due:focus, .et-task-due[data-set] { opacity: 1; }
+      .et-task-due[data-overdue] { color: #c0392b; border-color: color-mix(in srgb, #c0392b 40%, transparent); }
       .et-obj-none { color: var(--ink-faint); font-style: italic; }
       .et-obj-group { margin-bottom: 1.6rem; }
       .et-obj-head { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0; border-bottom: 1px solid var(--line-strong); }

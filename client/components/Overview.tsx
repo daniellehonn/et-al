@@ -1,7 +1,7 @@
 "use client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { api, type Workspace, type Task, type Health } from "@/lib/api";
+import { api, type Workspace, type Task, type Health, type Objective } from "@/lib/api";
 import { EditableText, DeleteButton } from "./Editable";
 
 const FINITE_TYPES = ["project", "course"];
@@ -46,6 +46,7 @@ export function OverviewView({ id, workspace, setTab }: { id: string; workspace:
   const addable: Array<[string, string]> = [
     ["table", "Table"],
     ["child_progress", "Child progress"],
+    ["objective_progress", "Objective progress"],
     ["tasks", "Tasks"],
     ["deadlines", "Deadlines"],
     ["links", "Links"],
@@ -130,6 +131,7 @@ function WidgetBody({ type, config, workspace, setTab, onConfigChange }: {
 }) {
   if (type === "table") return <TableWidget config={config} onChange={onConfigChange} />;
   if (type === "child_progress") return <ChildProgressWidget workspaceId={workspace.id} type={workspace.type} config={config} onChange={onConfigChange} />;
+  if (type === "objective_progress") return <ObjectiveProgressWidget workspaceId={workspace.id} />;
   if (type === "tasks") return <TasksWidget workspaceId={workspace.id} setTab={setTab} config={config} onChange={onConfigChange} />;
   if (type === "text") return <TextWidget config={config} onChange={onConfigChange} />;
   if (type === "progress") return <ProgressWidget workspaceId={workspace.id} workspace={workspace} />;
@@ -267,12 +269,21 @@ function ChildProgressWidget({ workspaceId, type, config, onChange }: { workspac
 
 function TasksWidget({ workspaceId, setTab, config, onChange }: { workspaceId: string; setTab: (t: string) => void; config?: Config; onChange?: (c: Config) => void }) {
   const { data: tasks } = useQuery({ queryKey: ["tasks", workspaceId], queryFn: () => api.get<Task[]>(`/workspaces/${workspaceId}/tasks`) });
+  const { data: objectives } = useQuery({ queryKey: ["objectives", workspaceId], queryFn: () => api.get<Objective[]>(`/workspaces/${workspaceId}/objectives`) });
   const filter = String(config?.status_filter ?? "open");
-  const shown = (tasks ?? []).filter((t) => filter === "all" ? true : filter === "done" ? t.status === "done" : t.status !== "done");
+  const objFilter = String(config?.objective_id ?? "");
+  const shown = (tasks ?? [])
+    .filter((t) => filter === "all" ? true : filter === "done" ? t.status === "done" : t.status !== "done")
+    .filter((t) => !objFilter || (objFilter === "none" ? !t.objective_id : t.objective_id === objFilter));
   const opts = onChange && (
     <div className="et-w-opts">
       <select value={filter} onChange={(e) => onChange({ ...config, status_filter: e.target.value })} aria-label="Filter">
         <option value="open">Open</option><option value="all">All</option><option value="done">Done</option>
+      </select>
+      <select value={objFilter} onChange={(e) => onChange({ ...config, objective_id: e.target.value })} aria-label="Objective">
+        <option value="">Any objective</option>
+        <option value="none">No objective</option>
+        {(objectives ?? []).map((o) => <option key={o.id} value={o.id}>{o.title}</option>)}
       </select>
     </div>
   );
@@ -301,6 +312,29 @@ function ProgressWidget({ workspaceId, workspace }: { workspaceId: string; works
     <div>
       <div className="et-progress-head"><span className="eyebrow">Toward done</span><span className="et-progress-frac">{done} / {all.length} tasks</span></div>
       <div className="et-progress-bar"><span style={{ width: `${pct}%` }} /></div>
+    </div>
+  );
+}
+
+// A progress bar per objective, from its tasks' completion.
+function ObjectiveProgressWidget({ workspaceId }: { workspaceId: string }) {
+  const { data: objectives } = useQuery({ queryKey: ["objectives", workspaceId], queryFn: () => api.get<Objective[]>(`/workspaces/${workspaceId}/objectives`) });
+  const { data: tasks } = useQuery({ queryKey: ["tasks", workspaceId], queryFn: () => api.get<Task[]>(`/workspaces/${workspaceId}/tasks`) });
+  if ((objectives ?? []).length === 0) return <div className="et-empty">No objectives yet.</div>;
+  return (
+    <div className="et-childprog">
+      {(objectives ?? []).map((o) => {
+        const ts = (tasks ?? []).filter((t) => t.objective_id === o.id);
+        const done = ts.filter((t) => t.status === "done").length;
+        const pct = ts.length ? Math.round((done / ts.length) * 100) : 0;
+        return (
+          <div key={o.id} className="et-childprog-row" style={{ cursor: "default" }}>
+            <span className="et-childprog-name">{o.title}</span>
+            <span className="et-childprog-bar"><span style={{ width: `${pct}%`, background: pct === 100 ? "var(--color-sage)" : "var(--color-iris)" }} /></span>
+            <span className="eyebrow et-childprog-pct">{ts.length ? `${pct}%` : "—"}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -14,7 +14,7 @@ export interface OverviewBlock {
   updated_at: number;
 }
 
-const WIDGET_TYPES = ["table", "child_progress", "tasks", "text", "progress", "deadlines", "links", "metric", "image"];
+const WIDGET_TYPES = ["table", "child_progress", "objective_progress", "tasks", "text", "progress", "deadlines", "links", "metric", "image"];
 
 // Sensible starter config per widget type.
 function defaultConfig(type: string): unknown {
@@ -22,6 +22,7 @@ function defaultConfig(type: string): unknown {
     case "table":
       return { title: "Table", columns: [{ id: "c1", name: "Name", type: "text" }, { id: "c2", name: "Status", type: "status" }], rows: [] };
     case "child_progress": return { title: "Progress" };
+    case "objective_progress": return { title: "Objective progress" };
     case "tasks": return { title: "Open tasks" };
     case "text": return { title: "Notes", text: "" };
     case "progress": return { title: "Progress toward done" };

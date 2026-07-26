@@ -9,15 +9,26 @@ import { EditableText, DeleteButton } from "./Editable";
 // blocks directly via /blocks; agents propose patches, surfaced here as
 // Accept/Reject. Text edits debounce-save; structural ops refetch to learn the
 // server-assigned ids.
-const TYPE_MENU: Array<{ type: string; label: string }> = [
+const TYPE_MENU: Array<{ type: string; label: string; kw?: string }> = [
   { type: "paragraph", label: "Text" },
-  { type: "heading", label: "Heading" },
-  { type: "bullet", label: "Bulleted" },
-  { type: "todo", label: "To-do" },
+  { type: "heading", label: "Heading", kw: "h1 title" },
+  { type: "bullet", label: "Bulleted list", kw: "ul" },
+  { type: "numbered", label: "Numbered list", kw: "ol" },
+  { type: "todo", label: "To-do", kw: "checkbox task" },
   { type: "quote", label: "Quote" },
   { type: "code", label: "Code" },
-  { type: "divider", label: "Divider" },
+  { type: "divider", label: "Divider", kw: "hr line" },
+  { type: "table", label: "Table" },
+  { type: "embed", label: "Embed", kw: "iframe url video" },
 ];
+
+// The default content a block gets when its type changes.
+function defaultContentFor(type: string, keepText: string): Record<string, unknown> {
+  if (type === "table") return { columns: [{ id: "c1", name: "Name", type: "text" }, { id: "c2", name: "Status", type: "status" }], rows: [] };
+  if (type === "embed") return { url: "" };
+  if (type === "divider") return { text: "" };
+  return { text: keepText };
+}
 
 // Render inline markdown: **bold**, *italic*/_italic_, `code`, [text](url).
 // Bold is matched before italic so ** wins over *.
@@ -36,6 +47,8 @@ function renderInline(src: string): React.ReactNode {
   if (last < src.length) nodes.push(src.slice(last));
   return nodes;
 }
+
+function embedUrl(contentJson: string): string { try { return String(JSON.parse(contentJson).url ?? ""); } catch { return ""; } }
 
 export function BlockEditor({ documentId }: { documentId: string }) {
   const qc = useQueryClient();
@@ -122,11 +135,18 @@ export function BlockEditor({ documentId }: { documentId: string }) {
   };
 
   const changeType = (b: Block, type: string) => {
-    if (type === "divider") {
-      applyOps([{ op: "update", id: b.id, type, content: { text: "" } }]);
-    } else {
-      applyOps([{ op: "update", id: b.id, type, content: { text: text[b.id] ?? "" } }]);
-    }
+    applyOps([{ op: "update", id: b.id, type, content: defaultContentFor(type, text[b.id] ?? "") }]);
+    if (["divider", "table", "embed"].includes(type)) setEditingId(null);
+  };
+
+  // Slash menu: typing "/" at the start of an empty-ish block opens a type picker.
+  const [slash, setSlash] = useState<{ id: string; query: string } | null>(null);
+  const slashOptions = (q: string) => TYPE_MENU.filter((t) => `${t.label} ${t.type} ${t.kw ?? ""}`.toLowerCase().includes(q.toLowerCase()));
+  const pickType = (b: Block, type: string) => {
+    setSlash(null);
+    setText((s) => ({ ...s, [b.id]: "" }));
+    applyOps([{ op: "update", id: b.id, type, content: defaultContentFor(type, "") }]);
+    if (["divider", "table", "embed"].includes(type)) setEditingId(null);
   };
 
   const resolvePatch = async (p: DocumentPatch, accept: boolean) => {
@@ -177,23 +197,53 @@ export function BlockEditor({ documentId }: { documentId: string }) {
           ) : b.type === "table" ? (
             <DocTableBlock contentJson={b.content_json}
               onSave={(content) => applyOps([{ op: "update", id: b.id, type: "table", content }])} />
+          ) : b.type === "embed" ? (
+            editingId === b.id ? (
+              <input className="et-embed-url" defaultValue={embedUrl(b.content_json)} autoFocus placeholder="Paste a URL to embed…"
+                onBlur={(e) => { applyOps([{ op: "update", id: b.id, type: "embed", content: { url: e.target.value.trim() } }]); setEditingId(null); }}
+                onKeyDown={(e) => { if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur(); }} />
+            ) : embedUrl(b.content_json) ? (
+              <div className="et-embed">
+                <iframe src={embedUrl(b.content_json)} className="et-embed-iframe" title="embed" loading="lazy" allow="fullscreen" />
+                <button className="et-embed-edit-btn" onClick={() => setEditingId(b.id)}>edit URL</button>
+              </div>
+            ) : (
+              <div className="et-block-render" data-empty onClick={() => setEditingId(b.id)}>Empty embed — click to add a URL</div>
+            )
           ) : editingId === b.id ? (
-            <textarea
-              id={`blk-${b.id}`}
-              className="et-block-input"
-              rows={1}
-              value={text[b.id] ?? ""}
-              placeholder={b.type === "heading" ? "Heading" : "Type, or ⋮⋮ to change type. **bold**, *italic*, `code` supported"}
-              onChange={(e) => {
-                const v = e.target.value;
-                setText((s) => ({ ...s, [b.id]: v }));
-                saveText(b, v);
-                e.target.style.height = "auto";
-                e.target.style.height = `${e.target.scrollHeight}px`;
-              }}
-              onKeyDown={(e) => onKeyDown(e, b)}
-              onBlur={() => { flush(b); setEditingId(null); }}
-            />
+            <>
+              <textarea
+                id={`blk-${b.id}`}
+                className="et-block-input"
+                rows={1}
+                value={text[b.id] ?? ""}
+                placeholder={b.type === "heading" ? "Heading" : "Type '/' for blocks, or ⋮⋮. **bold**, *italic*, `code`"}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setText((s) => ({ ...s, [b.id]: v }));
+                  saveText(b, v);
+                  if (v.startsWith("/")) setSlash({ id: b.id, query: v.slice(1) });
+                  else if (slash?.id === b.id) setSlash(null);
+                  e.target.style.height = "auto";
+                  e.target.style.height = `${e.target.scrollHeight}px`;
+                }}
+                onKeyDown={(e) => {
+                  if (slash?.id === b.id) {
+                    if (e.key === "Escape") { e.preventDefault(); setSlash(null); return; }
+                    if (e.key === "Enter") { e.preventDefault(); const opts = slashOptions(slash.query); if (opts[0]) pickType(b, opts[0].type); return; }
+                  }
+                  onKeyDown(e, b);
+                }}
+                onBlur={() => { flush(b); setEditingId(null); setSlash(null); }}
+              />
+              {slash?.id === b.id && slashOptions(slash.query).length > 0 && (
+                <div className="et-slash-menu">
+                  {slashOptions(slash.query).map((t) => (
+                    <button key={t.type} onMouseDown={(e) => { e.preventDefault(); pickType(b, t.type); }}>{t.label}</button>
+                  ))}
+                </div>
+              )}
+            </>
           ) : b.type === "code" ? (
             <pre className="et-block-render et-render-code" onClick={() => setEditingId(b.id)}>{text[b.id] || ""}</pre>
           ) : (
@@ -285,7 +335,16 @@ function EditorStyles() {
 
       .et-add-first { background: none; border: none; color: var(--ink-faint); font: inherit; font-style: italic; cursor: text; padding: 0.4rem 0; }
 
-      .et-block { display: grid; grid-template-columns: 1.4rem 1fr; align-items: start; }
+      .et-block { display: grid; grid-template-columns: 1.4rem 1fr; align-items: start; position: relative; }
+      .et-slash-menu { position: absolute; z-index: 30; left: 1.4rem; margin-top: 0.1rem; background: var(--paper-raised); border: 1px solid var(--line-strong); border-radius: 9px; padding: 0.3rem; display: flex; flex-direction: column; min-width: 10rem; box-shadow: 0 8px 24px rgba(0,0,0,0.16); max-height: 16rem; overflow-y: auto; }
+      .et-slash-menu button { text-align: left; background: none; border: none; font: inherit; font-size: 0.88rem; color: var(--ink-soft); padding: 0.34rem 0.5rem; border-radius: 6px; cursor: pointer; }
+      .et-slash-menu button:hover, .et-slash-menu button:first-child { background: var(--color-iris-soft); color: var(--ink); }
+      .et-embed { position: relative; margin: 0.4rem 0; }
+      .et-embed-iframe { width: 100%; height: 24rem; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-raised); }
+      .et-embed-edit-btn { position: absolute; top: 0.5rem; right: 0.5rem; background: var(--paper); border: 1px solid var(--line-strong); border-radius: 6px; font: inherit; font-size: 0.75rem; color: var(--ink-soft); padding: 0.15rem 0.5rem; cursor: pointer; opacity: 0; transition: opacity 0.12s; }
+      .et-embed:hover .et-embed-edit-btn { opacity: 1; }
+      .et-embed-url { width: 100%; background: var(--paper-raised); border: 1px solid var(--color-iris); border-radius: 8px; padding: 0.5rem 0.7rem; font: inherit; font-size: 0.9rem; color: var(--ink); }
+      .et-embed-url:focus { outline: none; }
       .et-block-gutter { opacity: 0; transition: opacity 0.12s; padding-top: 0.35rem; }
       .et-block:hover .et-block-gutter, .et-block:focus-within .et-block-gutter { opacity: 1; }
       .et-type-menu { position: relative; }
