@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, blockText, type Block, type BlockOp, type DocumentPatch, type Workspace, type Document } from "@/lib/api";
 import { EditableText, DeleteButton } from "./Editable";
 import { WidgetBlock, TableWidget, WidgetStyles } from "./Overview";
+import { useDragReorder } from "@/lib/dnd";
 
 const WIDGET_TYPES = new Set(["tasks", "deadlines", "child_progress", "objective_progress", "progress", "backlinks", "metric", "links", "career_summary"]);
 function parseContent(json: string): Record<string, unknown> { try { return JSON.parse(json); } catch { return {}; } }
@@ -147,9 +148,26 @@ function ProjectBlock({ contentJson, onSave }: { contentJson: string; onSave: (c
         {c.role && <span className="et-role-at">·</span>}
         <EditableText className="et-role-company" value={c.role ?? ""} placeholder="your role" onSave={(v) => onSave({ ...c, role: v })} />
       </div>
-      {field("tech", "Tech")}
+      <div className="et-star-field">
+        <span className="et-star-label">Tech</span>
+        <EditableText multiline value={c.tech ?? ""} placeholder="Tech… (comma separated)" onSave={(v) => onSave({ ...c, tech: v })}
+          render={c.tech ? (
+            <span className="et-pills">
+              {c.tech.split(",").map((t) => t.trim()).filter(Boolean).map((t, i) => (
+                <span key={i} className="et-pill">{t}</span>
+              ))}
+            </span>
+          ) : undefined} />
+      </div>
       {field("outcome", "Outcome")}
-      {field("link", "Link")}
+      <div className="et-star-field">
+        <span className="et-star-label">Link</span>
+        <EditableText value={c.link ?? ""} placeholder="https://…" onSave={(v) => onSave({ ...c, link: v })}
+          render={c.link ? (
+            <a className="et-project-link" href={/^https?:\/\//.test(c.link) ? c.link : `https://${c.link}`}
+              target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{c.link}</a>
+          ) : undefined} />
+      </div>
     </div>
   );
 }
@@ -299,6 +317,17 @@ export function BlockEditor({ documentId }: { documentId: string }) {
     finally { qc.invalidateQueries({ queryKey: ["blocks", documentId] }); }
   }, [documentId, qc, onWriteError]);
 
+  // Drag a block by its ⣿ handle to drop it before another block.
+  const dnd = useDragReorder();
+  const moveBefore = useCallback((dragId: string, targetId: string) => {
+    if (!blocks) return;
+    const ids = blocks.map((b) => b.id);
+    const to = ids.indexOf(targetId);
+    if (to < 0) return;
+    const after = to === 0 ? null : ids[to - 1] === dragId ? (to >= 2 ? ids[to - 2] : null) : ids[to - 1];
+    applyOps([{ op: "move", id: dragId, after }]);
+  }, [blocks, applyOps]);
+
   // Delete a block reliably: remove it from the cache immediately (optimistic),
   // then persist. The block vanishes on click regardless of any re-render.
   const deleteBlock = useCallback((id: string) => {
@@ -405,8 +434,11 @@ export function BlockEditor({ documentId }: { documentId: string }) {
       )}
 
       {blocks?.map((b) => (
-        <div key={b.id} className="et-block" data-type={b.type} data-ai={!!b.is_ai}>
+        <div key={b.id} className="et-block" data-type={b.type} data-ai={!!b.is_ai}
+          data-dragging={dnd.dragId === b.id || undefined}
+          {...dnd.dropProps(b.id, (dragId) => moveBefore(dragId, b.id))}>
           <div className="et-block-gutter">
+            <span className="et-block-drag" title="Drag to reorder" aria-label="Drag to reorder" {...dnd.dragProps(b.id)}>⣿</span>
             <details className="et-type-menu">
               <summary aria-label="Change block type" title="Change type">⋮⋮</summary>
               <div className="et-type-list">
@@ -640,6 +672,9 @@ function EditorStyles() {
       .et-star-label { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-faint); }
       .et-star-bullet { margin-top: 0.4rem; padding-top: 0.4rem; border-top: 1px solid var(--line); }
       .et-star-bullet .et-star-label { color: var(--color-iris); }
+      .et-pills { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+      .et-pill { display: inline-block; padding: 0.1rem 0.5rem; font-size: 0.8rem; border-radius: 999px; background: var(--surface-sunk, rgba(120,120,140,0.12)); border: 1px solid var(--line); color: var(--ink); white-space: nowrap; }
+      .et-project-link { color: var(--color-iris); word-break: break-all; }
       .et-rbullet { display: flex; gap: 0.5rem; }
       .et-rbullet-dot { color: var(--color-iris); font-size: 1.1rem; line-height: 1.4; }
       .et-rbullet-body { flex: 1; min-width: 0; }
@@ -659,6 +694,10 @@ function EditorStyles() {
       .et-block:has(.et-type-menu[open]) .et-block-gutter { opacity: 1; }
       .et-type-menu summary { padding: 0.1rem 0.15rem; }
       .et-block-gutter { display: flex; flex-direction: column; align-items: center; gap: 0.1rem; }
+      .et-block-drag { color: var(--ink-faint); font-size: 0.8rem; line-height: 1; cursor: grab; user-select: none; padding: 0.1rem; }
+      .et-block-drag:active { cursor: grabbing; }
+      .et-block[data-dragging] { opacity: 0.4; }
+      .et-block[data-over] { box-shadow: inset 0 2px 0 0 var(--color-iris); }
       .et-block-del { background: none; border: none; color: var(--ink-faint); font-size: 1.05rem; line-height: 1; cursor: pointer; padding: 0 0.1rem; border-radius: 4px; }
       .et-block-del:hover { color: #c0392b; background: color-mix(in srgb, #c0392b 12%, transparent); }
       .et-type-menu { position: relative; }
