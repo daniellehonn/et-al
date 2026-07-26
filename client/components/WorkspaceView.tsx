@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api, type Workspace, type Task, type Objective, type Document, type Decision, type RecentEvent } from "@/lib/api";
 import { BlockEditor } from "./BlockEditor";
 import { EditableText, DeleteButton } from "./Editable";
+import { EmojiPicker } from "./EmojiPicker";
 import { OverviewView } from "./Overview";
 
 const TABS = ["Overview", "Tasks", "Documents", "Decisions", "Timeline"] as const;
@@ -52,7 +53,7 @@ export function WorkspaceView({ id, initialTab, initialDoc }: { id: string; init
           ))}
         </div>
         <div className="et-title-row">
-          <EditableText className="et-page-icon" value={workspace.icon ?? ""} placeholder="＋" onSave={(icon) => patchWs.mutate({ icon })} />
+          <span className="et-page-icon"><EmojiPicker value={workspace.icon ?? ""} onPick={(icon) => patchWs.mutate({ icon })} /></span>
           <EditableText as="h1" className="serif et-ws-title" value={workspace.title}
             onSave={(title) => patchWs.mutate({ title })} />
           {!workspace.cover && <button className="et-add-cover" onClick={() => { const u = prompt("Cover image URL"); if (u) patchWs.mutate({ cover: u.trim() }); }}>Add cover</button>}
