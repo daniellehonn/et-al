@@ -18,6 +18,8 @@ const TYPE_MENU: Array<{ type: string; label: string; kw?: string }> = [
   { type: "quote", label: "Quote" },
   { type: "code", label: "Code" },
   { type: "callout", label: "Callout", kw: "note info box" },
+  { type: "toggle", label: "Toggle", kw: "collapse expand accordion" },
+  { type: "columns", label: "Columns", kw: "layout side" },
   { type: "divider", label: "Divider", kw: "hr line" },
   { type: "table", label: "Table" },
   { type: "image", label: "Image", kw: "picture photo" },
@@ -30,6 +32,8 @@ function defaultContentFor(type: string, keepText: string): Record<string, unkno
   if (type === "table") return { columns: [{ id: "c1", name: "Name", type: "text" }, { id: "c2", name: "Status", type: "status" }], rows: [] };
   if (type === "embed") return { url: "" };
   if (type === "image") return { url: "", caption: "" };
+  if (type === "toggle") return { text: keepText, body: "" };
+  if (type === "columns") return { cols: [keepText, ""] };
   if (type === "divider" || type === "toc") return { text: "" };
   return { text: keepText };
 }
@@ -53,6 +57,50 @@ function renderInline(src: string): React.ReactNode {
 }
 
 function embedUrl(contentJson: string): string { try { return String(JSON.parse(contentJson).url ?? ""); } catch { return ""; } }
+
+// A collapsible toggle: an editable summary + a collapsible markdown body.
+function ToggleBlock({ contentJson, onSave }: { contentJson: string; onSave: (content: Record<string, unknown>) => void }) {
+  let c: { text?: string; body?: string }; try { c = JSON.parse(contentJson); } catch { c = {}; }
+  const [open, setOpen] = useState(false);
+  const body = c.body ?? "";
+  return (
+    <div className="et-toggle">
+      <div className="et-toggle-head">
+        <button className="et-toggle-caret" onClick={() => setOpen((o) => !o)} aria-label={open ? "Collapse" : "Expand"}>{open ? "▾" : "▸"}</button>
+        <EditableText className="et-toggle-summary" value={c.text ?? ""} placeholder="Toggle" onSave={(t) => onSave({ ...c, text: t })} />
+      </div>
+      {open && (
+        <div className="et-toggle-body">
+          <EditableText multiline value={body} placeholder="Empty. Click to add content." onSave={(t) => onSave({ ...c, body: t })}
+            render={body ? <span className="et-inline-wrap">{renderInline(body)}</span> : undefined} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Side-by-side markdown columns.
+function ColumnsBlock({ contentJson, onSave }: { contentJson: string; onSave: (content: Record<string, unknown>) => void }) {
+  let c: { cols?: string[] }; try { c = JSON.parse(contentJson); } catch { c = {}; }
+  const cols = c.cols ?? ["", ""];
+  const setCol = (i: number, v: string) => onSave({ ...c, cols: cols.map((x, ix) => (ix === i ? v : x)) });
+  return (
+    <div className="et-columns-wrap">
+      <div className="et-columns" style={{ gridTemplateColumns: `repeat(${cols.length}, minmax(0, 1fr))` }}>
+        {cols.map((col, i) => (
+          <div key={i} className="et-column">
+            <EditableText multiline value={col} placeholder="Empty column" onSave={(v) => setCol(i, v)}
+              render={col ? <span className="et-inline-wrap">{renderInline(col)}</span> : undefined} />
+          </div>
+        ))}
+      </div>
+      <div className="et-columns-ctl">
+        {cols.length < 4 && <button onClick={() => onSave({ ...c, cols: [...cols, ""] })}>+ column</button>}
+        {cols.length > 1 && <button onClick={() => onSave({ ...c, cols: cols.slice(0, -1) })}>− column</button>}
+      </div>
+    </div>
+  );
+}
 
 // Table of contents: links to the document's heading blocks.
 function TocBlock({ blocks }: { blocks: Block[] }) {
@@ -161,7 +209,7 @@ export function BlockEditor({ documentId }: { documentId: string }) {
 
   const changeType = (b: Block, type: string) => {
     applyOps([{ op: "update", id: b.id, type, content: defaultContentFor(type, text[b.id] ?? "") }]);
-    if (["divider", "table", "embed", "toc"].includes(type)) setEditingId(null);
+    if (["divider", "table", "embed", "toc", "toggle", "columns"].includes(type)) setEditingId(null);
   };
 
   // Slash menu: typing "/" at the start of an empty-ish block opens a type picker.
@@ -261,6 +309,10 @@ export function BlockEditor({ documentId }: { documentId: string }) {
             )
           ) : b.type === "toc" ? (
             <TocBlock blocks={blocks ?? []} />
+          ) : b.type === "toggle" ? (
+            <ToggleBlock contentJson={b.content_json} onSave={(content) => applyOps([{ op: "update", id: b.id, type: "toggle", content }])} />
+          ) : b.type === "columns" ? (
+            <ColumnsBlock contentJson={b.content_json} onSave={(content) => applyOps([{ op: "update", id: b.id, type: "columns", content }])} />
           ) : editingId === b.id ? (
             <>
               <textarea
@@ -421,6 +473,19 @@ function EditorStyles() {
       .et-toc-item { text-align: left; background: none; border: none; font: inherit; font-size: 0.9rem; color: var(--ink-soft); padding: 0.2rem 0; cursor: pointer; }
       .et-toc-item:hover { color: var(--color-iris); }
       .et-toc-empty { color: var(--ink-faint); font-style: italic; font-size: 0.88rem; padding: 0.3rem 0; }
+      .et-toggle { margin: 0.15rem 0; }
+      .et-toggle-head { display: flex; align-items: baseline; gap: 0.4rem; }
+      .et-toggle-caret { background: none; border: none; color: var(--ink-soft); cursor: pointer; font-size: 0.75rem; padding: 0.1rem; line-height: 1.6; }
+      .et-toggle-summary { flex: 1; font-weight: 500; }
+      .et-toggle-body { margin: 0.2rem 0 0.2rem 1.3rem; padding-left: 0.6rem; border-left: 2px solid var(--line); color: var(--ink-soft); white-space: pre-wrap; }
+      .et-columns-wrap { margin: 0.3rem 0; }
+      .et-columns { display: grid; gap: 1rem; }
+      .et-column { min-width: 0; border: 1px dashed var(--line); border-radius: 8px; padding: 0.5rem 0.6rem; white-space: pre-wrap; }
+      .et-columns-ctl { display: flex; gap: 0.6rem; margin-top: 0.3rem; opacity: 0; transition: opacity 0.12s; }
+      .et-block:hover .et-columns-ctl { opacity: 1; }
+      .et-columns-ctl button { background: none; border: none; color: var(--ink-faint); font: inherit; font-size: 0.78rem; cursor: pointer; }
+      .et-columns-ctl button:hover { color: var(--color-iris); }
+      .et-inline-wrap { white-space: pre-wrap; }
       .et-block-gutter { opacity: 0; transition: opacity 0.12s; padding-top: 0.35rem; }
       .et-block:hover .et-block-gutter, .et-block:focus-within .et-block-gutter { opacity: 1; }
       /* Keep the menu visible (and clickable) while it's open, even if the block loses hover. */

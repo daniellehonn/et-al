@@ -42,7 +42,7 @@ export const TASK_STATUSES = ["todo", "doing", "blocked", "done"] as const;
 export const DOCUMENT_TYPES = ["design", "architecture", "roadmap", "readme", "note", "free"] as const;
 export const DOCUMENT_STATUSES = ["draft", "active", "archived"] as const;
 export const BLOCK_TYPES = [
-  "paragraph", "heading", "bullet", "numbered", "todo", "code", "quote", "divider", "image", "table", "embed", "callout", "toc",
+  "paragraph", "heading", "bullet", "numbered", "todo", "code", "quote", "divider", "image", "table", "embed", "callout", "toc", "toggle", "columns",
 ] as const;
 
 export const SOURCE_KINDS = [
