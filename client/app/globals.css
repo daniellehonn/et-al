@@ -73,3 +73,14 @@ body {
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* ── Shared component primitives (were duplicated across views) ─────────────── */
+.et-empty { color: var(--ink-faint); font-style: italic; font-size: 0.9rem; padding: 0.5rem 0; }
+
+.et-prio { width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); flex: none; }
+.et-prio[data-p="2"] { background: var(--color-amber); }
+.et-prio[data-p="3"] { background: var(--color-iris); }
+
+.et-seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
+.et-seg button { background: none; border: none; font: inherit; font-size: 0.82rem; color: var(--ink-soft); padding: 0.28rem 0.75rem; cursor: pointer; }
+.et-seg button[data-on="true"] { background: var(--color-iris); color: #fff; }

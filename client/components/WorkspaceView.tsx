@@ -5,6 +5,8 @@ import { api, type Workspace, type Task, type Objective, type Document, type Dec
 import { BlockEditor } from "./BlockEditor";
 import { EditableText, DeleteButton } from "./Editable";
 import { EmojiPicker } from "./EmojiPicker";
+import { isOverdue, fmtDate } from "@/lib/util";
+import { useDragReorder } from "@/lib/dnd";
 
 const TABS = ["Overview", "Tasks", "Documents", "Decisions", "Timeline"] as const;
 type Tab = (typeof TABS)[number];
@@ -209,7 +211,7 @@ function TaskRow({ task, objectives, showObjective, onToggle, onRename, onReassi
   onToggle: (t: Task) => void; onRename: (tid: string, title: string) => void;
   onReassign: (tid: string, oid: string | null) => void; onSetDue: (tid: string, ms: number | null) => void; onDelete: (tid: string) => void;
 }) {
-  const overdue = task.due_date && task.due_date < Date.now() && task.status !== "done";
+  const overdue = isOverdue(task.due_date, task.status);
   return (
     <div className="et-task-row" data-done={task.status === "done" || undefined}>
       <button className="et-check-btn" aria-label="Toggle done" onClick={() => onToggle(task)}>
@@ -278,28 +280,24 @@ const BOARD_COLS: Array<[string, string]> = [["todo", "To do"], ["doing", "Doing
 function TaskBoard({ tasks, onStatus, onToggle, onDelete, onAdd }: {
   tasks: Task[]; onStatus: (tid: string, status: string) => void; onToggle: (t: Task) => void; onDelete: (tid: string) => void; onAdd: (title: string, status: string) => void;
 }) {
-  const [drag, setDrag] = useState<string | null>(null);
-  const [over, setOver] = useState<string | null>(null);
+  const { dragProps, dropProps } = useDragReorder();
   return (
     <div className="et-board">
       {BOARD_COLS.map(([s, label]) => {
         const col = tasks.filter((t) => t.status === s);
         return (
-          <div key={s} className="et-board-col" data-over={over === s || undefined}
-            onDragOver={(e) => { if (drag) { e.preventDefault(); setOver(s); } }}
-            onDragLeave={() => setOver((c) => (c === s ? null : c))}
-            onDrop={(e) => { e.preventDefault(); if (drag) onStatus(drag, s); setDrag(null); setOver(null); }}>
+          <div key={s} className="et-board-col" {...dropProps(s, (id) => onStatus(id, s), true)}>
             <div className="et-board-head"><span>{label}</span><span className="eyebrow">{col.length}</span></div>
             {col.map((t) => {
-              const overdue = t.due_date && t.due_date < Date.now() && t.status !== "done";
+              const overdue = isOverdue(t.due_date, t.status);
               return (
-                <div key={t.id} className="et-card" draggable onDragStart={() => setDrag(t.id)} onDragEnd={() => { setDrag(null); setOver(null); }}>
+                <div key={t.id} className="et-card" {...dragProps(t.id)}>
                   <div className="et-card-top">
                     <span className="et-prio" data-p={t.priority} />
                     <span className="et-card-title" onClick={() => onToggle(t)} style={t.status === "done" ? { textDecoration: "line-through", color: "var(--ink-faint)" } : {}}>{t.title}</span>
                     <DeleteButton onDelete={() => onDelete(t.id)} />
                   </div>
-                  {t.due_date && <span className="et-card-due" data-overdue={overdue || undefined}>{new Date(t.due_date).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>}
+                  {t.due_date && <span className="et-card-due" data-overdue={overdue || undefined}>{fmtDate(t.due_date)}</span>}
                 </div>
               );
             })}
@@ -544,9 +542,7 @@ function WorkspaceStyles() {
       .et-next-task { padding: 0.5rem 0; border-bottom: 1px solid var(--line); }
 
       .et-list-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 0.7rem; padding: 0.55rem 0; border-bottom: 1px solid var(--line); }
-      .et-prio { width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); }
-      .et-prio[data-p="2"] { background: var(--color-amber); }
-      .et-prio[data-p="3"] { background: var(--color-iris); }
+      /* .et-prio moved to globals.css */
       .et-status { color: var(--ink-faint); }
 
       .et-task-row { display: flex; align-items: center; gap: 0.7rem; width: 100%; border-bottom: 1px solid var(--line); padding: 0.5rem 0; color: var(--ink); }
@@ -583,9 +579,7 @@ function WorkspaceStyles() {
       .et-decision-form button:disabled { opacity: 0.4; cursor: default; }
 
       .et-tasks-toolbar { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1.1rem; }
-      .et-seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
-      .et-seg button { background: none; border: none; font: inherit; font-size: 0.82rem; color: var(--ink-soft); padding: 0.28rem 0.75rem; cursor: pointer; }
-      .et-seg button[data-on="true"] { background: var(--color-iris); color: #fff; }
+      /* .et-seg moved to globals.css */
       .et-task-obj { opacity: 0; background: none; border: 1px solid var(--line); border-radius: 6px; font: inherit; font-size: 0.78rem; color: var(--ink-faint); padding: 0.1rem 0.3rem; max-width: 9rem; transition: opacity 0.12s; }
       .et-task-row:hover .et-task-obj, .et-task-obj:focus { opacity: 1; }
       .et-task-due { opacity: 0; background: none; border: 1px solid var(--line); border-radius: 6px; font: inherit; font-size: 0.78rem; color: var(--ink-soft); padding: 0.1rem 0.3rem; transition: opacity 0.12s; color-scheme: light dark; }
@@ -630,7 +624,7 @@ function WorkspaceStyles() {
       .et-tl-type { color: var(--ink); }
       .et-tl-time { color: var(--ink-faint); }
 
-      .et-empty { color: var(--ink-faint); font-size: 0.9rem; padding: 0.6rem 0; font-style: italic; }
+      /* .et-empty moved to globals.css */
     `}</style>
   );
 }

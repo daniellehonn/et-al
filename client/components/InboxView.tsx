@@ -90,7 +90,7 @@ export function InboxView() {
         .et-clear { background: none; border: none; color: var(--ink-faint); font: inherit; font-size: 0.82rem; cursor: pointer; padding: 0.35rem 0.4rem; }
         .et-clear:hover { color: var(--ink); }
         .et-delete:hover { color: #c0392b; }
-        .et-empty { color: var(--ink-faint); font-style: italic; padding: 1rem 0; }
+        /* .et-empty moved to globals.css */
       `}</style>
     </div>
   );
