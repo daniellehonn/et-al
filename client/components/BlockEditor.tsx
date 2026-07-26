@@ -5,7 +5,7 @@ import { api, blockText, type Block, type BlockOp, type DocumentPatch, type Work
 import { EditableText, DeleteButton } from "./Editable";
 import { WidgetBlock, TableWidget, WidgetStyles } from "./Overview";
 
-const WIDGET_TYPES = new Set(["tasks", "deadlines", "child_progress", "objective_progress", "progress", "backlinks", "metric", "links"]);
+const WIDGET_TYPES = new Set(["tasks", "deadlines", "child_progress", "objective_progress", "progress", "backlinks", "metric", "links", "career_summary"]);
 function parseContent(json: string): Record<string, unknown> { try { return JSON.parse(json); } catch { return {}; } }
 
 // A Notion-style editor over the block model. Each block is an auto-growing
@@ -38,7 +38,13 @@ const TYPE_MENU: Array<{ type: string; label: string; kw?: string }> = [
   { type: "metric", label: "Metric (live)", kw: "widget number" },
   { type: "links", label: "Links (live)", kw: "widget bookmarks" },
   { type: "backlinks", label: "Backlinks (live)", kw: "widget references" },
+  { type: "career_summary", label: "Career summary (live)", kw: "widget resume" },
+  // Career blocks
+  { type: "accomplishment", label: "Accomplishment (STAR)", kw: "career star result" },
+  { type: "resume_bullet", label: "Resume bullet", kw: "career cv" },
+  { type: "role", label: "Role / experience", kw: "career job cv" },
 ];
+const CAREER_TYPES = new Set(["accomplishment", "resume_bullet", "role"]);
 
 // The ⋮⋮ "turn into" menu only offers text-like conversions — not media, tables,
 // or live widgets (those are inserted fresh via the "/" menu).
@@ -53,6 +59,9 @@ function defaultContentFor(type: string, keepText: string): Record<string, unkno
   if (type === "columns") return { cols: [keepText, ""] };
   if (type === "metric") return { title: "Metric", value: "0", caption: "" };
   if (type === "links") return { title: "Links", items: [] };
+  if (type === "accomplishment") return { situation: "", task: "", action: "", result: "", bullet: "" };
+  if (type === "resume_bullet") return { text: keepText, skills: "", date: "" };
+  if (type === "role") return { company: "", title: "", start: "", end: "", location: "", bullets: [] };
   if (WIDGET_TYPES.has(type)) return { title: keepText || undefined };
   if (type === "divider" || type === "toc") return { text: "" };
   return { text: keepText };
@@ -62,7 +71,8 @@ function defaultContentFor(type: string, keepText: string): Record<string, unkno
 // Bold is matched before italic so ** wins over *.
 function renderInline(src: string): React.ReactNode {
   const nodes: React.ReactNode[] = [];
-  const re = /(\*\*|__)(.+?)\1|(\*|_)(.+?)\3|`([^`]+)`|\[([^\]]+)\]\(([^)\s]+)\)/g;
+  // …markdown link, then a bare URL (so pasted links become clickable).
+  const re = /(\*\*|__)(.+?)\1|(\*|_)(.+?)\3|`([^`]+)`|\[([^\]]+)\]\(([^)\s]+)\)|(https?:\/\/[^\s)]+[^\s).,;])/g;
   let last = 0, m: RegExpExecArray | null, k = 0;
   while ((m = re.exec(src))) {
     if (m.index > last) nodes.push(src.slice(last, m.index));
@@ -70,6 +80,7 @@ function renderInline(src: string): React.ReactNode {
     else if (m[3]) nodes.push(<em key={k++}>{m[4]}</em>);
     else if (m[5]) nodes.push(<code key={k++} className="et-inline-code">{m[5]}</code>);
     else if (m[6]) nodes.push(<a key={k++} href={m[7]} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{m[6]}</a>);
+    else if (m[8]) nodes.push(<a key={k++} href={m[8]} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{m[8]}</a>);
     last = re.lastIndex;
   }
   if (last < src.length) nodes.push(src.slice(last));
@@ -77,6 +88,72 @@ function renderInline(src: string): React.ReactNode {
 }
 
 function embedUrl(contentJson: string): string { try { return String(JSON.parse(contentJson).url ?? ""); } catch { return ""; } }
+
+// ── Career blocks — structured career capital, recyclable into a resume ──────
+function AccomplishmentBlock({ contentJson, onSave }: { contentJson: string; onSave: (c: Record<string, unknown>) => void }) {
+  const c = parseContent(contentJson) as Record<string, string>;
+  const field = (k: string, label: string) => (
+    <div className="et-star-field">
+      <span className="et-star-label">{label}</span>
+      <EditableText multiline value={c[k] ?? ""} placeholder={`${label}…`} onSave={(v) => onSave({ ...c, [k]: v })}
+        render={c[k] ? <span className="et-inline-wrap">{renderInline(c[k])}</span> : undefined} />
+    </div>
+  );
+  return (
+    <div className="et-career et-star">
+      <div className="et-career-badge">⭐ Accomplishment</div>
+      {field("situation", "Situation")}
+      {field("task", "Task")}
+      {field("action", "Action")}
+      {field("result", "Result")}
+      <div className="et-star-bullet">{field("bullet", "Resume bullet")}</div>
+    </div>
+  );
+}
+
+function ResumeBulletBlock({ contentJson, onSave }: { contentJson: string; onSave: (c: Record<string, unknown>) => void }) {
+  const c = parseContent(contentJson) as Record<string, string>;
+  return (
+    <div className="et-career et-rbullet">
+      <span className="et-rbullet-dot">•</span>
+      <div className="et-rbullet-body">
+        <EditableText multiline value={c.text ?? ""} placeholder="Resume bullet — a strong, quantified line…" onSave={(v) => onSave({ ...c, text: v })}
+          render={c.text ? <span className="et-inline-wrap">{renderInline(c.text)}</span> : undefined} />
+        <div className="et-rbullet-meta">
+          <EditableText value={c.skills ?? ""} placeholder="skills" onSave={(v) => onSave({ ...c, skills: v })} />
+          <EditableText value={c.date ?? ""} placeholder="date / range" onSave={(v) => onSave({ ...c, date: v })} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RoleBlock({ contentJson, onSave }: { contentJson: string; onSave: (c: Record<string, unknown>) => void }) {
+  const c = parseContent(contentJson) as { company?: string; title?: string; start?: string; end?: string; location?: string; bullets?: string[] };
+  const bullets = c.bullets ?? [];
+  return (
+    <div className="et-career et-role-block">
+      <div className="et-career-badge">💼 Role</div>
+      <div className="et-role-head">
+        <EditableText className="et-role-title" value={c.title ?? ""} placeholder="Title" onSave={(v) => onSave({ ...c, title: v })} />
+        <span className="et-role-at">at</span>
+        <EditableText className="et-role-company" value={c.company ?? ""} placeholder="Company" onSave={(v) => onSave({ ...c, company: v })} />
+      </div>
+      <div className="et-role-meta">
+        <EditableText value={c.start ?? ""} placeholder="Start" onSave={(v) => onSave({ ...c, start: v })} /> – <EditableText value={c.end ?? ""} placeholder="End" onSave={(v) => onSave({ ...c, end: v })} /> · <EditableText value={c.location ?? ""} placeholder="Location" onSave={(v) => onSave({ ...c, location: v })} />
+      </div>
+      <ul className="et-role-bullets">
+        {bullets.map((b, i) => (
+          <li key={i}>
+            <EditableText value={b} placeholder="Bullet…" onSave={(v) => onSave({ ...c, bullets: bullets.map((x, ix) => (ix === i ? v : x)) })}
+              render={b ? <span className="et-inline-wrap">{renderInline(b)}</span> : undefined} />
+          </li>
+        ))}
+      </ul>
+      <button className="et-role-addb" onClick={() => onSave({ ...c, bullets: [...bullets, ""] })}>+ bullet</button>
+    </div>
+  );
+}
 
 // A collapsible toggle: an editable summary + a collapsible markdown body.
 function ToggleBlock({ contentJson, onSave }: { contentJson: string; onSave: (content: Record<string, unknown>) => void }) {
@@ -232,7 +309,7 @@ export function BlockEditor({ documentId }: { documentId: string }) {
 
   const changeType = (b: Block, type: string) => {
     applyOps([{ op: "update", id: b.id, type, content: defaultContentFor(type, text[b.id] ?? "") }]);
-    if (["divider", "table", "embed", "toc", "toggle", "columns"].includes(type) || WIDGET_TYPES.has(type)) setEditingId(null);
+    if (["divider", "table", "embed", "toc", "toggle", "columns"].includes(type) || WIDGET_TYPES.has(type) || CAREER_TYPES.has(type)) setEditingId(null);
   };
 
   // Slash menu: typing "/" at the start of an empty-ish block opens a type picker.
@@ -335,6 +412,12 @@ export function BlockEditor({ documentId }: { documentId: string }) {
             <ToggleBlock contentJson={b.content_json} onSave={(content) => applyOps([{ op: "update", id: b.id, type: "toggle", content }])} />
           ) : b.type === "columns" ? (
             <ColumnsBlock contentJson={b.content_json} onSave={(content) => applyOps([{ op: "update", id: b.id, type: "columns", content }])} />
+          ) : b.type === "accomplishment" ? (
+            <AccomplishmentBlock contentJson={b.content_json} onSave={(content) => applyOps([{ op: "update", id: b.id, type: "accomplishment", content }])} />
+          ) : b.type === "resume_bullet" ? (
+            <ResumeBulletBlock contentJson={b.content_json} onSave={(content) => applyOps([{ op: "update", id: b.id, type: "resume_bullet", content }])} />
+          ) : b.type === "role" ? (
+            <RoleBlock contentJson={b.content_json} onSave={(content) => applyOps([{ op: "update", id: b.id, type: "role", content }])} />
           ) : WIDGET_TYPES.has(b.type) ? (
             workspaceId
               ? <WidgetBlock type={b.type} workspaceId={workspaceId} config={parseContent(b.content_json)} onChange={(content) => applyOps([{ op: "update", id: b.id, type: b.type, content }])} />
@@ -512,6 +595,25 @@ function EditorStyles() {
       .et-columns-ctl button { background: none; border: none; color: var(--ink-faint); font: inherit; font-size: 0.78rem; cursor: pointer; }
       .et-columns-ctl button:hover { color: var(--color-iris); }
       .et-inline-wrap { white-space: pre-wrap; }
+      .et-career { border: 1px solid var(--line); border-left: 3px solid var(--color-iris); border-radius: 10px; padding: 0.8rem 1rem; margin: 0.4rem 0; background: var(--paper-raised); }
+      .et-career-badge { font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.04em; color: var(--color-iris); margin-bottom: 0.5rem; }
+      .et-star-field { display: grid; grid-template-columns: 5rem 1fr; gap: 0.6rem; padding: 0.25rem 0; align-items: baseline; }
+      .et-star-label { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-faint); }
+      .et-star-bullet { margin-top: 0.4rem; padding-top: 0.4rem; border-top: 1px solid var(--line); }
+      .et-star-bullet .et-star-label { color: var(--color-iris); }
+      .et-rbullet { display: flex; gap: 0.5rem; }
+      .et-rbullet-dot { color: var(--color-iris); font-size: 1.1rem; line-height: 1.4; }
+      .et-rbullet-body { flex: 1; min-width: 0; }
+      .et-rbullet-meta { display: flex; gap: 0.8rem; margin-top: 0.3rem; font-size: 0.78rem; color: var(--ink-faint); }
+      .et-role-head { display: flex; align-items: baseline; gap: 0.4rem; flex-wrap: wrap; }
+      .et-role-title { font-weight: 600; font-size: 1.05rem; }
+      .et-role-at { color: var(--ink-faint); font-size: 0.9rem; }
+      .et-role-company { font-weight: 500; color: var(--color-iris); }
+      .et-role-meta { font-size: 0.82rem; color: var(--ink-soft); margin: 0.2rem 0 0.5rem; display: flex; gap: 0.35rem; align-items: baseline; flex-wrap: wrap; }
+      .et-role-bullets { margin: 0; padding-left: 1.2rem; }
+      .et-role-bullets li { margin: 0.15rem 0; }
+      .et-role-addb { background: none; border: none; color: var(--ink-faint); font: inherit; font-size: 0.8rem; cursor: pointer; margin-top: 0.3rem; }
+      .et-role-addb:hover { color: var(--color-iris); }
       .et-block-gutter { opacity: 0; transition: opacity 0.12s; padding-top: 0.35rem; }
       .et-block:hover .et-block-gutter, .et-block:focus-within .et-block-gutter { opacity: 1; }
       /* Keep the menu visible (and clickable) while it's open, even if the block loses hover. */

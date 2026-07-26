@@ -453,6 +453,35 @@ function BacklinkRow({ rel }: { rel: Relationship }) {
   return <a className="et-backlink-row" href={`/workspace/?id=${rel.source_id}`}>{w?.icon ?? "↗"} {w?.title ?? rel.source_id}</a>;
 }
 
+interface CareerItem { id: string; document_id: string; type: string; content_json: string; workspace_id: string; doc_title: string }
+// Aggregates every career block across all workspaces — the resume raw material.
+function CareerSummaryWidget() {
+  const { data } = useQuery({ queryKey: ["career"], queryFn: () => api.get<CareerItem[]>("/career") });
+  const items = data ?? [];
+  if (items.length === 0) return <div className="et-empty">No career blocks yet. Add Accomplishment / Resume bullet / Role blocks in any document — or have an agent create them from a finished project.</div>;
+  const line = (it: CareerItem): string => {
+    try {
+      const c = JSON.parse(it.content_json);
+      if (it.type === "role") return `${c.title || "?"} at ${c.company || "?"}`;
+      if (it.type === "resume_bullet") return c.text || "(bullet)";
+      if (it.type === "accomplishment") return c.bullet || c.result || "(accomplishment)";
+    } catch { /* ignore */ }
+    return "(career block)";
+  };
+  const icon = (t: string) => (t === "role" ? "💼" : t === "accomplishment" ? "⭐" : "•");
+  return (
+    <div className="et-career-sum">
+      {items.map((it) => (
+        <a key={it.id} className="et-career-row" href={`/workspace/?id=${it.workspace_id}`}>
+          <span className="et-career-icon">{icon(it.type)}</span>
+          <span className="et-career-line">{line(it)}</span>
+          <span className="eyebrow et-career-src">{it.doc_title}</span>
+        </a>
+      ))}
+    </div>
+  );
+}
+
 // Renders any live widget block inside the document editor. Self-contained
 // (carries its styles) so it works anywhere a block is rendered.
 export function WidgetBlock({ type, workspaceId, config, onChange }: { type: string; workspaceId: string; config: Config; onChange?: (c: Config) => void }) {
@@ -467,6 +496,7 @@ export function WidgetBlock({ type, workspaceId, config, onChange }: { type: str
   else if (type === "backlinks") inner = <BacklinksWidget workspaceId={workspaceId} />;
   else if (type === "metric") inner = <MetricWidget config={config} onChange={onChange} />;
   else if (type === "links") inner = <LinksWidget config={config} onChange={onChange} />;
+  else if (type === "career_summary") inner = <CareerSummaryWidget />;
   return <>{inner}<OverviewStyles /></>;
 }
 
@@ -481,6 +511,11 @@ function OverviewStyles() {
       .et-backlink-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0; border-bottom: 1px solid var(--line); text-decoration: none; color: var(--ink); font-size: 0.9rem; }
       .et-backlink-row:hover { color: var(--color-iris); }
       .et-doc-icon { color: var(--color-iris); }
+      .et-career-sum { display: flex; flex-direction: column; }
+      .et-career-row { display: grid; grid-template-columns: 1.3rem 1fr auto; align-items: baseline; gap: 0.5rem; padding: 0.4rem 0; border-bottom: 1px solid var(--line); text-decoration: none; color: var(--ink); font-size: 0.9rem; }
+      .et-career-row:hover .et-career-line { color: var(--color-iris); }
+      .et-career-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .et-career-src { color: var(--ink-faint); }
       .et-ov { display: flex; flex-direction: column; gap: 1.2rem; }
       .et-ov-grid { display: flex; flex-flow: row wrap; gap: 1.2rem; align-items: flex-start; }
       .et-widget-wrap { flex: 1 1 100%; min-width: 0; }

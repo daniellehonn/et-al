@@ -121,6 +121,22 @@ export async function getOrCreateHomeDoc(c: Ctx, workspaceId: string): Promise<D
   return doc;
 }
 
+export interface CareerBlock {
+  id: string; document_id: string; type: string; content_json: string;
+  created_at: number; workspace_id: string; doc_title: string;
+}
+
+// Every career block (accomplishment / resume_bullet / role) across all
+// documents — the raw material an agent recycles into a resume.
+export function listCareerBlocks(c: Ctx, workspaceId?: string): Promise<CareerBlock[]> {
+  const base = `SELECT b.id, b.document_id, b.type, b.content_json, b.created_at, d.workspace_id, d.title AS doc_title
+                FROM block b JOIN document d ON b.document_id = d.id
+                WHERE b.type IN ('accomplishment', 'resume_bullet', 'role')`;
+  return workspaceId
+    ? all<CareerBlock>(c, `${base} AND d.workspace_id = ? ORDER BY b.created_at DESC`, workspaceId)
+    : all<CareerBlock>(c, `${base} ORDER BY b.created_at DESC`);
+}
+
 // ---- the op engine (shared by human writes and accepted patches) ------------
 
 async function positionAfter(c: Ctx, documentId: string, afterId: string | null | undefined): Promise<number> {

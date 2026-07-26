@@ -41,6 +41,15 @@ const TOOLS: Tool[] = [
         "Source.raw and Decisions are immutable.",
         "Capture rather than invent structure when the destination is unclear.",
       ],
+      career_blocks: {
+        note: "When a project wraps, review it (get_context / list_logs / list_tasks) and propose_document_patch to a document, inserting career blocks the user recycles into a resume. Get existing ones with get_career_blocks.",
+        insert_via: "propose_document_patch ops: [{op:'insert', after:<id|null>, type:'<career type>', content:{...}}]",
+        types: {
+          accomplishment: "{ situation, task, action, result, bullet } — STAR + a one-line resume bullet",
+          resume_bullet: "{ text, skills, date } — one polished, quantified line",
+          role: "{ company, title, start, end, location, bullets: string[] } — a CV entry",
+        },
+      },
     }),
   },
   {
@@ -110,6 +119,7 @@ const TOOLS: Tool[] = [
   // ---- health & review ----
   { name: "get_workspace_health", description: "The activity/flow health score for a workspace (or all).", inputSchema: obj({ workspace_id: str }), handler: (c, a) => (a.workspace_id ? store.workspaceHealth(c, String(a.workspace_id)) : store.allHealth(c)) },
   { name: "weekly_review", description: "The raw material for a guided weekly review.", inputSchema: obj({}), handler: (c) => store.getWeeklyReview(c) },
+  { name: "get_career_blocks", description: "Every career block (accomplishment/STAR, resume bullet, role) across the user's work — the raw material for generating a resume, LinkedIn post, or STAR story. Optionally scope to one workspace.", inputSchema: obj({ workspace_id: str }), handler: (c, a) => store.listCareerBlocks(c, a.workspace_id as string | undefined) },
   { name: "get_agent_activity", description: "Everything written by an AI agent.", inputSchema: obj({}), handler: (c) => store.getAgentActivity(c) },
 ];
 
