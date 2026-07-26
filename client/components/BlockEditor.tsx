@@ -17,16 +17,20 @@ const TYPE_MENU: Array<{ type: string; label: string; kw?: string }> = [
   { type: "todo", label: "To-do", kw: "checkbox task" },
   { type: "quote", label: "Quote" },
   { type: "code", label: "Code" },
+  { type: "callout", label: "Callout", kw: "note info box" },
   { type: "divider", label: "Divider", kw: "hr line" },
   { type: "table", label: "Table" },
+  { type: "image", label: "Image", kw: "picture photo" },
   { type: "embed", label: "Embed", kw: "iframe url video" },
+  { type: "toc", label: "Table of contents", kw: "outline headings" },
 ];
 
 // The default content a block gets when its type changes.
 function defaultContentFor(type: string, keepText: string): Record<string, unknown> {
   if (type === "table") return { columns: [{ id: "c1", name: "Name", type: "text" }, { id: "c2", name: "Status", type: "status" }], rows: [] };
   if (type === "embed") return { url: "" };
-  if (type === "divider") return { text: "" };
+  if (type === "image") return { url: "", caption: "" };
+  if (type === "divider" || type === "toc") return { text: "" };
   return { text: keepText };
 }
 
@@ -49,6 +53,19 @@ function renderInline(src: string): React.ReactNode {
 }
 
 function embedUrl(contentJson: string): string { try { return String(JSON.parse(contentJson).url ?? ""); } catch { return ""; } }
+
+// Table of contents: links to the document's heading blocks.
+function TocBlock({ blocks }: { blocks: Block[] }) {
+  const heads = blocks.filter((b) => b.type === "heading" && blockText(b).trim());
+  if (heads.length === 0) return <div className="et-toc-empty">Add headings to build a table of contents.</div>;
+  return (
+    <nav className="et-toc">
+      {heads.map((h) => (
+        <button key={h.id} className="et-toc-item" onClick={() => document.getElementById(`hb-${h.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" })}>{blockText(h)}</button>
+      ))}
+    </nav>
+  );
+}
 
 export function BlockEditor({ documentId }: { documentId: string }) {
   const qc = useQueryClient();
@@ -136,7 +153,7 @@ export function BlockEditor({ documentId }: { documentId: string }) {
 
   const changeType = (b: Block, type: string) => {
     applyOps([{ op: "update", id: b.id, type, content: defaultContentFor(type, text[b.id] ?? "") }]);
-    if (["divider", "table", "embed"].includes(type)) setEditingId(null);
+    if (["divider", "table", "embed", "toc"].includes(type)) setEditingId(null);
   };
 
   // Slash menu: typing "/" at the start of an empty-ish block opens a type picker.
@@ -210,6 +227,18 @@ export function BlockEditor({ documentId }: { documentId: string }) {
             ) : (
               <div className="et-block-render" data-empty onClick={() => setEditingId(b.id)}>Empty embed — click to add a URL</div>
             )
+          ) : b.type === "image" ? (
+            editingId === b.id ? (
+              <input className="et-embed-url" defaultValue={embedUrl(b.content_json)} autoFocus placeholder="Paste an image URL…"
+                onBlur={(e) => { applyOps([{ op: "update", id: b.id, type: "image", content: { url: e.target.value.trim() } }]); setEditingId(null); }}
+                onKeyDown={(e) => { if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur(); }} />
+            ) : embedUrl(b.content_json) ? (
+              <div className="et-img-block"><img src={embedUrl(b.content_json)} alt="" className="et-img-el" /><button className="et-embed-edit-btn" onClick={() => setEditingId(b.id)}>edit URL</button></div>
+            ) : (
+              <div className="et-block-render" data-empty onClick={() => setEditingId(b.id)}>Empty image — click to add a URL</div>
+            )
+          ) : b.type === "toc" ? (
+            <TocBlock blocks={blocks ?? []} />
           ) : editingId === b.id ? (
             <>
               <textarea
@@ -247,7 +276,8 @@ export function BlockEditor({ documentId }: { documentId: string }) {
           ) : b.type === "code" ? (
             <pre className="et-block-render et-render-code" onClick={() => setEditingId(b.id)}>{text[b.id] || ""}</pre>
           ) : (
-            <div className="et-block-render" data-empty={!text[b.id] || undefined} onClick={() => setEditingId(b.id)}>
+            <div className="et-block-render" id={b.type === "heading" ? `hb-${b.id}` : undefined}
+              data-empty={!text[b.id] || undefined} onClick={() => setEditingId(b.id)}>
               {text[b.id] ? renderInline(text[b.id]) : "Empty — click to edit"}
             </div>
           )}
@@ -345,8 +375,21 @@ function EditorStyles() {
       .et-embed:hover .et-embed-edit-btn { opacity: 1; }
       .et-embed-url { width: 100%; background: var(--paper-raised); border: 1px solid var(--color-iris); border-radius: 8px; padding: 0.5rem 0.7rem; font: inherit; font-size: 0.9rem; color: var(--ink); }
       .et-embed-url:focus { outline: none; }
+      .et-img-block { position: relative; margin: 0.4rem 0; }
+      .et-img-el { max-width: 100%; border-radius: 10px; display: block; }
+      .et-block[data-type="callout"] .et-block-render, .et-block[data-type="callout"] .et-block-input {
+        background: var(--color-iris-soft); border-radius: 10px; padding: 0.7rem 0.9rem 0.7rem 2.2rem; position: relative; }
+      .et-block[data-type="callout"] { position: relative; }
+      .et-block[data-type="callout"]::after { content: "💡"; position: absolute; left: 2rem; top: 0.7rem; font-size: 0.95rem; z-index: 1; }
+      .et-toc { display: flex; flex-direction: column; border-left: 2px solid var(--line-strong); padding-left: 0.8rem; margin: 0.3rem 0; }
+      .et-toc-item { text-align: left; background: none; border: none; font: inherit; font-size: 0.9rem; color: var(--ink-soft); padding: 0.2rem 0; cursor: pointer; }
+      .et-toc-item:hover { color: var(--color-iris); }
+      .et-toc-empty { color: var(--ink-faint); font-style: italic; font-size: 0.88rem; padding: 0.3rem 0; }
       .et-block-gutter { opacity: 0; transition: opacity 0.12s; padding-top: 0.35rem; }
       .et-block:hover .et-block-gutter, .et-block:focus-within .et-block-gutter { opacity: 1; }
+      /* Keep the menu visible (and clickable) while it's open, even if the block loses hover. */
+      .et-block:has(.et-type-menu[open]) .et-block-gutter { opacity: 1; }
+      .et-type-menu summary { padding: 0.1rem 0.15rem; }
       .et-type-menu { position: relative; }
       .et-type-menu summary { list-style: none; cursor: grab; color: var(--ink-faint); font-size: 0.7rem; user-select: none; line-height: 1; letter-spacing: -1px; }
       .et-type-menu summary::-webkit-details-marker { display: none; }
