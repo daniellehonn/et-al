@@ -59,6 +59,7 @@ api.delete("/insights/:id", async (c) => { await store.deleteInsight(ctx(c), c.r
 
 // ---- documents (human writes blocks directly; also resolves agent patches) ---
 api.get("/workspaces/:id/documents", async (c) => c.json(await store.listDocuments(ctx(c), c.req.param("id"))));
+api.get("/workspaces/:id/home", async (c) => c.json(await store.getOrCreateHomeDoc(ctx(c), c.req.param("id"))));
 api.post("/documents", async (c) => c.json(await store.createDocument(ctx(c), await c.req.json())));
 api.get("/documents/:id", async (c) => c.json(await store.getDocument(ctx(c), c.req.param("id"))));
 api.patch("/documents/:id", async (c) => c.json(await store.updateDocument(ctx(c), c.req.param("id"), await c.req.json())));

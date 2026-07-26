@@ -157,11 +157,23 @@ function pillColor(v: string): string {
   return PILL_COLORS[h % PILL_COLORS.length];
 }
 
-function TableWidget({ config, onChange }: { config: Config; onChange?: (c: Config) => void }) {
-  const cols = (config.columns as Col[]) ?? [];
-  const rows = (config.rows as Row[]) ?? [];
+// Normalize legacy simple tables ({columns:string[], rows:string[][]}) to the
+// rich typed-column format, so one renderer handles both.
+function normalizeTable(config: Config): { columns: Col[]; rows: Row[] } {
+  const rawCols = config.columns as unknown[];
+  if (Array.isArray(rawCols) && typeof rawCols[0] === "string") {
+    const columns: Col[] = (rawCols as string[]).map((name, i) => ({ id: `c${i}`, name, type: "text" }));
+    const rows: Row[] = ((config.rows as string[][]) ?? []).map((r, ri) => ({ id: `r${ri}`, cells: Object.fromEntries(columns.map((c, ci) => [c.id, r[ci] ?? ""])) }));
+    return { columns, rows };
+  }
+  return { columns: (config.columns as Col[]) ?? [], rows: (config.rows as Row[]) ?? [] };
+}
+
+export function TableWidget({ config, onChange }: { config: Config; onChange?: (c: Config) => void }) {
+  const { columns: cols, rows } = normalizeTable(config);
   const readOnly = !onChange;
-  const update = (patch: Partial<{ columns: Col[]; rows: Row[] }>) => onChange?.({ ...config, ...patch });
+  // Always write back the normalized (rich) columns/rows, so legacy tables upgrade on edit.
+  const update = (patch: Partial<{ columns: Col[]; rows: Row[] }>) => onChange?.({ ...config, columns: cols, rows, ...patch });
   const rid = () => `${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
 
   const addRow = () => update({ rows: [...rows, { id: rid(), cells: {} }] });
@@ -440,6 +452,27 @@ function BacklinkRow({ rel }: { rel: Relationship }) {
   const w = (workspaces ?? []).find((x) => x.id === rel.source_id);
   return <a className="et-backlink-row" href={`/workspace/?id=${rel.source_id}`}>{w?.icon ?? "↗"} {w?.title ?? rel.source_id}</a>;
 }
+
+// Renders any live widget block inside the document editor. Self-contained
+// (carries its styles) so it works anywhere a block is rendered.
+export function WidgetBlock({ type, workspaceId, config, onChange }: { type: string; workspaceId: string; config: Config; onChange?: (c: Config) => void }) {
+  const { data: workspace } = useQuery({ queryKey: ["workspace", workspaceId], queryFn: () => api.get<Workspace>(`/workspaces/${workspaceId}`) });
+  const goTasks = () => { window.location.href = `/workspace/?id=${workspaceId}&tab=Tasks`; };
+  let inner: React.ReactNode = null;
+  if (type === "tasks") inner = <TasksWidget workspaceId={workspaceId} setTab={goTasks} config={config} onChange={onChange} />;
+  else if (type === "deadlines") inner = <DeadlinesWidget workspaceId={workspaceId} setTab={goTasks} />;
+  else if (type === "child_progress") inner = <ChildProgressWidget workspaceId={workspaceId} type={workspace?.type ?? "area"} config={config} onChange={onChange} />;
+  else if (type === "objective_progress") inner = <ObjectiveProgressWidget workspaceId={workspaceId} />;
+  else if (type === "progress") inner = workspace ? <ProgressWidget workspaceId={workspaceId} workspace={workspace} /> : null;
+  else if (type === "backlinks") inner = <BacklinksWidget workspaceId={workspaceId} />;
+  else if (type === "metric") inner = <MetricWidget config={config} onChange={onChange} />;
+  else if (type === "links") inner = <LinksWidget config={config} onChange={onChange} />;
+  return <>{inner}<OverviewStyles /></>;
+}
+
+// Exported so blocks rendered outside the Overview (e.g. a table in a document)
+// still get the widget CSS.
+export function WidgetStyles() { return <OverviewStyles />; }
 
 function OverviewStyles() {
   return (

@@ -5,7 +5,6 @@ import { api, type Workspace, type Task, type Objective, type Document, type Dec
 import { BlockEditor } from "./BlockEditor";
 import { EditableText, DeleteButton } from "./Editable";
 import { EmojiPicker } from "./EmojiPicker";
-import { OverviewView } from "./Overview";
 
 const TABS = ["Overview", "Tasks", "Documents", "Decisions", "Timeline"] as const;
 type Tab = (typeof TABS)[number];
@@ -90,7 +89,7 @@ export function WorkspaceView({ id, initialTab, initialDoc }: { id: string; init
       </nav>
 
       <div className="et-tab-body">
-        {tab === "Overview" && <OverviewView id={id} workspace={workspace} setTab={(t) => setTab(t as Tab)} />}
+        {tab === "Overview" && <OverviewHome id={id} />}
         {tab === "Tasks" && <Tasks id={id} />}
         {tab === "Documents" && <Documents id={id} initialDoc={initialDoc} />}
         {tab === "Decisions" && <Decisions id={id} />}
@@ -103,6 +102,13 @@ export function WorkspaceView({ id, initialTab, initialDoc }: { id: string; init
 }
 
 // ── Overview ────────────────────────────────────────────────────────────────
+// ── Overview: the workspace's home page — a normal block document ────────────
+function OverviewHome({ id }: { id: string }) {
+  const { data: doc } = useQuery({ queryKey: ["home", id], queryFn: () => api.get<Document>(`/workspaces/${id}/home`) });
+  if (!doc) return <div className="et-empty">Loading…</div>;
+  return <BlockEditor documentId={doc.id} />;
+}
+
 // ── Tasks (with optional grouping by objective) ─────────────────────────────
 // Objectives are no longer a separate tab; an objective is a label a task can
 // carry, and "group by objective" turns the flat list into planning sections.

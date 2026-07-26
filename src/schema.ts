@@ -39,10 +39,17 @@ export const OBJECTIVE_STATUSES = ["active", "done", "paused"] as const;
 
 export const TASK_STATUSES = ["todo", "doing", "blocked", "done"] as const;
 
-export const DOCUMENT_TYPES = ["design", "architecture", "roadmap", "readme", "note", "free"] as const;
+export const DOCUMENT_TYPES = ["design", "architecture", "roadmap", "readme", "note", "free", "overview"] as const;
 export const DOCUMENT_STATUSES = ["draft", "active", "archived"] as const;
 export const BLOCK_TYPES = [
+  // Markdown blocks
   "paragraph", "heading", "bullet", "numbered", "todo", "code", "quote", "divider", "image", "table", "embed", "callout", "toc", "toggle", "columns",
+  // Live "widget" blocks (compute from workspace data) — a page mixes both freely
+  "tasks", "deadlines", "child_progress", "objective_progress", "progress", "backlinks", "metric", "links",
+] as const;
+// Block types that render a live widget rather than static content.
+export const WIDGET_BLOCK_TYPES = [
+  "tasks", "deadlines", "child_progress", "objective_progress", "progress", "backlinks", "metric", "links",
 ] as const;
 
 export const SOURCE_KINDS = [

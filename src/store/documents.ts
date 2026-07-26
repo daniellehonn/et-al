@@ -49,7 +49,7 @@ export function getDocument(c: Ctx, did: string): Promise<Document | null> {
 }
 
 export function listDocuments(c: Ctx, workspaceId: string): Promise<Document[]> {
-  return all<Document>(c, `SELECT * FROM document WHERE workspace_id = ? ORDER BY updated_at DESC`, workspaceId);
+  return all<Document>(c, `SELECT * FROM document WHERE workspace_id = ? AND type != 'overview' ORDER BY updated_at DESC`, workspaceId);
 }
 
 export function getBlocks(c: Ctx, documentId: string): Promise<Block[]> {
@@ -92,6 +92,33 @@ export async function deleteDocument(c: Ctx, did: string): Promise<void> {
   await c.db.prepare(`DELETE FROM document WHERE id = ?`).bind(did).run();
   await ftsDelete(c, "document", did);
   await logEvent(c, "delete", "document", did, { title: existing.title });
+}
+
+// The workspace's Overview is just a document (type 'overview'). Created on
+// first access, migrating any legacy overview_block widgets into real blocks so
+// the Overview and Documents share one block model.
+export async function getOrCreateHomeDoc(c: Ctx, workspaceId: string): Promise<Document> {
+  const found = await first<Document>(c, `SELECT * FROM document WHERE workspace_id = ? AND type = 'overview' ORDER BY created_at LIMIT 1`, workspaceId);
+  if (found) return found;
+  const doc = await createDocument(c, { workspace_id: workspaceId, title: "Overview", type: "overview" });
+
+  // Migrate legacy overview widgets (if the table exists) into blocks, in order.
+  let legacy: Array<{ type: string; config_json: string }> = [];
+  try { legacy = await all(c, `SELECT type, config_json FROM overview_block WHERE workspace_id = ? ORDER BY position, created_at`, workspaceId); } catch { /* table may not exist */ }
+  let pos = 1;
+  const t = now();
+  for (const w of legacy) {
+    let cfg: Record<string, unknown>; try { cfg = JSON.parse(w.config_json); } catch { cfg = {}; }
+    let type = w.type; let content: Record<string, unknown> = cfg;
+    if (w.type === "text") { type = "paragraph"; content = { text: cfg.text ?? "" }; }
+    else if (w.type === "image") { type = "image"; content = { url: cfg.url ?? "", caption: cfg.caption ?? "" }; }
+    // table / tasks / deadlines / progress / metric / links / backlinks / child_/objective_progress keep their config as-is.
+    await c.db
+      .prepare(`INSERT INTO block (id, document_id, type, content_json, position, version, is_ai, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?)`)
+      .bind(id("blk"), doc.id, type, JSON.stringify(content), pos++, t, t)
+      .run();
+  }
+  return doc;
 }
 
 // ---- the op engine (shared by human writes and accepted patches) ------------

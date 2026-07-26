@@ -1,8 +1,12 @@
 "use client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, blockText, type Block, type BlockOp, type DocumentPatch, type Workspace } from "@/lib/api";
+import { api, blockText, type Block, type BlockOp, type DocumentPatch, type Workspace, type Document } from "@/lib/api";
 import { EditableText, DeleteButton } from "./Editable";
+import { WidgetBlock, TableWidget, WidgetStyles } from "./Overview";
+
+const WIDGET_TYPES = new Set(["tasks", "deadlines", "child_progress", "objective_progress", "progress", "backlinks", "metric", "links"]);
+function parseContent(json: string): Record<string, unknown> { try { return JSON.parse(json); } catch { return {}; } }
 
 // A Notion-style editor over the block model. Each block is an auto-growing
 // textarea (robust cursor handling; blocks store plain text). Humans write
@@ -25,6 +29,15 @@ const TYPE_MENU: Array<{ type: string; label: string; kw?: string }> = [
   { type: "image", label: "Image", kw: "picture photo" },
   { type: "embed", label: "Embed", kw: "iframe url video" },
   { type: "toc", label: "Table of contents", kw: "outline headings" },
+  // Live widgets
+  { type: "tasks", label: "Tasks (live)", kw: "widget todo" },
+  { type: "deadlines", label: "Deadlines (live)", kw: "widget due" },
+  { type: "progress", label: "Progress bar (live)", kw: "widget completion" },
+  { type: "objective_progress", label: "Objective progress (live)", kw: "widget" },
+  { type: "child_progress", label: "Sub-workspace progress (live)", kw: "widget children" },
+  { type: "metric", label: "Metric (live)", kw: "widget number" },
+  { type: "links", label: "Links (live)", kw: "widget bookmarks" },
+  { type: "backlinks", label: "Backlinks (live)", kw: "widget references" },
 ];
 
 // The default content a block gets when its type changes.
@@ -34,6 +47,9 @@ function defaultContentFor(type: string, keepText: string): Record<string, unkno
   if (type === "image") return { url: "", caption: "" };
   if (type === "toggle") return { text: keepText, body: "" };
   if (type === "columns") return { cols: [keepText, ""] };
+  if (type === "metric") return { title: "Metric", value: "0", caption: "" };
+  if (type === "links") return { title: "Links", items: [] };
+  if (WIDGET_TYPES.has(type)) return { title: keepText || undefined };
   if (type === "divider" || type === "toc") return { text: "" };
   return { text: keepText };
 }
@@ -126,6 +142,9 @@ export function BlockEditor({ documentId }: { documentId: string }) {
     queryFn: () => api.get<DocumentPatch[]>(`/documents/${documentId}/patches?status=pending`),
     refetchInterval: 8000, // agents may propose while you work
   });
+  // The document's workspace — widget blocks compute against it.
+  const { data: doc } = useQuery({ queryKey: ["document", documentId], queryFn: () => api.get<Document>(`/documents/${documentId}`) });
+  const workspaceId = doc?.workspace_id;
 
   // Local text mirror so typing is instant; server save is debounced.
   const [text, setText] = useState<Record<string, string>>({});
@@ -209,7 +228,7 @@ export function BlockEditor({ documentId }: { documentId: string }) {
 
   const changeType = (b: Block, type: string) => {
     applyOps([{ op: "update", id: b.id, type, content: defaultContentFor(type, text[b.id] ?? "") }]);
-    if (["divider", "table", "embed", "toc", "toggle", "columns"].includes(type)) setEditingId(null);
+    if (["divider", "table", "embed", "toc", "toggle", "columns"].includes(type) || WIDGET_TYPES.has(type)) setEditingId(null);
   };
 
   // Slash menu: typing "/" at the start of an empty-ish block opens a type picker.
@@ -282,8 +301,7 @@ export function BlockEditor({ documentId }: { documentId: string }) {
           {b.type === "divider" ? (
             <hr className="et-hr" />
           ) : b.type === "table" ? (
-            <DocTableBlock contentJson={b.content_json}
-              onSave={(content) => applyOps([{ op: "update", id: b.id, type: "table", content }])} />
+            <><TableWidget config={parseContent(b.content_json)} onChange={(content) => applyOps([{ op: "update", id: b.id, type: "table", content }])} /><WidgetStyles /></>
           ) : b.type === "embed" ? (
             editingId === b.id ? (
               <input className="et-embed-url" defaultValue={embedUrl(b.content_json)} autoFocus placeholder="Paste a URL to embed…"
@@ -313,6 +331,10 @@ export function BlockEditor({ documentId }: { documentId: string }) {
             <ToggleBlock contentJson={b.content_json} onSave={(content) => applyOps([{ op: "update", id: b.id, type: "toggle", content }])} />
           ) : b.type === "columns" ? (
             <ColumnsBlock contentJson={b.content_json} onSave={(content) => applyOps([{ op: "update", id: b.id, type: "columns", content }])} />
+          ) : WIDGET_TYPES.has(b.type) ? (
+            workspaceId
+              ? <WidgetBlock type={b.type} workspaceId={workspaceId} config={parseContent(b.content_json)} onChange={(content) => applyOps([{ op: "update", id: b.id, type: b.type, content }])} />
+              : <div className="et-block-render" data-empty>Loading widget…</div>
           ) : editingId === b.id ? (
             <>
               <textarea
