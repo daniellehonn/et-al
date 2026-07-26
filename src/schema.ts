@@ -68,6 +68,7 @@ export const createWorkspaceInput = z.object({
 export const updateWorkspaceInput = z.object({
   title: z.string().min(1).optional(),
   description: z.string().nullish(),
+  type: z.enum(WORKSPACE_TYPES).optional(),
   status: z.enum(WORKSPACE_STATUSES).optional(),
   position: z.number().optional(),
 });

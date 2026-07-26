@@ -12,6 +12,7 @@ const NAV = [
   { href: "/search/", label: "Search" },
   { href: "/knowledge/", label: "Knowledge" },
 ];
+const WORKSPACE_TYPES = ["area", "project", "course", "organization"];
 
 export function Spine() {
   const pathname = usePathname();
@@ -24,10 +25,26 @@ export function Spine() {
   // `creating` holds the parent id we're adding under; null = root; false = idle.
   const [creating, setCreating] = useState<string | null | false>(false);
   const [title, setTitle] = useState("");
+  const [type, setType] = useState("area");
   const create = useMutation({
-    mutationFn: (parent_id: string | null) => api.post<Workspace>("/workspaces", { parent_id, type: parent_id ? "project" : "area", title }),
-    onSuccess: () => { setTitle(""); setCreating(false); qc.invalidateQueries({ queryKey: ["workspaces"] }); },
+    mutationFn: (parent_id: string | null) => api.post<Workspace>("/workspaces", { parent_id, type, title }),
+    onSuccess: () => { setTitle(""); setType("area"); setCreating(false); qc.invalidateQueries({ queryKey: ["workspaces"] }); },
   });
+
+  // Drag a workspace onto another to re-parent it; onto the header to make it a
+  // root. The server rejects cycles; surface that rather than failing silently.
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dropId, setDropId] = useState<string | null | undefined>(undefined); // undefined=none, null=root
+  const move = useMutation({
+    mutationFn: ({ id, parent }: { id: string; parent: string | null }) => api.post(`/workspaces/${id}/move`, { new_parent_id: parent }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["workspaces"] }),
+    onError: (e) => alert((e as Error).message),
+  });
+  const drop = (parent: string | null) => {
+    setDropId(undefined);
+    if (dragId && dragId !== parent) move.mutate({ id: dragId, parent });
+    setDragId(null);
+  };
 
   const byParent = new Map<string | null, Workspace[]>();
   for (const w of workspaces ?? []) {
@@ -39,9 +56,11 @@ export function Spine() {
     <form className="et-ws-new" style={{ paddingLeft: `${depth * 0.85 + 0.9}rem` }}
       onSubmit={(e) => { e.preventDefault(); if (title.trim()) create.mutate(parent); }}>
       <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)}
-        onBlur={() => { if (!title.trim()) setCreating(false); }}
         onKeyDown={(e) => { if (e.key === "Escape") { setTitle(""); setCreating(false); } }}
         placeholder={parent ? "Sub-workspace…" : "Workspace…"} />
+      <select value={type} onChange={(e) => setType(e.target.value)} aria-label="Workspace type">
+        {WORKSPACE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+      </select>
     </form>
   );
 
@@ -49,7 +68,15 @@ export function Spine() {
     <>
       {(byParent.get(parent) ?? []).map((w) => (
         <div key={w.id}>
-          <div className="et-ws-row" style={{ paddingLeft: `${depth * 0.85 + 0.9}rem` }}>
+          <div className="et-ws-row" style={{ paddingLeft: `${depth * 0.85 + 0.9}rem` }}
+            draggable
+            data-dragging={dragId === w.id || undefined}
+            data-drop={dropId === w.id || undefined}
+            onDragStart={(e) => { setDragId(w.id); e.dataTransfer.effectAllowed = "move"; }}
+            onDragEnd={() => { setDragId(null); setDropId(undefined); }}
+            onDragOver={(e) => { if (dragId && dragId !== w.id) { e.preventDefault(); setDropId(w.id); } }}
+            onDragLeave={() => setDropId((cur) => (cur === w.id ? undefined : cur))}
+            onDrop={(e) => { e.preventDefault(); drop(w.id); }}>
             <a href={`/workspace/?id=${w.id}`} className="et-ws">
               <span className="et-ws-dot" data-type={w.type} />
               {w.title}
@@ -125,9 +152,15 @@ export function Spine() {
         .et-ws-add { opacity: 0; }
         .et-ws-row:hover .et-ws-add { opacity: 1; }
         .et-ws-add:hover, .et-ws-add-root:hover { color: var(--color-iris); background: var(--paper-raised); }
-        .et-ws-new { padding: 0.2rem 0.6rem; }
-        .et-ws-new input { width: 100%; background: var(--paper-raised); border: 1px solid var(--color-iris); border-radius: 6px; padding: 0.28rem 0.5rem; font: inherit; font-size: 0.86rem; color: var(--ink); }
+        .et-ws-new { padding: 0.2rem 0.6rem; display: flex; gap: 0.3rem; }
+        .et-ws-new input { flex: 1; min-width: 0; background: var(--paper-raised); border: 1px solid var(--color-iris); border-radius: 6px; padding: 0.28rem 0.5rem; font: inherit; font-size: 0.86rem; color: var(--ink); }
         .et-ws-new input:focus { outline: none; }
+        .et-ws-new select { background: var(--paper-raised); border: 1px solid var(--line-strong); border-radius: 6px; font: inherit; font-size: 0.75rem; color: var(--ink-soft); padding: 0 0.1rem; }
+        .et-ws-row { border-radius: 6px; }
+        .et-ws-row[data-drop="true"] { background: var(--color-iris-soft); box-shadow: inset 0 0 0 1px var(--color-iris); }
+        .et-ws-row[data-dragging="true"] { opacity: 0.4; }
+        .et-ws { cursor: grab; }
+        .et-spine-label[data-drop="true"] { color: var(--color-iris); }
         .et-ws-dot { width: 6px; height: 6px; border-radius: 2px; background: var(--ink-faint); flex: none; }
         .et-ws-dot[data-type="project"] { background: var(--color-iris); }
         .et-ws-dot[data-type="area"] { background: var(--color-sage); }

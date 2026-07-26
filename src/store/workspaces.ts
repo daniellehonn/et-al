@@ -70,11 +70,12 @@ export async function updateWorkspace(c: Ctx, wid: string, input: z.infer<typeof
   if (!existing) throw new RuleError(`workspace ${wid} not found`, 404);
   await c.db
     .prepare(
-      `UPDATE workspace SET title = ?, description = ?, status = ?, position = ?, updated_at = ? WHERE id = ?`,
+      `UPDATE workspace SET title = ?, description = ?, type = ?, status = ?, position = ?, updated_at = ? WHERE id = ?`,
     )
     .bind(
       data.title ?? existing.title,
       data.description === undefined ? existing.description : data.description,
+      data.type ?? existing.type,
       data.status ?? existing.status,
       data.position ?? existing.position,
       now(),
