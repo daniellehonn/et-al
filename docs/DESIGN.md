@@ -89,9 +89,19 @@ context: entering `Life → Build → et al.` gives an agent **primary context**
 (et al.) plus **inherited context** (Build, Life). This inheritance is the whole
 reason the hierarchy is strict rather than a free tag graph.
 
-**Types** (`area` · `project` · `course` · `organization`) change *templates and
-defaults only* — the same underlying object. A `project` seeds a README + roadmap
-document; a `course` seeds different scaffolding.
+**Types** (`area` · `project` · `course` · `organization`) share one underlying
+object but split on one axis — **finite vs ongoing**:
+
+- **Finite** (`project`, `course`) — have an outcome and can be **completed**
+  (a `completed` status distinct from archived). A `project` is seeded with a
+  Roadmap document (Outcome / Milestones); its Overview shows **progress toward
+  done** and a *Mark complete* action.
+- **Ongoing** (`area`, `organization`) — maintained, never completed. Their
+  Overview surfaces **what's inside** (their child projects) rather than a
+  progress bar.
+
+The rule of thumb: an area is a responsibility you maintain; a project is an
+outcome you finish. Areas sit near the top of the tree; projects nest inside them.
 
 ## 2. Objectives `[SPINE]`
 

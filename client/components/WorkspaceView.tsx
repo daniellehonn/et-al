@@ -7,6 +7,7 @@ import { EditableText, DeleteButton } from "./Editable";
 
 const TABS = ["Overview", "Tasks", "Documents", "Decisions", "Timeline"] as const;
 type Tab = (typeof TABS)[number];
+const FINITE_TYPES = ["project", "course"]; // finite = has an outcome, can be completed
 
 export function WorkspaceView({ id, initialTab, initialDoc }: { id: string; initialTab?: string; initialDoc?: string }) {
   const qc = useQueryClient();
@@ -47,9 +48,17 @@ export function WorkspaceView({ id, initialTab, initialDoc }: { id: string; init
           onSave={(title) => patchWs.mutate({ title })} />
         <div className="et-ws-meta">
           <span className="et-tag" data-type={workspace.type}>{workspace.type}</span>
+          {workspace.status === "completed" && <span className="et-tag et-tag-done">✓ completed</span>}
+          {workspace.status === "archived" && <span className="et-tag">archived</span>}
           <EditableText className="et-ws-desc" value={workspace.description ?? ""} placeholder="Add a description…"
             onSave={(description) => patchWs.mutate({ description })} />
           <span className="et-ws-actions">
+            {FINITE_TYPES.includes(workspace.type) && (
+              <button className="et-ws-complete" data-done={workspace.status === "completed" || undefined}
+                onClick={() => patchWs.mutate({ status: workspace.status === "completed" ? "active" : "completed" })}>
+                {workspace.status === "completed" ? "Reopen" : "Mark complete"}
+              </button>
+            )}
             <button className="et-ws-archive" onClick={() => patchWs.mutate({ status: workspace.status === "archived" ? "active" : "archived" })}>
               {workspace.status === "archived" ? "Unarchive" : "Archive"}
             </button>
@@ -79,29 +88,76 @@ export function WorkspaceView({ id, initialTab, initialDoc }: { id: string; init
 
 // ── Overview ────────────────────────────────────────────────────────────────
 function Overview({ id, workspace, setTab }: { id: string; workspace: Workspace; setTab: (t: Tab) => void }) {
+  const qc = useQueryClient();
   const { data: tasks } = useQuery({ queryKey: ["tasks", id], queryFn: () => api.get<Task[]>(`/workspaces/${id}/tasks`) });
-  const { data: objectives } = useQuery({ queryKey: ["objectives", id], queryFn: () => api.get<Objective[]>(`/workspaces/${id}/objectives`) });
   const { data: docs } = useQuery({ queryKey: ["documents", id], queryFn: () => api.get<Document[]>(`/workspaces/${id}/documents`) });
-  const open = (tasks ?? []).filter((t) => t.status !== "done");
-  const cards: Array<[string, number, Tab]> = [
-    ["Open tasks", open.length, "Tasks"],
-    ["Objectives", (objectives ?? []).length, "Tasks"],
-    ["Documents", (docs ?? []).length, "Documents"],
-  ];
+  const { data: workspaces } = useQuery({ queryKey: ["workspaces"], queryFn: () => api.get<Workspace[]>("/workspaces") });
+  const complete = useMutation({
+    mutationFn: () => api.patch(`/workspaces/${id}`, { status: "completed" }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["workspace", id] }); qc.invalidateQueries({ queryKey: ["workspaces"] }); },
+  });
+
+  const all = tasks ?? [];
+  const open = all.filter((t) => t.status !== "done");
+  const done = all.length - open.length;
+  const children = (workspaces ?? []).filter((w) => w.parent_id === id);
+  const finite = FINITE_TYPES.includes(workspace.type);
+  const pct = all.length ? Math.round((done / all.length) * 100) : 0;
+
   return (
     <div>
+      {/* Finite types (project/course): progress toward an outcome. */}
+      {finite && (
+        <div className="et-progress-card" data-complete={workspace.status === "completed" || undefined}>
+          {workspace.status === "completed" ? (
+            <div className="et-complete-note"><span className="serif et-complete-check">✓</span> This {workspace.type} is complete.</div>
+          ) : (
+            <>
+              <div className="et-progress-head">
+                <span className="eyebrow">Progress toward done</span>
+                <span className="et-progress-frac">{done} / {all.length} tasks</span>
+              </div>
+              <div className="et-progress-bar"><span style={{ width: `${pct}%` }} /></div>
+              {all.length > 0 && open.length === 0 && (
+                <button className="et-complete-cta" onClick={() => complete.mutate()}>All tasks done — mark this {workspace.type} complete →</button>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
       <div className="et-stat-row">
-        {cards.map(([label, n, t]) => (
-          <button key={label} className="et-stat" onClick={() => setTab(t)}>
-            <span className="serif et-stat-num">{n}</span>
-            <span className="eyebrow">{label}</span>
+        <button className="et-stat" onClick={() => setTab("Tasks")}>
+          <span className="serif et-stat-num">{open.length}</span><span className="eyebrow">Open tasks</span>
+        </button>
+        {!finite && (
+          <button className="et-stat" onClick={() => children[0] && (window.location.href = `/workspace/?id=${children[0].id}`)}>
+            <span className="serif et-stat-num">{children.length}</span><span className="eyebrow">Inside</span>
           </button>
-        ))}
+        )}
+        <button className="et-stat" onClick={() => setTab("Documents")}>
+          <span className="serif et-stat-num">{(docs ?? []).length}</span><span className="eyebrow">Documents</span>
+        </button>
       </div>
+
+      {/* Ongoing types (area/organization): what's inside — its projects. */}
+      {!finite && children.length > 0 && (
+        <div className="et-overview-children">
+          <span className="eyebrow">Inside this {workspace.type}</span>
+          {children.map((w) => (
+            <a key={w.id} href={`/workspace/?id=${w.id}`} className="et-child-row" data-status={w.status}>
+              <span className="et-ws-dot" data-type={w.type} />
+              <span className="et-child-title">{w.title}</span>
+              <span className="eyebrow et-child-type">{w.status === "completed" ? "✓ done" : w.type}</span>
+            </a>
+          ))}
+        </div>
+      )}
+
       <div className="et-overview-next">
         <span className="eyebrow">Next up</span>
         {open.slice(0, 3).map((t) => <div key={t.id} className="et-next-task">{t.title}</div>)}
-        {open.length === 0 && <div className="et-empty">No open tasks. {workspace.type === "project" ? "An active project should have a next action." : ""}</div>}
+        {open.length === 0 && <div className="et-empty">No open tasks. {finite ? "A finite project should have a next action, or be marked complete." : "Areas are ongoing — add a project or a standing task."}</div>}
       </div>
     </div>
   );
@@ -381,6 +437,26 @@ function WorkspaceStyles() {
       .et-ws-actions { display: inline-flex; align-items: center; gap: 0.4rem; margin-left: auto; }
       .et-ws-archive { background: none; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--ink-soft); font: inherit; font-size: 0.8rem; padding: 0.25rem 0.7rem; cursor: pointer; }
       .et-ws-archive:hover { color: var(--ink); border-color: var(--ink-faint); }
+      .et-ws-complete { background: var(--color-sage); border: 1px solid var(--color-sage); border-radius: 7px; color: #fff; font: inherit; font-size: 0.8rem; padding: 0.25rem 0.7rem; cursor: pointer; }
+      .et-ws-complete[data-done] { background: none; color: var(--ink-soft); border-color: var(--line-strong); }
+      .et-tag-done { color: var(--color-sage) !important; border-color: color-mix(in srgb, var(--color-sage) 45%, transparent) !important; }
+
+      .et-progress-card { border: 1px solid var(--line); background: var(--paper-raised); border-radius: 12px; padding: 1.1rem 1.2rem; margin-bottom: 1.6rem; }
+      .et-progress-card[data-complete] { border-color: color-mix(in srgb, var(--color-sage) 40%, transparent); }
+      .et-progress-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.6rem; }
+      .et-progress-frac { font-size: 0.85rem; color: var(--ink-soft); }
+      .et-progress-bar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+      .et-progress-bar span { display: block; height: 100%; background: var(--color-sage); border-radius: 4px; transition: width 0.4s ease; }
+      .et-complete-cta { margin-top: 0.9rem; background: var(--color-sage); color: #fff; border: none; border-radius: 8px; padding: 0.5rem 0.9rem; font: inherit; font-size: 0.88rem; cursor: pointer; }
+      .et-complete-note { display: flex; align-items: center; gap: 0.5rem; color: var(--ink); font-size: 1rem; }
+      .et-complete-check { color: var(--color-sage); font-size: 1.4rem; }
+
+      .et-overview-children { display: flex; flex-direction: column; margin-bottom: 1.8rem; }
+      .et-child-row { display: flex; align-items: center; gap: 0.6rem; text-decoration: none; color: var(--ink); padding: 0.5rem 0; border-bottom: 1px solid var(--line); }
+      .et-child-row:hover .et-child-title { color: var(--color-iris); }
+      .et-child-row[data-status="completed"] .et-child-title { color: var(--ink-faint); text-decoration: line-through; }
+      .et-child-title { flex: 1; }
+      .et-child-type { color: var(--ink-faint); }
 
       .et-tabs { display: flex; gap: 0.3rem; border-bottom: 1px solid var(--line); margin-bottom: 1.8rem; overflow-x: auto; }
       .et-tab { background: none; border: none; font: inherit; font-size: 0.9rem; color: var(--ink-faint); padding: 0.55rem 0.7rem; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }

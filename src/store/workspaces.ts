@@ -3,6 +3,7 @@
 import { z } from "zod";
 import { createWorkspaceInput, updateWorkspaceInput } from "../schema";
 import { Ctx, RuleError, all, first, id, logEvent, now } from "./db";
+import { createDocument, writeBlocks } from "./documents";
 
 export interface Workspace {
   id: string;
@@ -61,7 +62,25 @@ export async function createWorkspace(c: Ctx, input: z.infer<typeof createWorksp
     .bind(wid, data.parent_id ?? null, data.type, data.title, data.description ?? null, t, t)
     .run();
   await logEvent(c, "create", "workspace", wid, { title: data.title, type: data.type });
+  await seedForType(c, wid, data.type);
   return (await getWorkspace(c, wid))!;
+}
+
+// Type drives starter scaffolding: a project opens with a Roadmap to fill in, a
+// course with a Notes doc. Areas and organizations are containers — no seed.
+async function seedForType(c: Ctx, wid: string, type: string): Promise<void> {
+  if (type === "project") {
+    const doc = await createDocument(c, { workspace_id: wid, title: "Roadmap", type: "roadmap" });
+    // after:null prepends, so insert bottom-up to land in reading order.
+    await writeBlocks(c, doc.id, [
+      { op: "insert", after: null, type: "bullet", content: { text: "" } },
+      { op: "insert", after: null, type: "heading", content: { text: "Milestones" } },
+      { op: "insert", after: null, type: "paragraph", content: { text: "What does done look like?" } },
+      { op: "insert", after: null, type: "heading", content: { text: "Outcome" } },
+    ]);
+  } else if (type === "course") {
+    await createDocument(c, { workspace_id: wid, title: "Course Notes", type: "note" });
+  }
 }
 
 export async function updateWorkspace(c: Ctx, wid: string, input: z.infer<typeof updateWorkspaceInput>): Promise<Workspace> {
