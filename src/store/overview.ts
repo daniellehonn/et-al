@@ -14,17 +14,21 @@ export interface OverviewBlock {
   updated_at: number;
 }
 
-const WIDGET_TYPES = ["table", "child_progress", "tasks", "text", "progress"];
+const WIDGET_TYPES = ["table", "child_progress", "tasks", "text", "progress", "deadlines", "links", "metric", "image"];
 
 // Sensible starter config per widget type.
 function defaultConfig(type: string): unknown {
   switch (type) {
     case "table":
-      return { title: "Table", columns: [{ id: "c1", name: "Name" }, { id: "c2", name: "Status" }], rows: [] };
+      return { title: "Table", columns: [{ id: "c1", name: "Name", type: "text" }, { id: "c2", name: "Status", type: "status" }], rows: [] };
     case "child_progress": return { title: "Progress" };
     case "tasks": return { title: "Open tasks" };
     case "text": return { title: "Notes", text: "" };
     case "progress": return { title: "Progress toward done" };
+    case "deadlines": return { title: "Deadlines" };
+    case "links": return { title: "Links", items: [] };
+    case "metric": return { title: "Metric", value: "0", caption: "" };
+    case "image": return { title: "Image", url: "", caption: "" };
     default: return {};
   }
 }

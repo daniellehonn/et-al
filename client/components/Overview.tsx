@@ -47,7 +47,11 @@ export function OverviewView({ id, workspace, setTab }: { id: string; workspace:
     ["table", "Table"],
     ["child_progress", "Child progress"],
     ["tasks", "Tasks"],
+    ["deadlines", "Deadlines"],
+    ["links", "Links"],
     ["text", "Text"],
+    ["metric", "Metric"],
+    ["image", "Image"],
     ...(finite ? ([["progress", "Progress"]] as Array<[string, string]>) : []),
   ];
 
@@ -129,6 +133,10 @@ function WidgetBody({ type, config, workspace, setTab, onConfigChange }: {
   if (type === "tasks") return <TasksWidget workspaceId={workspace.id} setTab={setTab} />;
   if (type === "text") return <TextWidget config={config} onChange={onConfigChange} />;
   if (type === "progress") return <ProgressWidget workspaceId={workspace.id} workspace={workspace} />;
+  if (type === "deadlines") return <DeadlinesWidget workspaceId={workspace.id} setTab={setTab} />;
+  if (type === "links") return <LinksWidget config={config} onChange={onConfigChange} />;
+  if (type === "metric") return <MetricWidget config={config} onChange={onConfigChange} />;
+  if (type === "image") return <ImageWidget config={config} onChange={onConfigChange} />;
   return null;
 }
 
@@ -278,6 +286,70 @@ function ProgressWidget({ workspaceId, workspace }: { workspaceId: string; works
   );
 }
 
+// Upcoming task due dates across the workspace.
+function DeadlinesWidget({ workspaceId, setTab }: { workspaceId: string; setTab: (t: string) => void }) {
+  const { data: tasks } = useQuery({ queryKey: ["tasks", workspaceId], queryFn: () => api.get<Task[]>(`/workspaces/${workspaceId}/tasks`) });
+  const due = (tasks ?? []).filter((t) => t.due_date && t.status !== "done").sort((a, b) => (a.due_date ?? 0) - (b.due_date ?? 0));
+  if (due.length === 0) return <div className="et-empty">No upcoming deadlines. <button className="et-link" onClick={() => setTab("Tasks")}>Set due dates →</button></div>;
+  const now = Date.now();
+  return (
+    <div className="et-deadlines">
+      {due.slice(0, 8).map((t) => (
+        <div key={t.id} className="et-dl-row" data-overdue={(t.due_date ?? 0) < now || undefined}>
+          <span className="et-dl-date">{new Date(t.due_date!).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>
+          <span className="et-dl-title">{t.title}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+interface LinkItem { label: string; url: string }
+function LinksWidget({ config, onChange }: { config: Config; onChange?: (c: Config) => void }) {
+  const items = (config.items as LinkItem[]) ?? [];
+  const [label, setLabel] = useState("");
+  const [url, setUrl] = useState("");
+  const add = () => { onChange?.({ ...config, items: [...items, { label: label.trim() || url, url: url.trim() }] }); setLabel(""); setUrl(""); };
+  return (
+    <div className="et-links">
+      {items.map((it, i) => (
+        <div key={i} className="et-link-row">
+          <a href={it.url} target="_blank" rel="noreferrer">{it.label || it.url}</a>
+          {onChange && <DeleteButton onDelete={() => onChange({ ...config, items: items.filter((_, ix) => ix !== i) })} />}
+        </div>
+      ))}
+      {items.length === 0 && !onChange && <div className="et-empty">No links.</div>}
+      {onChange && (
+        <form className="et-link-add" onSubmit={(e) => { e.preventDefault(); if (url.trim()) add(); }}>
+          <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label" />
+          <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" />
+          <button type="submit" disabled={!url.trim()}>Add</button>
+        </form>
+      )}
+    </div>
+  );
+}
+
+function MetricWidget({ config, onChange }: { config: Config; onChange?: (c: Config) => void }) {
+  return (
+    <div className="et-metric">
+      <EditableText as="div" className="et-metric-value serif" value={String(config.value ?? "")} placeholder="0" onSave={(v) => onChange?.({ ...config, value: v })} />
+      <EditableText className="et-metric-caption" value={String(config.caption ?? "")} placeholder="add a caption" onSave={(v) => onChange?.({ ...config, caption: v })} />
+    </div>
+  );
+}
+
+function ImageWidget({ config, onChange }: { config: Config; onChange?: (c: Config) => void }) {
+  const url = String(config.url ?? "");
+  return (
+    <div className="et-image">
+      {url ? <img src={url} alt={String(config.caption ?? "")} className="et-image-img" /> : <div className="et-empty">No image set.</div>}
+      {onChange && <input className="et-image-url" value={url} onChange={(e) => onChange({ ...config, url: e.target.value })} placeholder="Image URL" />}
+      {url && <EditableText className="et-image-cap" value={String(config.caption ?? "")} placeholder="caption" onSave={(v) => onChange?.({ ...config, caption: v })} />}
+    </div>
+  );
+}
+
 function OverviewStyles() {
   return (
     <style>{`
@@ -352,6 +424,26 @@ function OverviewStyles() {
       .et-complete-note { display: flex; align-items: center; gap: 0.5rem; }
       .et-complete-check { color: var(--color-sage); font-size: 1.4rem; }
       .et-empty { color: var(--ink-faint); font-style: italic; font-size: 0.9rem; padding: 0.4rem 0; }
+
+      .et-deadlines { display: flex; flex-direction: column; }
+      .et-dl-row { display: grid; grid-template-columns: 3.6rem 1fr; align-items: baseline; gap: 0.6rem; padding: 0.38rem 0; border-bottom: 1px solid var(--line); font-size: 0.9rem; }
+      .et-dl-date { font-family: var(--font-mono); font-size: 0.78rem; color: var(--ink-soft); }
+      .et-dl-row[data-overdue] .et-dl-date { color: #c0392b; }
+      .et-links { display: flex; flex-direction: column; gap: 0.1rem; }
+      .et-link-row { display: flex; align-items: center; justify-content: space-between; padding: 0.3rem 0; border-bottom: 1px solid var(--line); }
+      .et-link-row a { color: var(--color-iris); text-decoration: none; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .et-link-row a:hover { text-decoration: underline; }
+      .et-link-add { display: flex; gap: 0.4rem; margin-top: 0.5rem; }
+      .et-link-add input { flex: 1; min-width: 0; background: var(--paper); border: 1px solid var(--line-strong); border-radius: 7px; padding: 0.35rem 0.55rem; font: inherit; font-size: 0.85rem; color: var(--ink); }
+      .et-link-add input:focus { outline: none; border-color: var(--color-iris); }
+      .et-link-add button { background: var(--color-iris); color: #fff; border: none; border-radius: 7px; padding: 0 0.8rem; font: inherit; font-size: 0.85rem; cursor: pointer; }
+      .et-link-add button:disabled { opacity: 0.4; }
+      .et-metric { display: flex; flex-direction: column; gap: 0.1rem; }
+      .et-metric-value { font-size: 2.6rem; line-height: 1; color: var(--color-iris); }
+      .et-metric-caption { font-size: 0.85rem; color: var(--ink-soft); }
+      .et-image-img { max-width: 100%; border-radius: 8px; display: block; }
+      .et-image-url { width: 100%; margin-top: 0.5rem; background: var(--paper); border: 1px solid var(--line-strong); border-radius: 7px; padding: 0.35rem 0.55rem; font: inherit; font-size: 0.82rem; color: var(--ink); }
+      .et-image-cap { font-size: 0.82rem; color: var(--ink-soft); margin-top: 0.3rem; display: inline-block; }
     `}</style>
   );
 }
