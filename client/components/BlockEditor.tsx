@@ -438,15 +438,15 @@ export function BlockEditor({ documentId }: { documentId: string }) {
           data-dragging={dnd.dragId === b.id || undefined}
           {...dnd.dropProps(b.id, (dragId) => moveBefore(dragId, b.id))}>
           <div className="et-block-gutter">
-            <span className="et-block-drag" title="Drag to reorder" aria-label="Drag to reorder" {...dnd.dragProps(b.id)}>⣿</span>
             <details className="et-type-menu">
-              <summary aria-label="Change block type" title="Change type">⋮⋮</summary>
+              <summary aria-label="Reorder, or open block menu" title="Drag to move · click for options"
+                {...dnd.dragProps(b.id)}>⋮⋮</summary>
               <div className="et-type-list">
+                <div className="et-type-heading">Turn into</div>
                 {TYPE_MENU.filter((t) => TURN_INTO.has(t.type)).map((t) => <button key={t.type} onClick={(e) => { changeType(b, t.type); (e.currentTarget.closest("details") as HTMLDetailsElement).open = false; }}>{t.label}</button>)}
+                <button className="et-type-del" onClick={(e) => { (e.currentTarget.closest("details") as HTMLDetailsElement).open = false; if (editingId === b.id) setEditingId(null); deleteBlock(b.id); }}>Delete</button>
               </div>
             </details>
-            <button className="et-block-del" title="Delete block" aria-label="Delete block"
-              onClick={() => { if (editingId === b.id) setEditingId(null); deleteBlock(b.id); }}>×</button>
           </div>
           {b.type === "divider" ? (
             <hr className="et-hr" />
@@ -694,8 +694,7 @@ function EditorStyles() {
       .et-block:has(.et-type-menu[open]) .et-block-gutter { opacity: 1; }
       .et-type-menu summary { padding: 0.1rem 0.15rem; }
       .et-block-gutter { display: flex; flex-direction: column; align-items: center; gap: 0.1rem; }
-      .et-block-drag { color: var(--ink-faint); font-size: 0.8rem; line-height: 1; cursor: grab; user-select: none; padding: 0.1rem; }
-      .et-block-drag:active { cursor: grabbing; }
+      .et-type-menu summary:active { cursor: grabbing; }
       .et-block[data-dragging] { opacity: 0.4; }
       .et-block[data-over] { box-shadow: inset 0 2px 0 0 var(--color-iris); }
       .et-block-del { background: none; border: none; color: var(--ink-faint); font-size: 1.05rem; line-height: 1; cursor: pointer; padding: 0 0.1rem; border-radius: 4px; }
@@ -706,6 +705,9 @@ function EditorStyles() {
       .et-type-list { position: absolute; z-index: 10; top: 1.2rem; left: 0; background: var(--paper-raised); border: 1px solid var(--line-strong); border-radius: 9px; padding: 0.3rem; display: flex; flex-direction: column; min-width: 8rem; max-height: 60vh; overflow-y: auto; box-shadow: 0 8px 24px rgba(0,0,0,0.12); }
       .et-type-list button { text-align: left; background: none; border: none; font: inherit; font-size: 0.88rem; color: var(--ink-soft); padding: 0.32rem 0.5rem; border-radius: 6px; cursor: pointer; }
       .et-type-list button:hover { background: var(--color-iris-soft); color: var(--ink); }
+      .et-type-heading { font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-faint); padding: 0.2rem 0.5rem 0.15rem; }
+      .et-type-del { margin-top: 0.2rem; border-top: 1px solid var(--line) !important; border-radius: 0 !important; color: #c0392b !important; }
+      .et-type-del:hover { background: color-mix(in srgb, #c0392b 12%, transparent) !important; color: #c0392b !important; }
       .et-type-del { border-top: 1px solid var(--line) !important; margin-top: 0.2rem; color: #c0392b !important; }
       .et-type-del:hover { background: color-mix(in srgb, #c0392b 12%, transparent) !important; }
 

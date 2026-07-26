@@ -1,6 +1,6 @@
 "use client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useState, type PointerEvent as ReactPointerEvent } from "react";
 import { api, type Workspace, type Task, type Health, type Objective, type Document, type Relationship } from "@/lib/api";
 import { EditableText, DeleteButton } from "./Editable";
 import { pct, fmtDate, isOverdue } from "@/lib/util";
@@ -13,7 +13,7 @@ type Config = Record<string, unknown>;
 
 // ── Table: typed columns — the club application tracker etc. ─────────────────
 type ColType = "text" | "status" | "date" | "checkbox" | "number";
-interface Col { id: string; name: string; type?: ColType }
+interface Col { id: string; name: string; type?: ColType; width?: number }
 interface Row { id: string; cells: Record<string, string> }
 const COL_TYPES: Array<[ColType, string]> = [["text", "Text"], ["status", "Status"], ["date", "Date"], ["checkbox", "Checkbox"], ["number", "Number"]];
 const PILL_COLORS = ["#5D57E4", "#D98A3D", "#4E9E7F", "#c0392b", "#3a86ff", "#8b5cf6", "#0891b2", "#65758b"];
@@ -50,6 +50,16 @@ export function TableWidget({ config, onChange }: { config: Config; onChange?: (
   const setColType = (colId: string, type: ColType) => update({ columns: cols.map((c) => c.id === colId ? { ...c, type } : c) });
   const delRow = (r: Row) => update({ rows: rows.filter((x) => x.id !== r.id) });
   const delCol = (colId: string) => update({ columns: cols.filter((c) => c.id !== colId), rows: rows.map((r) => { const { [colId]: _, ...rest } = r.cells; return { ...r, cells: rest }; }) });
+  const setColWidth = (colId: string, width: number) => update({ columns: cols.map((c) => c.id === colId ? { ...c, width } : c) });
+  // Drag the right edge of a header to resize that column.
+  const startResize = (colId: string, e: ReactPointerEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    const th = (e.currentTarget as HTMLElement).closest("th") as HTMLElement;
+    const startX = e.clientX, startW = th.offsetWidth;
+    const onMove = (ev: PointerEvent) => setColWidth(colId, Math.max(64, startW + ev.clientX - startX));
+    const onUp = () => { window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", onUp); };
+    window.addEventListener("pointermove", onMove); window.addEventListener("pointerup", onUp);
+  };
   const { dragProps, dropProps } = useDragReorder();
   const moveCol = (fromId: string, toId: string) => {
     if (fromId === toId) return;
@@ -62,11 +72,16 @@ export function TableWidget({ config, onChange }: { config: Config; onChange?: (
 
   return (
     <div className="et-table-wrap">
-      <table className="et-table">
+      <table className="et-table" style={cols.some((c) => c.width) ? { tableLayout: "fixed" } : undefined}>
+        <colgroup>
+          {cols.map((c) => <col key={c.id} style={c.width ? { width: `${c.width}px` } : undefined} />)}
+          {!readOnly && <col style={{ width: "1.6rem" }} />}
+        </colgroup>
         <thead>
           <tr>
             {cols.map((c) => (
               <th key={c.id} {...(readOnly ? {} : dropProps(c.id, (from) => moveCol(from, c.id)))}>
+                {!readOnly && <span className="et-col-resize" onPointerDown={(e) => startResize(c.id, e)} title="Drag to resize" />}
                 <span className="et-th">
                   {!readOnly && <span className="et-th-drag" {...dragProps(c.id)} title="Drag to reorder column">⠿</span>}
                   {readOnly ? c.name : <EditableText value={c.name} onSave={(n) => renameCol(c.id, n)} />}
@@ -392,7 +407,10 @@ function OverviewStyles() {
       .et-table-wrap { overflow-x: auto; }
       .et-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
       .et-table th, .et-table td { border: 1px solid var(--line); padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
-      .et-table th { background: var(--paper); font-weight: 500; font-size: 0.82rem; }
+      .et-table th { background: var(--paper); font-weight: 500; font-size: 0.82rem; position: relative; }
+      .et-table td { overflow: hidden; text-overflow: ellipsis; }
+      .et-col-resize { position: absolute; top: 0; right: -3px; width: 7px; height: 100%; cursor: col-resize; z-index: 3; touch-action: none; }
+      .et-col-resize:hover, .et-col-resize:active { background: linear-gradient(var(--color-iris), var(--color-iris)) center / 2px 100% no-repeat; }
       .et-th { display: flex; align-items: center; gap: 0.3rem; }
       .et-th > :nth-child(2) { flex: 1; }
       .et-th-drag { cursor: grab; color: var(--ink-faint); font-size: 0.72rem; opacity: 0; transition: opacity 0.12s; }
