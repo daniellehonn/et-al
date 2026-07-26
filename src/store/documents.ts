@@ -102,30 +102,51 @@ async function positionAfter(c: Ctx, documentId: string, afterId: string | null 
 }
 
 // Parse markdown (or plain text) into blocks — enough for what agents write:
-// headings, bullets, numbered items, todos, quotes, fenced code, dividers.
-function markdownToBlocks(md: string): Array<{ type: string; text: string }> {
-  const out: Array<{ type: string; text: string }> = [];
+// headings, bullets, numbered items, todos, quotes, fenced code, dividers, and
+// pipe tables. Each block carries its structured content object.
+type ParsedBlock = { type: string; content: Record<string, unknown> };
+const cells = (line: string): string[] => line.trim().replace(/^\||\|$/g, "").split("|").map((s) => s.trim());
+const isTableSep = (line: string): boolean => /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)+\|?\s*$/.test(line);
+
+function markdownToBlocks(md: string): ParsedBlock[] {
+  const out: ParsedBlock[] = [];
   const lines = md.replace(/\r\n/g, "\n").split("\n");
   let inCode = false;
   let code: string[] = [];
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     if (line.trim().startsWith("```")) {
-      if (inCode) { out.push({ type: "code", text: code.join("\n") }); code = []; inCode = false; }
+      if (inCode) { out.push({ type: "code", content: { text: code.join("\n") } }); code = []; inCode = false; }
       else inCode = true;
       continue;
     }
     if (inCode) { code.push(line); continue; }
     const s = line.trim();
     if (s === "") continue;
-    if (/^#{1,6}\s+/.test(s)) out.push({ type: "heading", text: s.replace(/^#{1,6}\s+/, "") });
-    else if (/^(-|\*|\+)\s+\[[ xX]\]\s+/.test(s)) out.push({ type: "todo", text: s.replace(/^(-|\*|\+)\s+\[[ xX]\]\s+/, "") });
-    else if (/^(-|\*|\+)\s+/.test(s)) out.push({ type: "bullet", text: s.replace(/^(-|\*|\+)\s+/, "") });
-    else if (/^\d+\.\s+/.test(s)) out.push({ type: "numbered", text: s.replace(/^\d+\.\s+/, "") });
-    else if (/^>\s?/.test(s)) out.push({ type: "quote", text: s.replace(/^>\s?/, "") });
-    else if (/^(-{3,}|\*{3,}|_{3,})$/.test(s)) out.push({ type: "divider", text: "" });
-    else out.push({ type: "paragraph", text: s });
+
+    // A table: header row of pipes, then a |---|---| separator, then rows.
+    if (s.includes("|") && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+      const columns = cells(s);
+      const rows: string[][] = [];
+      i += 2; // skip header + separator
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim() !== "") {
+        rows.push(cells(lines[i]));
+        i++;
+      }
+      i--; // the for-loop will i++ past the last consumed row
+      out.push({ type: "table", content: { columns, rows } });
+      continue;
+    }
+
+    if (/^#{1,6}\s+/.test(s)) out.push({ type: "heading", content: { text: s.replace(/^#{1,6}\s+/, "") } });
+    else if (/^(-|\*|\+)\s+\[[ xX]\]\s+/.test(s)) out.push({ type: "todo", content: { text: s.replace(/^(-|\*|\+)\s+\[[ xX]\]\s+/, "") } });
+    else if (/^(-|\*|\+)\s+/.test(s)) out.push({ type: "bullet", content: { text: s.replace(/^(-|\*|\+)\s+/, "") } });
+    else if (/^\d+\.\s+/.test(s)) out.push({ type: "numbered", content: { text: s.replace(/^\d+\.\s+/, "") } });
+    else if (/^>\s?/.test(s)) out.push({ type: "quote", content: { text: s.replace(/^>\s?/, "") } });
+    else if (/^(-{3,}|\*{3,}|_{3,})$/.test(s)) out.push({ type: "divider", content: { text: "" } });
+    else out.push({ type: "paragraph", content: { text: s } });
   }
-  if (inCode && code.length) out.push({ type: "code", text: code.join("\n") });
+  if (inCode && code.length) out.push({ type: "code", content: { text: code.join("\n") } });
   return out;
 }
 
@@ -141,7 +162,7 @@ async function applyOps(c: Ctx, documentId: string, ops: BlockOp[]): Promise<voi
       for (const b of markdownToBlocks(op.content)) {
         await c.db
           .prepare(`INSERT INTO block (id, document_id, type, content_json, position, version, is_ai, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)`)
-          .bind(id("blk"), documentId, b.type, JSON.stringify({ text: b.text }), pos++, isAi, t, t)
+          .bind(id("blk"), documentId, b.type, JSON.stringify(b.content), pos++, isAi, t, t)
           .run();
       }
     } else if (op.op === "insert") {
@@ -172,7 +193,13 @@ async function applyOps(c: Ctx, documentId: string, ops: BlockOp[]): Promise<voi
   const doc = await getDocument(c, documentId);
   if (doc) {
     const blocks = await getBlocks(c, documentId);
-    const text = blocks.map((b) => { try { return JSON.parse(b.content_json).text ?? ""; } catch { return ""; } }).join("\n");
+    const text = blocks.map((b) => {
+      try {
+        const c = JSON.parse(b.content_json);
+        if (Array.isArray(c.columns)) return [c.columns, ...(c.rows ?? [])].flat().join(" ");
+        return c.text ?? "";
+      } catch { return ""; }
+    }).join("\n");
     await ftsUpsert(c, "document", documentId, doc.title, text);
   }
 }

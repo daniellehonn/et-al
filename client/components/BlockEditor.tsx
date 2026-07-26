@@ -2,6 +2,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, blockText, type Block, type BlockOp, type DocumentPatch } from "@/lib/api";
+import { EditableText, DeleteButton } from "./Editable";
 
 // A Notion-style editor over the block model. Each block is an auto-growing
 // textarea (robust cursor handling; blocks store plain text). Humans write
@@ -18,6 +19,24 @@ const TYPE_MENU: Array<{ type: string; label: string }> = [
   { type: "divider", label: "Divider" },
 ];
 
+// Render inline markdown: **bold**, *italic*/_italic_, `code`, [text](url).
+// Bold is matched before italic so ** wins over *.
+function renderInline(src: string): React.ReactNode {
+  const nodes: React.ReactNode[] = [];
+  const re = /(\*\*|__)(.+?)\1|(\*|_)(.+?)\3|`([^`]+)`|\[([^\]]+)\]\(([^)\s]+)\)/g;
+  let last = 0, m: RegExpExecArray | null, k = 0;
+  while ((m = re.exec(src))) {
+    if (m.index > last) nodes.push(src.slice(last, m.index));
+    if (m[1]) nodes.push(<strong key={k++}>{m[2]}</strong>);
+    else if (m[3]) nodes.push(<em key={k++}>{m[4]}</em>);
+    else if (m[5]) nodes.push(<code key={k++} className="et-inline-code">{m[5]}</code>);
+    else if (m[6]) nodes.push(<a key={k++} href={m[7]} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{m[6]}</a>);
+    last = re.lastIndex;
+  }
+  if (last < src.length) nodes.push(src.slice(last));
+  return nodes;
+}
+
 export function BlockEditor({ documentId }: { documentId: string }) {
   const qc = useQueryClient();
   const { data: blocks } = useQuery({
@@ -32,6 +51,8 @@ export function BlockEditor({ documentId }: { documentId: string }) {
 
   // Local text mirror so typing is instant; server save is debounced.
   const [text, setText] = useState<Record<string, string>>({});
+  // Which block is in raw-edit mode. Others render formatted markdown.
+  const [editingId, setEditingId] = useState<string | null>(null);
   const focusAfter = useRef<{ afterId: string | null } | null>(null);
   const debounce = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
@@ -42,15 +63,23 @@ export function BlockEditor({ documentId }: { documentId: string }) {
       for (const b of blocks) if (next[b.id] === undefined) next[b.id] = blockText(b);
       return next;
     });
-    // Focus the block created by the last structural op.
+    // After a structural op, put the newly-focused block into edit mode.
     if (focusAfter.current && blocks.length) {
       const { afterId } = focusAfter.current;
       const idx = afterId ? blocks.findIndex((b) => b.id === afterId) : -1;
       const target = blocks[idx + 1] ?? blocks[blocks.length - 1];
       focusAfter.current = null;
-      requestAnimationFrame(() => document.getElementById(`blk-${target.id}`)?.focus());
+      setEditingId(target.id);
     }
   }, [blocks]);
+
+  // Focus the textarea whenever a block enters edit mode.
+  useEffect(() => {
+    if (editingId) requestAnimationFrame(() => {
+      const el = document.getElementById(`blk-${editingId}`) as HTMLTextAreaElement | null;
+      if (el) { el.focus(); el.style.height = "auto"; el.style.height = `${el.scrollHeight}px`; }
+    });
+  }, [editingId]);
 
   const applyOps = useCallback(async (ops: BlockOp[]) => {
     await api.post(`/documents/${documentId}/blocks`, { ops });
@@ -65,6 +94,14 @@ export function BlockEditor({ documentId }: { documentId: string }) {
       });
     }, 500);
   }, [documentId]);
+
+  // Persist a block immediately (on blur), cancelling any pending debounce.
+  const flush = useCallback((b: Block) => {
+    clearTimeout(debounce.current[b.id]);
+    void api.post(`/documents/${documentId}/blocks`, {
+      ops: [{ op: "update", id: b.id, type: b.type, content: { text: text[b.id] ?? "" } }],
+    });
+  }, [documentId, text]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>, b: Block) => {
     const value = text[b.id] ?? "";
@@ -137,13 +174,16 @@ export function BlockEditor({ documentId }: { documentId: string }) {
           </div>
           {b.type === "divider" ? (
             <hr className="et-hr" />
-          ) : (
+          ) : b.type === "table" ? (
+            <DocTableBlock contentJson={b.content_json}
+              onSave={(content) => applyOps([{ op: "update", id: b.id, type: "table", content }])} />
+          ) : editingId === b.id ? (
             <textarea
               id={`blk-${b.id}`}
               className="et-block-input"
               rows={1}
               value={text[b.id] ?? ""}
-              placeholder={b.type === "heading" ? "Heading" : "Type, or ⋮⋮ to change type"}
+              placeholder={b.type === "heading" ? "Heading" : "Type, or ⋮⋮ to change type. **bold**, *italic*, `code` supported"}
               onChange={(e) => {
                 const v = e.target.value;
                 setText((s) => ({ ...s, [b.id]: v }));
@@ -152,8 +192,14 @@ export function BlockEditor({ documentId }: { documentId: string }) {
                 e.target.style.height = `${e.target.scrollHeight}px`;
               }}
               onKeyDown={(e) => onKeyDown(e, b)}
-              ref={(el) => { if (el) { el.style.height = "auto"; el.style.height = `${el.scrollHeight}px`; } }}
+              onBlur={() => { flush(b); setEditingId(null); }}
             />
+          ) : b.type === "code" ? (
+            <pre className="et-block-render et-render-code" onClick={() => setEditingId(b.id)}>{text[b.id] || ""}</pre>
+          ) : (
+            <div className="et-block-render" data-empty={!text[b.id] || undefined} onClick={() => setEditingId(b.id)}>
+              {text[b.id] ? renderInline(text[b.id]) : "Empty — click to edit"}
+            </div>
           )}
         </div>
       ))}
@@ -163,9 +209,64 @@ export function BlockEditor({ documentId }: { documentId: string }) {
   );
 }
 
+// A markdown table rendered as a real, editable table inside a document.
+function DocTableBlock({ contentJson, onSave }: { contentJson: string; onSave: (content: { columns: string[]; rows: string[][] }) => void }) {
+  let data: { columns: string[]; rows: string[][] };
+  try { const p = JSON.parse(contentJson); data = { columns: p.columns ?? [], rows: p.rows ?? [] }; }
+  catch { data = { columns: [], rows: [] }; }
+  const { columns, rows } = data;
+
+  const setCell = (r: number, c: number, v: string) => onSave({ columns, rows: rows.map((row, ri) => ri === r ? row.map((cell, ci) => ci === c ? v : cell) : row) });
+  const setHeader = (c: number, v: string) => onSave({ columns: columns.map((h, ci) => ci === c ? v : h), rows });
+  const addRow = () => onSave({ columns, rows: [...rows, columns.map(() => "")] });
+  const addCol = () => onSave({ columns: [...columns, "Column"], rows: rows.map((row) => [...row, ""]) });
+  const delRow = (r: number) => onSave({ columns, rows: rows.filter((_, ri) => ri !== r) });
+  const delCol = (c: number) => onSave({ columns: columns.filter((_, ci) => ci !== c), rows: rows.map((row) => row.filter((_, ci) => ci !== c)) });
+
+  return (
+    <div className="et-doctable-wrap">
+      <table className="et-doctable">
+        <thead>
+          <tr>
+            {columns.map((h, c) => (
+              <th key={c}>
+                <span className="et-doctable-th">
+                  <EditableText value={h} onSave={(v) => setHeader(c, v)} />
+                  <DeleteButton onDelete={() => delCol(c)} />
+                </span>
+              </th>
+            ))}
+            <th className="et-doctable-plus"><button onClick={addCol} title="Add column">+</button></th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, r) => (
+            <tr key={r}>
+              {columns.map((_, c) => (
+                <td key={c}><EditableText value={row[c] ?? ""} placeholder="—" onSave={(v) => setCell(r, c, v)} /></td>
+              ))}
+              <td className="et-doctable-del"><DeleteButton onDelete={() => delRow(r)} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <button className="et-doctable-addrow" onClick={addRow}>+ Add row</button>
+    </div>
+  );
+}
+
 function EditorStyles() {
   return (
     <style>{`
+      .et-doctable-wrap { overflow-x: auto; padding: 0.2rem 0; }
+      .et-doctable { border-collapse: collapse; font-size: 0.9rem; min-width: 100%; }
+      .et-doctable th, .et-doctable td { border: 1px solid var(--line-strong); padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
+      .et-doctable th { background: var(--paper-raised); font-weight: 500; font-size: 0.84rem; }
+      .et-doctable-th { display: flex; align-items: center; gap: 0.3rem; justify-content: space-between; }
+      .et-doctable-plus, .et-doctable-del { width: 1.6rem; text-align: center; }
+      .et-doctable-plus button { background: none; border: none; color: var(--ink-faint); font-size: 1rem; cursor: pointer; }
+      .et-doctable-addrow { margin-top: 0.4rem; background: none; border: none; color: var(--ink-soft); font: inherit; font-size: 0.84rem; cursor: pointer; }
+      .et-doctable-addrow:hover { color: var(--color-iris); }
       .et-editor { max-width: 44rem; }
       .et-patches { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 1.5rem; }
       .et-patch {
@@ -196,6 +297,15 @@ function EditorStyles() {
       .et-type-del { border-top: 1px solid var(--line) !important; margin-top: 0.2rem; color: #c0392b !important; }
       .et-type-del:hover { background: color-mix(in srgb, #c0392b 12%, transparent) !important; }
 
+      .et-block-render { width: 100%; line-height: 1.6; padding: 0.28rem 0; cursor: text; white-space: pre-wrap; word-break: break-word; min-height: 1.4em; }
+      .et-block-render[data-empty] { color: var(--line-strong); font-style: italic; }
+      .et-block-render a { color: var(--color-iris); }
+      .et-block-render strong { font-weight: 650; }
+      .et-inline-code { font-family: var(--font-mono); font-size: 0.85em; background: var(--paper-raised); padding: 0.05em 0.32em; border-radius: 4px; }
+      .et-block[data-type="heading"] .et-block-render { font-family: var(--font-display); font-size: 1.7rem; line-height: 1.2; padding-top: 0.6rem; }
+      .et-block[data-type="quote"] .et-block-render { border-left: 2px solid var(--color-iris); padding-left: 0.9rem; color: var(--ink-soft); font-style: italic; }
+      .et-block[data-type="bullet"] .et-block-render, .et-block[data-type="todo"] .et-block-render, .et-block[data-type="numbered"] .et-block-render { padding-left: 1.1rem; }
+      .et-render-code { font-family: var(--font-mono); font-size: 0.85rem; background: var(--paper-raised); border-radius: 7px; padding: 0.6rem 0.8rem; margin: 0.28rem 0; white-space: pre-wrap; cursor: text; }
       .et-block-input {
         width: 100%; border: none; background: none; resize: none; overflow: hidden;
         font: inherit; color: var(--ink); line-height: 1.6; padding: 0.28rem 0; margin: 0;
