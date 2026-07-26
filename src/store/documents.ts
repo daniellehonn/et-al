@@ -230,6 +230,8 @@ async function applyOps(c: Ctx, documentId: string, ops: BlockOp[]): Promise<voi
         .bind(op.type ?? existing.type, JSON.stringify(op.content), isAi, t, op.id)
         .run();
     } else if (op.op === "delete") {
+      // block_revision references block(id), so clear revisions before the block.
+      await c.db.prepare(`DELETE FROM block_revision WHERE block_id = ?`).bind(op.id).run();
       await c.db.prepare(`DELETE FROM block WHERE id = ?`).bind(op.id).run();
     } else if (op.op === "move") {
       const pos = await positionAfter(c, documentId, op.after);
