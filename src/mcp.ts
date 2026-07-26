@@ -48,6 +48,7 @@ const TOOLS: Tool[] = [
           accomplishment: "{ situation, task, action, result, bullet } — STAR + a one-line resume bullet",
           resume_bullet: "{ text, skills, date } — one polished, quantified line",
           role: "{ company, title, start, end, location, bullets: string[] } — a CV entry",
+          project: "{ name, role, tech, outcome, link } — a portfolio project highlight",
         },
       },
     }),

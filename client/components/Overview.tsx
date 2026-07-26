@@ -313,10 +313,11 @@ function CareerSummaryWidget() {
       if (it.type === "role") return `${c.title || "?"} at ${c.company || "?"}`;
       if (it.type === "resume_bullet") return c.text || "(bullet)";
       if (it.type === "accomplishment") return c.bullet || c.result || "(accomplishment)";
+      if (it.type === "project") return `${c.name || "(project)"}${c.outcome ? ` — ${c.outcome}` : ""}`;
     } catch { /* ignore */ }
     return "(career block)";
   };
-  const icon = (t: string) => (t === "role" ? "💼" : t === "accomplishment" ? "⭐" : "•");
+  const icon = (t: string) => (t === "role" ? "💼" : t === "accomplishment" ? "⭐" : t === "project" ? "🚀" : "•");
   return (
     <div className="et-career-sum">
       {items.map((it) => (

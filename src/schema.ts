@@ -47,14 +47,14 @@ export const BLOCK_TYPES = [
   // Live "widget" blocks (compute from workspace data) — a page mixes both freely
   "tasks", "deadlines", "child_progress", "objective_progress", "progress", "backlinks", "metric", "links", "career_summary",
   // Career blocks — structured career capital you recycle into a resume
-  "accomplishment", "resume_bullet", "role",
+  "accomplishment", "resume_bullet", "role", "project",
 ] as const;
 // Block types that render a live widget rather than static content.
 export const WIDGET_BLOCK_TYPES = [
   "tasks", "deadlines", "child_progress", "objective_progress", "progress", "backlinks", "metric", "links", "career_summary",
 ] as const;
 // Structured career blocks — captured as you work, recycled into resume/LinkedIn.
-export const CAREER_BLOCK_TYPES = ["accomplishment", "resume_bullet", "role"] as const;
+export const CAREER_BLOCK_TYPES = ["accomplishment", "resume_bullet", "role", "project"] as const;
 
 export const SOURCE_KINDS = [
   "note", "idea", "url", "pdf", "youtube", "book", "image", "voice", "github", "email", "document",

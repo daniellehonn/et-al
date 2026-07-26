@@ -131,7 +131,7 @@ export interface CareerBlock {
 export function listCareerBlocks(c: Ctx, workspaceId?: string): Promise<CareerBlock[]> {
   const base = `SELECT b.id, b.document_id, b.type, b.content_json, b.created_at, d.workspace_id, d.title AS doc_title
                 FROM block b JOIN document d ON b.document_id = d.id
-                WHERE b.type IN ('accomplishment', 'resume_bullet', 'role')`;
+                WHERE b.type IN ('accomplishment', 'resume_bullet', 'role', 'project')`;
   return workspaceId
     ? all<CareerBlock>(c, `${base} AND d.workspace_id = ? ORDER BY b.created_at DESC`, workspaceId)
     : all<CareerBlock>(c, `${base} ORDER BY b.created_at DESC`);

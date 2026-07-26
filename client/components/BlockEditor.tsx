@@ -43,8 +43,9 @@ const TYPE_MENU: Array<{ type: string; label: string; kw?: string }> = [
   { type: "accomplishment", label: "Accomplishment (STAR)", kw: "career star result" },
   { type: "resume_bullet", label: "Resume bullet", kw: "career cv" },
   { type: "role", label: "Role / experience", kw: "career job cv" },
+  { type: "project", label: "Project highlight", kw: "career portfolio" },
 ];
-const CAREER_TYPES = new Set(["accomplishment", "resume_bullet", "role"]);
+const CAREER_TYPES = new Set(["accomplishment", "resume_bullet", "role", "project"]);
 
 // The ⋮⋮ "turn into" menu only offers text-like conversions — not media, tables,
 // or live widgets (those are inserted fresh via the "/" menu).
@@ -62,6 +63,7 @@ function defaultContentFor(type: string, keepText: string): Record<string, unkno
   if (type === "accomplishment") return { situation: "", task: "", action: "", result: "", bullet: "" };
   if (type === "resume_bullet") return { text: keepText, skills: "", date: "" };
   if (type === "role") return { company: "", title: "", start: "", end: "", location: "", bullets: [] };
+  if (type === "project") return { name: "", role: "", tech: "", outcome: "", link: "" };
   if (WIDGET_TYPES.has(type)) return { title: keepText || undefined };
   if (type === "divider" || type === "toc") return { text: "" };
   return { text: keepText };
@@ -124,6 +126,30 @@ function ResumeBulletBlock({ contentJson, onSave }: { contentJson: string; onSav
           <EditableText value={c.date ?? ""} placeholder="date / range" onSave={(v) => onSave({ ...c, date: v })} />
         </div>
       </div>
+    </div>
+  );
+}
+
+function ProjectBlock({ contentJson, onSave }: { contentJson: string; onSave: (c: Record<string, unknown>) => void }) {
+  const c = parseContent(contentJson) as Record<string, string>;
+  const field = (k: string, label: string) => (
+    <div className="et-star-field">
+      <span className="et-star-label">{label}</span>
+      <EditableText multiline value={c[k] ?? ""} placeholder={`${label}…`} onSave={(v) => onSave({ ...c, [k]: v })}
+        render={c[k] ? <span className="et-inline-wrap">{k === "link" ? renderInline(c[k]) : renderInline(c[k])}</span> : undefined} />
+    </div>
+  );
+  return (
+    <div className="et-career et-project-block">
+      <div className="et-career-badge">🚀 Project</div>
+      <div className="et-role-head">
+        <EditableText className="et-role-title" value={c.name ?? ""} placeholder="Project name" onSave={(v) => onSave({ ...c, name: v })} />
+        {c.role && <span className="et-role-at">·</span>}
+        <EditableText className="et-role-company" value={c.role ?? ""} placeholder="your role" onSave={(v) => onSave({ ...c, role: v })} />
+      </div>
+      {field("tech", "Tech")}
+      {field("outcome", "Outcome")}
+      {field("link", "Link")}
     </div>
   );
 }
@@ -285,19 +311,20 @@ export function BlockEditor({ documentId }: { documentId: string }) {
   const saveText = useCallback((b: Block, value: string) => {
     clearTimeout(debounce.current[b.id]);
     debounce.current[b.id] = setTimeout(() => {
+      // Per-keystroke: don't alert, but refresh auth so the read-only banner shows.
       api.post(`/documents/${documentId}/blocks`, {
         ops: [{ op: "update", id: b.id, type: b.type, content: { text: value } }],
-      });
+      }).catch(() => qc.invalidateQueries({ queryKey: ["session"] }));
     }, 500);
-  }, [documentId]);
+  }, [documentId, qc]);
 
   // Persist a block immediately (on blur), cancelling any pending debounce.
   const flush = useCallback((b: Block) => {
     clearTimeout(debounce.current[b.id]);
-    void api.post(`/documents/${documentId}/blocks`, {
+    api.post(`/documents/${documentId}/blocks`, {
       ops: [{ op: "update", id: b.id, type: b.type, content: { text: text[b.id] ?? "" } }],
-    });
-  }, [documentId, text]);
+    }).catch(onWriteError);
+  }, [documentId, text, onWriteError]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>, b: Block) => {
     const value = text[b.id] ?? "";
@@ -428,6 +455,8 @@ export function BlockEditor({ documentId }: { documentId: string }) {
             <ResumeBulletBlock contentJson={b.content_json} onSave={(content) => applyOps([{ op: "update", id: b.id, type: "resume_bullet", content }])} />
           ) : b.type === "role" ? (
             <RoleBlock contentJson={b.content_json} onSave={(content) => applyOps([{ op: "update", id: b.id, type: "role", content }])} />
+          ) : b.type === "project" ? (
+            <ProjectBlock contentJson={b.content_json} onSave={(content) => applyOps([{ op: "update", id: b.id, type: "project", content }])} />
           ) : WIDGET_TYPES.has(b.type) ? (
             workspaceId
               ? <WidgetBlock type={b.type} workspaceId={workspaceId} config={parseContent(b.content_json)} onChange={(content) => applyOps([{ op: "update", id: b.id, type: b.type, content }])} />
