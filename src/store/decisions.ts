@@ -1,7 +1,7 @@
 // Decisions: immutable "we chose X because Y" events. Write-once.
 import { z } from "zod";
 import { recordDecisionInput } from "../schema";
-import { Ctx, all, first, ftsUpsert, id, logEvent, now } from "./db";
+import { Ctx, RuleError, all, first, ftsDelete, ftsUpsert, id, logEvent, now } from "./db";
 
 export interface Decision {
   id: string;
@@ -37,4 +37,13 @@ export async function recordDecision(c: Ctx, input: z.infer<typeof recordDecisio
   await ftsUpsert(c, "decision", did, data.title, data.rationale);
   await logEvent(c, "create", "decision", did, { title: data.title });
   return (await getDecision(c, did))!;
+}
+
+// Decisions are immutable in content, but a record can be removed entirely.
+export async function deleteDecision(c: Ctx, did: string): Promise<void> {
+  const existing = await getDecision(c, did);
+  if (!existing) throw new RuleError(`decision ${did} not found`, 404);
+  await c.db.prepare(`DELETE FROM decision WHERE id = ?`).bind(did).run();
+  await ftsDelete(c, "decision", did);
+  await logEvent(c, "delete", "decision", did, { title: existing.title });
 }

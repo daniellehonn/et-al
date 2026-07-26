@@ -24,6 +24,10 @@ export function InboxView() {
     mutationFn: (id: string) => api.patch(`/sources/${id}`, { status: "processed" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["inbox"] }),
   });
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => api.del(`/sources/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["inbox"] }),
+  });
 
   return (
     <div className="et-inbox-page">
@@ -54,7 +58,8 @@ export function InboxView() {
                 <option value="" disabled>File to…</option>
                 {(workspaces ?? []).map((w) => <option key={w.id} value={w.id}>{w.title}</option>)}
               </select>
-              <button className="et-clear" onClick={() => clearMut.mutate(s.id)} aria-label="Clear from inbox">Clear</button>
+              <button className="et-clear" onClick={() => clearMut.mutate(s.id)} aria-label="Mark processed">Clear</button>
+              <button className="et-clear et-delete" onClick={() => deleteMut.mutate(s.id)} aria-label="Delete capture">Delete</button>
             </div>
           </div>
         ))}
@@ -84,6 +89,7 @@ export function InboxView() {
         .et-inbox-actions select { background: var(--paper-raised); border: 1px solid var(--line-strong); border-radius: 7px; padding: 0.35rem 0.5rem; font: inherit; font-size: 0.82rem; color: var(--ink-soft); }
         .et-clear { background: none; border: none; color: var(--ink-faint); font: inherit; font-size: 0.82rem; cursor: pointer; padding: 0.35rem 0.4rem; }
         .et-clear:hover { color: var(--ink); }
+        .et-delete:hover { color: #c0392b; }
         .et-empty { color: var(--ink-faint); font-style: italic; padding: 1rem 0; }
       `}</style>
     </div>

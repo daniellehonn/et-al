@@ -3,14 +3,26 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api, type Workspace, type Task, type Objective, type Document, type Decision, type RecentEvent } from "@/lib/api";
 import { BlockEditor } from "./BlockEditor";
+import { EditableText, DeleteButton } from "./Editable";
 
 const TABS = ["Overview", "Objectives", "Tasks", "Documents", "Decisions", "Timeline"] as const;
 type Tab = (typeof TABS)[number];
 
 export function WorkspaceView({ id, initialTab, initialDoc }: { id: string; initialTab?: string; initialDoc?: string }) {
+  const qc = useQueryClient();
   const [tab, setTab] = useState<Tab>((TABS as readonly string[]).includes(initialTab ?? "") ? (initialTab as Tab) : "Overview");
   const { data: workspace, isLoading } = useQuery({ queryKey: ["workspace", id], queryFn: () => api.get<Workspace>(`/workspaces/${id}`) });
   const { data: all } = useQuery({ queryKey: ["workspaces"], queryFn: () => api.get<Workspace[]>("/workspaces") });
+
+  const patchWs = useMutation({
+    mutationFn: (body: Partial<Workspace>) => api.patch(`/workspaces/${id}`, body),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["workspace", id] }); qc.invalidateQueries({ queryKey: ["workspaces"] }); },
+  });
+  const deleteWs = useMutation({
+    mutationFn: () => api.del(`/workspaces/${id}`),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["workspaces"] }); window.location.href = "/"; },
+    onError: (e) => alert((e as Error).message),
+  });
 
   if (isLoading) return <div className="et-ws-page"><div className="et-empty">Loading…</div></div>;
   if (!workspace) return <div className="et-ws-page"><div className="et-empty">Workspace not found.</div></div>;
@@ -31,10 +43,18 @@ export function WorkspaceView({ id, initialTab, initialDoc }: { id: string; init
             </span>
           ))}
         </div>
-        <h1 className="serif et-ws-title">{workspace.title}</h1>
+        <EditableText as="h1" className="serif et-ws-title" value={workspace.title}
+          onSave={(title) => patchWs.mutate({ title })} />
         <div className="et-ws-meta">
           <span className="et-tag" data-type={workspace.type}>{workspace.type}</span>
-          {workspace.description && <span className="et-ws-desc">{workspace.description}</span>}
+          <EditableText className="et-ws-desc" value={workspace.description ?? ""} placeholder="Add a description…"
+            onSave={(description) => patchWs.mutate({ description })} />
+          <span className="et-ws-actions">
+            <button className="et-ws-archive" onClick={() => patchWs.mutate({ status: workspace.status === "archived" ? "active" : "archived" })}>
+              {workspace.status === "archived" ? "Unarchive" : "Archive"}
+            </button>
+            <DeleteButton onDelete={() => deleteWs.mutate()} confirm label="Delete workspace" size="md" />
+          </span>
         </div>
       </header>
 
@@ -102,12 +122,22 @@ function Objectives({ id }: { id: string }) {
     mutationFn: (t: Task) => api.patch(`/tasks/${t.id}`, { status: t.status === "done" ? "todo" : "done" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks", id] }),
   });
+  const delTask = useMutation({
+    mutationFn: (tid: string) => api.del(`/tasks/${tid}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks", id] }),
+  });
+  const patchTask = useMutation({
+    mutationFn: ({ tid, body }: { tid: string; body: Partial<Task> }) => api.patch(`/tasks/${tid}`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks", id] }),
+  });
   const tasksFor = (oid: string) => (tasks ?? []).filter((t) => t.objective_id === oid);
 
   return (
     <div>
       {(objectives ?? []).map((o) => (
-        <ObjectiveGroup key={o.id} workspaceId={id} objective={o} tasks={tasksFor(o.id)} onToggle={(t) => toggle.mutate(t)} />
+        <ObjectiveGroup key={o.id} workspaceId={id} objective={o} tasks={tasksFor(o.id)}
+          onToggle={(t) => toggle.mutate(t)} onDeleteTask={(tid) => delTask.mutate(tid)}
+          onRenameTask={(tid, title) => patchTask.mutate({ tid, body: { title } })} />
       ))}
       {objectives?.length === 0 && <div className="et-empty">No objectives yet — the &ldquo;why&rdquo; behind the work. Break one into tasks below.</div>}
       <QuickAdd value={title} setValue={setTitle} onAdd={() => title.trim() && add.mutate()} placeholder="New objective — why does this matter?" pending={add.isPending} />
@@ -115,28 +145,38 @@ function Objectives({ id }: { id: string }) {
   );
 }
 
-function ObjectiveGroup({ workspaceId, objective, tasks, onToggle }: { workspaceId: string; objective: Objective; tasks: Task[]; onToggle: (t: Task) => void }) {
+function ObjectiveGroup({ workspaceId, objective, tasks, onToggle, onDeleteTask, onRenameTask }: {
+  workspaceId: string; objective: Objective; tasks: Task[];
+  onToggle: (t: Task) => void; onDeleteTask: (tid: string) => void; onRenameTask: (tid: string, title: string) => void;
+}) {
   const qc = useQueryClient();
   const [taskTitle, setTaskTitle] = useState("");
+  const invalidate = () => { qc.invalidateQueries({ queryKey: ["tasks", workspaceId] }); qc.invalidateQueries({ queryKey: ["objectives", workspaceId] }); };
   const addTask = useMutation({
     mutationFn: () => api.post("/tasks", { workspace_id: workspaceId, objective_id: objective.id, title: taskTitle }),
-    onSuccess: () => { setTaskTitle(""); qc.invalidateQueries({ queryKey: ["tasks", workspaceId] }); },
+    onSuccess: () => { setTaskTitle(""); invalidate(); },
   });
+  const renameObj = useMutation({ mutationFn: (title: string) => api.patch(`/objectives/${objective.id}`, { title }), onSuccess: invalidate });
+  const delObj = useMutation({ mutationFn: () => api.del(`/objectives/${objective.id}`), onSuccess: invalidate });
   const open = tasks.filter((t) => t.status !== "done");
   const done = tasks.filter((t) => t.status === "done");
   return (
     <div className="et-obj-group">
       <div className="et-obj-head">
         <span className="et-prio" data-p={objective.priority} />
-        <span className="et-obj-title">{objective.title}</span>
+        <EditableText className="et-obj-title" value={objective.title} onSave={(title) => renameObj.mutate(title)} />
         <span className="eyebrow et-status">{open.length} open{done.length ? ` · ${done.length} done` : ""}</span>
+        <DeleteButton onDelete={() => delObj.mutate()} confirm label="Delete objective" />
       </div>
       <div className="et-obj-tasks">
         {[...open, ...done].map((t) => (
-          <button key={t.id} className="et-task-row" data-done={t.status === "done" || undefined} onClick={() => onToggle(t)}>
-            <span className="et-check" {...(t.status === "done" ? { "data-checked": true } : {})} />
-            <span className="et-task-title">{t.title}</span>
-          </button>
+          <div key={t.id} className="et-task-row" data-done={t.status === "done" || undefined}>
+            <button className="et-check-btn" aria-label="Toggle done" onClick={() => onToggle(t)}>
+              <span className="et-check" {...(t.status === "done" ? { "data-checked": true } : {})} />
+            </button>
+            <EditableText className="et-task-title" value={t.title} onSave={(title) => onRenameTask(t.id, title)} />
+            <DeleteButton onDelete={() => onDeleteTask(t.id)} />
+          </div>
         ))}
         <QuickAdd value={taskTitle} setValue={setTaskTitle} onAdd={() => taskTitle.trim() && addTask.mutate()} placeholder="Add a task to this objective" pending={addTask.isPending} />
       </div>
@@ -157,28 +197,35 @@ function Tasks({ id }: { id: string }) {
     mutationFn: (t: Task) => api.patch(`/tasks/${t.id}`, { status: t.status === "done" ? "todo" : "done" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks", id] }),
   });
+  const patch = useMutation({
+    mutationFn: ({ tid, body }: { tid: string; body: Partial<Task> }) => api.patch(`/tasks/${tid}`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks", id] }),
+  });
+  const del = useMutation({
+    mutationFn: (tid: string) => api.del(`/tasks/${tid}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks", id] }),
+  });
   const open = (data ?? []).filter((t) => t.status !== "done");
   const done = (data ?? []).filter((t) => t.status === "done");
+  const row = (t: Task) => (
+    <div key={t.id} className="et-task-row" data-done={t.status === "done" || undefined}>
+      <button className="et-check-btn" aria-label={t.status === "done" ? "Mark not done" : "Mark done"} onClick={() => toggle.mutate(t)}>
+        <span className="et-check" {...(t.status === "done" ? { "data-checked": true } : {})} />
+      </button>
+      {t.status !== "done" && <span className="et-prio" data-p={t.priority} />}
+      <EditableText className="et-task-title" value={t.title} onSave={(title) => patch.mutate({ tid: t.id, body: { title } })} />
+      <DeleteButton onDelete={() => del.mutate(t.id)} />
+    </div>
+  );
   return (
     <div>
-      {open.map((t) => (
-        <button key={t.id} className="et-task-row" onClick={() => toggle.mutate(t)}>
-          <span className="et-check" />
-          <span className="et-prio" data-p={t.priority} />
-          <span className="et-task-title">{t.title}</span>
-        </button>
-      ))}
+      {open.map(row)}
       {open.length === 0 && <div className="et-empty">Nothing open.</div>}
       <QuickAdd value={title} setValue={setTitle} onAdd={() => title.trim() && add.mutate()} placeholder="New task" pending={add.isPending} />
       {done.length > 0 && (
         <div className="et-done-group">
           <span className="eyebrow">Done · {done.length}</span>
-          {done.map((t) => (
-            <button key={t.id} className="et-task-row" data-done onClick={() => toggle.mutate(t)}>
-              <span className="et-check" data-checked />
-              <span className="et-task-title">{t.title}</span>
-            </button>
-          ))}
+          {done.map(row)}
         </div>
       )}
     </div>
@@ -204,12 +251,23 @@ function Documents({ id, initialDoc }: { id: string; initialDoc?: string }) {
     mutationFn: () => api.post<Document>("/documents", { workspace_id: id, title }),
     onSuccess: (doc) => { setTitle(""); qc.invalidateQueries({ queryKey: ["documents", id] }); setOpenDoc(doc); },
   });
+  const rename = useMutation({
+    mutationFn: ({ did, title }: { did: string; title: string }) => api.patch<Document>(`/documents/${did}`, { title }),
+    onSuccess: (doc) => { qc.invalidateQueries({ queryKey: ["documents", id] }); setOpenDoc((cur) => (cur && cur.id === doc.id ? doc : cur)); },
+  });
+  const del = useMutation({
+    mutationFn: (did: string) => api.del(`/documents/${did}`),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["documents", id] }); setOpenDoc(null); },
+  });
 
   if (openDoc) {
     return (
       <div>
         <button className="et-back" onClick={() => setOpenDoc(null)}>← All documents</button>
-        <h2 className="serif et-doc-title">{openDoc.title}</h2>
+        <div className="et-doc-titlebar">
+          <EditableText as="h2" className="serif et-doc-title" value={openDoc.title} onSave={(t) => rename.mutate({ did: openDoc.id, title: t })} />
+          <DeleteButton onDelete={() => del.mutate(openDoc.id)} confirm label="Delete document" size="md" />
+        </div>
         <BlockEditor documentId={openDoc.id} />
       </div>
     );
@@ -217,11 +275,14 @@ function Documents({ id, initialDoc }: { id: string; initialDoc?: string }) {
   return (
     <div>
       {(data ?? []).map((d) => (
-        <button key={d.id} className="et-doc-row" onClick={() => setOpenDoc(d)}>
-          <span className="et-doc-icon serif">¶</span>
-          <span>{d.title}</span>
+        <div key={d.id} className="et-doc-row">
+          <button className="et-doc-open" onClick={() => setOpenDoc(d)}>
+            <span className="et-doc-icon serif">¶</span>
+            <span>{d.title}</span>
+          </button>
           <span className="eyebrow et-status">{d.type}</span>
-        </button>
+          <DeleteButton onDelete={() => del.mutate(d.id)} confirm label="Delete document" />
+        </div>
       ))}
       {data?.length === 0 && <div className="et-empty">No documents. These are the living artifacts you and agents co-write.</div>}
       <QuickAdd value={title} setValue={setTitle} onAdd={() => title.trim() && add.mutate()} placeholder="New document" pending={add.isPending} />
@@ -239,13 +300,20 @@ function Decisions({ id }: { id: string }) {
     mutationFn: () => api.post("/decisions", { workspace_id: id, title, rationale }),
     onSuccess: () => { setTitle(""); setRationale(""); qc.invalidateQueries({ queryKey: ["decisions", id] }); },
   });
+  const del = useMutation({
+    mutationFn: (did: string) => api.del(`/decisions/${did}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["decisions", id] }),
+  });
   return (
     <div>
       {(data ?? []).map((d) => (
         <div key={d.id} className="et-decision">
-          <div className="et-decision-title">{d.title}</div>
+          <div className="et-decision-titlerow">
+            <div className="et-decision-title">{d.title}</div>
+            <DeleteButton onDelete={() => del.mutate(d.id)} confirm label="Delete decision" />
+          </div>
           <div className="et-decision-why">{d.rationale}</div>
-          <div className="eyebrow">{new Date(d.decided_on).toLocaleDateString()} · {d.actor}</div>
+          <div className="eyebrow">{new Date(d.decided_on).toLocaleDateString()} · {d.actor} <span className="et-immutable">· immutable</span></div>
         </div>
       ))}
       {data?.length === 0 && <div className="et-empty">No decisions recorded. Capture the &ldquo;we chose X because Y&rdquo; that history forgets.</div>}
@@ -298,6 +366,10 @@ function WorkspaceStyles() {
       .et-tag { font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; padding: 0.18rem 0.5rem; border-radius: 5px; background: var(--paper-raised); border: 1px solid var(--line); color: var(--ink-soft); }
       .et-tag[data-type="project"] { color: var(--color-iris); border-color: color-mix(in srgb, var(--color-iris) 40%, transparent); }
       .et-ws-desc { color: var(--ink-soft); font-size: 0.9rem; }
+      .et-ws-meta { flex-wrap: wrap; }
+      .et-ws-actions { display: inline-flex; align-items: center; gap: 0.4rem; margin-left: auto; }
+      .et-ws-archive { background: none; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--ink-soft); font: inherit; font-size: 0.8rem; padding: 0.25rem 0.7rem; cursor: pointer; }
+      .et-ws-archive:hover { color: var(--ink); border-color: var(--ink-faint); }
 
       .et-tabs { display: flex; gap: 0.3rem; border-bottom: 1px solid var(--line); margin-bottom: 1.8rem; overflow-x: auto; }
       .et-tab { background: none; border: none; font: inherit; font-size: 0.9rem; color: var(--ink-faint); padding: 0.55rem 0.7rem; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
@@ -317,7 +389,9 @@ function WorkspaceStyles() {
       .et-prio[data-p="3"] { background: var(--color-iris); }
       .et-status { color: var(--ink-faint); }
 
-      .et-task-row { display: flex; align-items: center; gap: 0.7rem; width: 100%; background: none; border: none; border-bottom: 1px solid var(--line); font: inherit; text-align: left; padding: 0.55rem 0; cursor: pointer; color: var(--ink); }
+      .et-task-row { display: flex; align-items: center; gap: 0.7rem; width: 100%; border-bottom: 1px solid var(--line); padding: 0.5rem 0; color: var(--ink); }
+      .et-task-row .et-task-title { flex: 1; }
+      .et-check-btn { background: none; border: none; padding: 0; cursor: pointer; display: flex; }
       .et-check { width: 16px; height: 16px; border: 1.5px solid var(--line-strong); border-radius: 5px; flex: none; transition: background 0.12s; }
       .et-check[data-checked] { background: var(--color-sage); border-color: var(--color-sage); }
       .et-task-row[data-done] .et-task-title { color: var(--ink-faint); text-decoration: line-through; }
@@ -330,13 +404,17 @@ function WorkspaceStyles() {
       .et-quickadd input:focus { outline: none; }
       .et-quickadd input::placeholder { color: var(--ink-faint); }
 
-      .et-doc-row { display: flex; align-items: center; gap: 0.7rem; width: 100%; background: none; border: none; border-bottom: 1px solid var(--line); font: inherit; text-align: left; padding: 0.6rem 0; cursor: pointer; color: var(--ink); }
+      .et-doc-row { display: flex; align-items: center; gap: 0.7rem; width: 100%; border-bottom: 1px solid var(--line); padding: 0.5rem 0; color: var(--ink); }
+      .et-doc-open { flex: 1; display: flex; align-items: center; gap: 0.7rem; background: none; border: none; font: inherit; text-align: left; cursor: pointer; color: var(--ink); }
       .et-doc-icon { color: var(--color-iris); }
       .et-back { background: none; border: none; color: var(--ink-soft); font: inherit; font-size: 0.85rem; cursor: pointer; padding: 0 0 1rem; }
-      .et-doc-title { font-size: 1.9rem; margin: 0 0 1.2rem; }
+      .et-doc-titlebar { display: flex; align-items: center; gap: 0.6rem; margin: 0 0 1.2rem; }
+      .et-doc-title { font-size: 1.9rem; margin: 0; flex: 1; }
 
       .et-decision { padding: 0.8rem 0; border-bottom: 1px solid var(--line); }
-      .et-decision-title { font-weight: 500; }
+      .et-decision-titlerow { display: flex; align-items: center; gap: 0.5rem; }
+      .et-decision-title { font-weight: 500; flex: 1; }
+      .et-immutable { color: var(--ink-faint); }
       .et-decision-why { color: var(--ink-soft); font-size: 0.9rem; margin: 0.2rem 0 0.4rem; }
       .et-decision-form { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 1.2rem; }
       .et-decision-form input { background: var(--paper-raised); border: 1px solid var(--line-strong); border-radius: 8px; padding: 0.55rem 0.75rem; font: inherit; color: var(--ink); }

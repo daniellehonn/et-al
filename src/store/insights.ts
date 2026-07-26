@@ -1,7 +1,7 @@
 // Insights: atomic knowledge nodes — the vertices of the knowledge graph.
 import { z } from "zod";
 import { createInsightInput } from "../schema";
-import { Ctx, all, first, ftsUpsert, id, logEvent, now } from "./db";
+import { Ctx, RuleError, all, first, ftsDelete, ftsUpsert, id, logEvent, now } from "./db";
 
 export interface Insight {
   id: string;
@@ -44,4 +44,33 @@ export async function createInsight(c: Ctx, input: z.infer<typeof createInsightI
   // Embedding is best-effort and deterministic (Workers AI), when configured.
   if (c.env.JOBS) await c.env.JOBS.send({ type: "embed_insight", insight_id: iid });
   return (await getInsight(c, iid))!;
+}
+
+export async function updateInsight(c: Ctx, iid: string, patch: { title?: string; body?: string; workspace_id?: string | null }): Promise<Insight> {
+  const existing = await getInsight(c, iid);
+  if (!existing) throw new RuleError(`insight ${iid} not found`, 404);
+  await c.db
+    .prepare(`UPDATE insight SET title = ?, body = ?, workspace_id = ?, updated_at = ? WHERE id = ?`)
+    .bind(
+      patch.title ?? existing.title,
+      patch.body ?? existing.body,
+      patch.workspace_id === undefined ? existing.workspace_id : patch.workspace_id,
+      now(),
+      iid,
+    )
+    .run();
+  await ftsUpsert(c, "insight", iid, patch.title ?? existing.title, patch.body ?? existing.body);
+  await logEvent(c, "update", "insight", iid, patch);
+  return (await getInsight(c, iid))!;
+}
+
+export async function deleteInsight(c: Ctx, iid: string): Promise<void> {
+  const existing = await getInsight(c, iid);
+  if (!existing) throw new RuleError(`insight ${iid} not found`, 404);
+  await c.db.prepare(`DELETE FROM insight WHERE id = ?`).bind(iid).run();
+  await ftsDelete(c, "insight", iid);
+  if (c.env.VECTORIZE && existing.embedding_id) {
+    try { await c.env.VECTORIZE.deleteByIds([iid]); } catch { /* best-effort */ }
+  }
+  await logEvent(c, "delete", "insight", iid, { title: existing.title });
 }

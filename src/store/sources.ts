@@ -3,7 +3,7 @@
 // ingest (fetch/parse/embed) by the Worker — never interpreted here.
 import { z } from "zod";
 import { captureInput, INLINE_SOURCE_KINDS } from "../schema";
-import { Ctx, RuleError, all, first, ftsUpsert, id, logEvent, now } from "./db";
+import { Ctx, RuleError, all, first, ftsDelete, ftsUpsert, id, logEvent, now } from "./db";
 
 export interface Source {
   id: string;
@@ -48,6 +48,14 @@ export async function updateSource(
     .run();
   await logEvent(c, "update", "source", sid, patch);
   return (await getSource(c, sid))!;
+}
+
+export async function deleteSource(c: Ctx, sid: string): Promise<void> {
+  const existing = await getSource(c, sid);
+  if (!existing) throw new RuleError(`source ${sid} not found`, 404);
+  await c.db.prepare(`DELETE FROM source WHERE id = ?`).bind(sid).run();
+  await ftsDelete(c, "source", sid);
+  await logEvent(c, "delete", "source", sid, { kind: existing.kind });
 }
 
 /** Save a raw input immediately. Never blocks on a fetch; queues async ingest. */

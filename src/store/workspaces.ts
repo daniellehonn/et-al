@@ -107,6 +107,34 @@ export async function moveWorkspace(c: Ctx, wid: string, newParentId: string | n
   return (await getWorkspace(c, wid))!;
 }
 
+/** Delete a workspace and everything inside it. Rejected if it still has child
+ *  workspaces — archive or delete those first, so a delete is never a surprise
+ *  cascade across the tree. */
+export async function deleteWorkspace(c: Ctx, wid: string): Promise<void> {
+  const existing = await getWorkspace(c, wid);
+  if (!existing) throw new RuleError(`workspace ${wid} not found`, 404);
+  const children = await all<{ id: string }>(c, `SELECT id FROM workspace WHERE parent_id = ?`, wid);
+  if (children.length) throw new RuleError(`workspace has ${children.length} sub-workspace(s) — remove those first`);
+
+  // Clear FTS for every searchable child entity, then the rows themselves.
+  for (const type of ["task", "document", "source", "insight", "decision"]) {
+    await c.db
+      .prepare(`DELETE FROM search_fts WHERE entity_type = ? AND entity_id IN (SELECT id FROM ${type} WHERE workspace_id = ?)`)
+      .bind(type, wid)
+      .run();
+  }
+  await c.db.prepare(`DELETE FROM block_revision WHERE block_id IN (SELECT b.id FROM block b JOIN document d ON b.document_id = d.id WHERE d.workspace_id = ?)`).bind(wid).run();
+  await c.db.prepare(`DELETE FROM block WHERE document_id IN (SELECT id FROM document WHERE workspace_id = ?)`).bind(wid).run();
+  await c.db.prepare(`DELETE FROM document_patch WHERE document_id IN (SELECT id FROM document WHERE workspace_id = ?)`).bind(wid).run();
+  await c.db.prepare(`DELETE FROM daily_focus_slot WHERE task_id IN (SELECT id FROM task WHERE workspace_id = ?)`).bind(wid).run();
+  for (const table of ["task", "objective", "document", "source", "insight", "decision"]) {
+    await c.db.prepare(`DELETE FROM ${table} WHERE workspace_id = ?`).bind(wid).run();
+  }
+  await c.db.prepare(`DELETE FROM search_fts WHERE entity_type = 'workspace' AND entity_id = ?`).bind(wid).run();
+  await c.db.prepare(`DELETE FROM workspace WHERE id = ?`).bind(wid).run();
+  await logEvent(c, "delete", "workspace", wid, { title: existing.title });
+}
+
 /** Resolve a "Life → Build → et al." style path to a workspace. */
 export async function resolvePath(c: Ctx, path: string): Promise<Workspace | null> {
   const parts = path.split(/→|\/|>/).map((p) => p.trim()).filter(Boolean);

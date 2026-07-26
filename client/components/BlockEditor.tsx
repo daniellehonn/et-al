@@ -131,6 +131,7 @@ export function BlockEditor({ documentId }: { documentId: string }) {
               <summary aria-label="Change block type">⋮⋮</summary>
               <div className="et-type-list">
                 {TYPE_MENU.map((t) => <button key={t.type} onClick={(e) => { changeType(b, t.type); (e.currentTarget.closest("details") as HTMLDetailsElement).open = false; }}>{t.label}</button>)}
+                <button className="et-type-del" onClick={(e) => { applyOps([{ op: "delete", id: b.id }]); (e.currentTarget.closest("details") as HTMLDetailsElement).open = false; }}>Delete block</button>
               </div>
             </details>
           </div>
@@ -192,6 +193,8 @@ function EditorStyles() {
       .et-type-list { position: absolute; z-index: 10; top: 1.2rem; left: 0; background: var(--paper-raised); border: 1px solid var(--line-strong); border-radius: 9px; padding: 0.3rem; display: flex; flex-direction: column; min-width: 8rem; box-shadow: 0 8px 24px rgba(0,0,0,0.12); }
       .et-type-list button { text-align: left; background: none; border: none; font: inherit; font-size: 0.88rem; color: var(--ink-soft); padding: 0.32rem 0.5rem; border-radius: 6px; cursor: pointer; }
       .et-type-list button:hover { background: var(--color-iris-soft); color: var(--ink); }
+      .et-type-del { border-top: 1px solid var(--line) !important; margin-top: 0.2rem; color: #c0392b !important; }
+      .et-type-del:hover { background: color-mix(in srgb, #c0392b 12%, transparent) !important; }
 
       .et-block-input {
         width: 100%; border: none; background: none; resize: none; overflow: hidden;

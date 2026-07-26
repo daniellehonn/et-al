@@ -27,16 +27,19 @@ api.post("/workspaces/:id/move", async (c) => {
   const { new_parent_id } = await c.req.json();
   return c.json(await store.moveWorkspace(ctx(c), c.req.param("id"), new_parent_id ?? null));
 });
+api.delete("/workspaces/:id", async (c) => { await store.deleteWorkspace(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
 
 // ---- objectives -------------------------------------------------------------
 api.get("/workspaces/:id/objectives", async (c) => c.json(await store.listObjectives(ctx(c), c.req.param("id"))));
 api.post("/objectives", async (c) => c.json(await store.createObjective(ctx(c), await c.req.json())));
 api.patch("/objectives/:id", async (c) => c.json(await store.updateObjective(ctx(c), c.req.param("id"), await c.req.json())));
+api.delete("/objectives/:id", async (c) => { await store.deleteObjective(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
 
 // ---- tasks ------------------------------------------------------------------
 api.get("/workspaces/:id/tasks", async (c) => c.json(await store.listTasks(ctx(c), c.req.param("id"), { status: c.req.query("status"), objective_id: c.req.query("objective_id") })));
 api.post("/tasks", async (c) => c.json(await store.createTask(ctx(c), await c.req.json())));
 api.patch("/tasks/:id", async (c) => c.json(await store.updateTask(ctx(c), c.req.param("id"), await c.req.json())));
+api.delete("/tasks/:id", async (c) => { await store.deleteTask(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
 
 // ---- daily 3 ----------------------------------------------------------------
 api.get("/daily3", async (c) => c.json(await store.getDaily3(ctx(c), c.req.query("date"))));
@@ -48,12 +51,17 @@ api.get("/inbox", async (c) => c.json(await store.listInbox(ctx(c))));
 api.post("/capture", async (c) => c.json(await store.capture(ctx(c), await c.req.json())));
 api.get("/sources/:id", async (c) => c.json(await store.getSource(ctx(c), c.req.param("id"))));
 api.patch("/sources/:id", async (c) => c.json(await store.updateSource(ctx(c), c.req.param("id"), await c.req.json())));
+api.delete("/sources/:id", async (c) => { await store.deleteSource(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
 api.post("/insights", async (c) => c.json(await store.createInsight(ctx(c), await c.req.json())));
 api.get("/insights", async (c) => c.json(await store.listInsights(ctx(c), c.req.query("workspace_id"))));
+api.patch("/insights/:id", async (c) => c.json(await store.updateInsight(ctx(c), c.req.param("id"), await c.req.json())));
+api.delete("/insights/:id", async (c) => { await store.deleteInsight(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
 
 // ---- documents (human writes blocks directly; also resolves agent patches) ---
 api.get("/workspaces/:id/documents", async (c) => c.json(await store.listDocuments(ctx(c), c.req.param("id"))));
 api.post("/documents", async (c) => c.json(await store.createDocument(ctx(c), await c.req.json())));
+api.patch("/documents/:id", async (c) => c.json(await store.updateDocument(ctx(c), c.req.param("id"), await c.req.json())));
+api.delete("/documents/:id", async (c) => { await store.deleteDocument(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
 api.get("/documents/:id/blocks", async (c) => c.json(await store.getBlocks(ctx(c), c.req.param("id"))));
 api.post("/documents/:id/blocks", async (c) => {
   const { ops } = await c.req.json();
@@ -69,6 +77,7 @@ api.post("/patches/:id/resolve", async (c) => {
 api.get("/workspaces/:id/decisions", async (c) => c.json(await store.listDecisions(ctx(c), c.req.param("id"))));
 api.get("/workspaces/:id/timeline", async (c) => c.json(await store.getWorkspaceTimeline(ctx(c), c.req.param("id"))));
 api.post("/decisions", async (c) => c.json(await store.recordDecision(ctx(c), await c.req.json())));
+api.delete("/decisions/:id", async (c) => { await store.deleteDecision(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
 api.post("/relate", async (c) => c.json(await store.relate(ctx(c), await c.req.json())));
 api.get("/backlinks", async (c) => c.json(await store.getBacklinks(ctx(c), c.req.query("type")!, c.req.query("id")!)));
 api.get("/search", async (c) => c.json(await store.search(ctx(c), c.req.query("q") ?? "", {})));

@@ -7,7 +7,7 @@
 // block_revision so any change is reversible.
 import { z } from "zod";
 import { createDocumentInput, type BlockOp } from "../schema";
-import { Ctx, RuleError, all, first, ftsUpsert, id, logEvent, now } from "./db";
+import { Ctx, RuleError, all, first, ftsDelete, ftsUpsert, id, logEvent, now } from "./db";
 
 export interface Document {
   id: string;
@@ -65,6 +65,29 @@ export async function createDocument(c: Ctx, input: z.infer<typeof createDocumen
   await ftsUpsert(c, "document", did, data.title, "");
   await logEvent(c, "create", "document", did, { title: data.title });
   return (await getDocument(c, did))!;
+}
+
+export async function updateDocument(c: Ctx, did: string, patch: { title?: string; status?: string }): Promise<Document> {
+  const existing = await getDocument(c, did);
+  if (!existing) throw new RuleError(`document ${did} not found`, 404);
+  await c.db
+    .prepare(`UPDATE document SET title = ?, status = ?, updated_at = ? WHERE id = ?`)
+    .bind(patch.title ?? existing.title, patch.status ?? existing.status, now(), did)
+    .run();
+  await ftsUpsert(c, "document", did, patch.title ?? existing.title, "");
+  await logEvent(c, "update", "document", did, patch);
+  return (await getDocument(c, did))!;
+}
+
+export async function deleteDocument(c: Ctx, did: string): Promise<void> {
+  const existing = await getDocument(c, did);
+  if (!existing) throw new RuleError(`document ${did} not found`, 404);
+  await c.db.prepare(`DELETE FROM block_revision WHERE block_id IN (SELECT id FROM block WHERE document_id = ?)`).bind(did).run();
+  await c.db.prepare(`DELETE FROM block WHERE document_id = ?`).bind(did).run();
+  await c.db.prepare(`DELETE FROM document_patch WHERE document_id = ?`).bind(did).run();
+  await c.db.prepare(`DELETE FROM document WHERE id = ?`).bind(did).run();
+  await ftsDelete(c, "document", did);
+  await logEvent(c, "delete", "document", did, { title: existing.title });
 }
 
 // ---- the op engine (shared by human writes and accepted patches) ------------

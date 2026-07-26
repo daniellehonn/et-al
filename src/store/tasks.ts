@@ -1,8 +1,7 @@
 // Tasks: execution units. May belong to an objective or float in the workspace.
 import { z } from "zod";
 import { createTaskInput, updateTaskInput } from "../schema";
-import { Ctx, RuleError, all, first, id, logEvent, now } from "./db";
-import { ftsUpsert } from "./db";
+import { Ctx, RuleError, all, first, ftsDelete, ftsUpsert, id, logEvent, now } from "./db";
 
 export interface Task {
   id: string;
@@ -83,4 +82,13 @@ export async function updateTask(c: Ctx, tid: string, input: z.infer<typeof upda
 
 export function completeTask(c: Ctx, tid: string): Promise<Task> {
   return updateTask(c, tid, { status: "done" });
+}
+
+export async function deleteTask(c: Ctx, tid: string): Promise<void> {
+  const existing = await getTask(c, tid);
+  if (!existing) throw new RuleError(`task ${tid} not found`, 404);
+  await c.db.prepare(`DELETE FROM daily_focus_slot WHERE task_id = ?`).bind(tid).run();
+  await c.db.prepare(`DELETE FROM task WHERE id = ?`).bind(tid).run();
+  await ftsDelete(c, "task", tid);
+  await logEvent(c, "delete", "task", tid, { title: existing.title });
 }

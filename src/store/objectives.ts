@@ -58,3 +58,13 @@ export async function updateObjective(c: Ctx, oid: string, input: z.infer<typeof
   await logEvent(c, "update", "objective", oid, data);
   return (await getObjective(c, oid))!;
 }
+
+export async function deleteObjective(c: Ctx, oid: string): Promise<void> {
+  const existing = await getObjective(c, oid);
+  if (!existing) throw new RuleError(`objective ${oid} not found`, 404);
+  // Its tasks survive, detached from the objective; sub-objectives detach too.
+  await c.db.prepare(`UPDATE task SET objective_id = NULL WHERE objective_id = ?`).bind(oid).run();
+  await c.db.prepare(`UPDATE objective SET parent_objective_id = NULL WHERE parent_objective_id = ?`).bind(oid).run();
+  await c.db.prepare(`DELETE FROM objective WHERE id = ?`).bind(oid).run();
+  await logEvent(c, "delete", "objective", oid, { title: existing.title });
+}
