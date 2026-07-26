@@ -129,9 +129,19 @@ function WidgetBody({ type, config, workspace, setTab, onConfigChange }: {
   return null;
 }
 
-// ── Table: the club application tracker etc. ─────────────────────────────────
-interface Col { id: string; name: string }
+// ── Table: typed columns — the club application tracker etc. ─────────────────
+type ColType = "text" | "status" | "date" | "checkbox" | "number";
+interface Col { id: string; name: string; type?: ColType }
 interface Row { id: string; cells: Record<string, string> }
+const COL_TYPES: Array<[ColType, string]> = [["text", "Text"], ["status", "Status"], ["date", "Date"], ["checkbox", "Checkbox"], ["number", "Number"]];
+const PILL_COLORS = ["#5D57E4", "#D98A3D", "#4E9E7F", "#c0392b", "#3a86ff", "#8b5cf6", "#0891b2", "#65758b"];
+// Stable color per status value, so the same label is always the same colour.
+function pillColor(v: string): string {
+  let h = 0;
+  for (let i = 0; i < v.length; i++) h = (h * 31 + v.charCodeAt(i)) >>> 0;
+  return PILL_COLORS[h % PILL_COLORS.length];
+}
+
 function TableWidget({ config, onChange }: { config: Config; onChange?: (c: Config) => void }) {
   const cols = (config.columns as Col[]) ?? [];
   const rows = (config.rows as Row[]) ?? [];
@@ -140,9 +150,10 @@ function TableWidget({ config, onChange }: { config: Config; onChange?: (c: Conf
   const rid = () => `${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
 
   const addRow = () => update({ rows: [...rows, { id: rid(), cells: {} }] });
-  const addCol = () => update({ columns: [...cols, { id: rid(), name: "Column" }] });
+  const addCol = () => update({ columns: [...cols, { id: rid(), name: "Column", type: "text" }] });
   const setCell = (r: Row, colId: string, v: string) => update({ rows: rows.map((x) => x.id === r.id ? { ...x, cells: { ...x.cells, [colId]: v } } : x) });
   const renameCol = (colId: string, name: string) => update({ columns: cols.map((c) => c.id === colId ? { ...c, name } : c) });
+  const setColType = (colId: string, type: ColType) => update({ columns: cols.map((c) => c.id === colId ? { ...c, type } : c) });
   const delRow = (r: Row) => update({ rows: rows.filter((x) => x.id !== r.id) });
   const delCol = (colId: string) => update({ columns: cols.filter((c) => c.id !== colId), rows: rows.map((r) => { const { [colId]: _, ...rest } = r.cells; return { ...r, cells: rest }; }) });
 
@@ -155,7 +166,15 @@ function TableWidget({ config, onChange }: { config: Config; onChange?: (c: Conf
               <th key={c.id}>
                 <span className="et-th">
                   {readOnly ? c.name : <EditableText value={c.name} onSave={(n) => renameCol(c.id, n)} />}
-                  {!readOnly && <DeleteButton onDelete={() => delCol(c.id)} />}
+                  {!readOnly && (
+                    <details className="et-col-menu">
+                      <summary title="Column type">{{ text: "T", status: "◍", date: "☷", checkbox: "☑", number: "#" }[c.type ?? "text"]}</summary>
+                      <div className="et-col-list">
+                        {COL_TYPES.map(([t, label]) => <button key={t} data-on={(c.type ?? "text") === t || undefined} onClick={(e) => { setColType(c.id, t); (e.currentTarget.closest("details") as HTMLDetailsElement).open = false; }}>{label}</button>)}
+                        <button className="et-col-del" onClick={(e) => { delCol(c.id); (e.currentTarget.closest("details") as HTMLDetailsElement).open = false; }}>Delete column</button>
+                      </div>
+                    </details>
+                  )}
                 </span>
               </th>
             ))}
@@ -166,8 +185,8 @@ function TableWidget({ config, onChange }: { config: Config; onChange?: (c: Conf
           {rows.map((r) => (
             <tr key={r.id}>
               {cols.map((c) => (
-                <td key={c.id}>
-                  {readOnly ? (r.cells[c.id] ?? "") : <EditableText value={r.cells[c.id] ?? ""} placeholder="—" onSave={(v) => setCell(r, c.id, v)} />}
+                <td key={c.id} data-type={c.type ?? "text"}>
+                  <Cell type={c.type ?? "text"} value={r.cells[c.id] ?? ""} readOnly={readOnly} onSave={(v) => setCell(r, c.id, v)} />
                 </td>
               ))}
               {!readOnly && <td className="et-td-del"><DeleteButton onDelete={() => delRow(r)} /></td>}
@@ -179,6 +198,25 @@ function TableWidget({ config, onChange }: { config: Config; onChange?: (c: Conf
       {!readOnly && <button className="et-table-addrow" onClick={addRow}>+ Add row</button>}
     </div>
   );
+}
+
+function Cell({ type, value, readOnly, onSave }: { type: ColType; value: string; readOnly: boolean; onSave: (v: string) => void }) {
+  if (type === "checkbox") {
+    return <input type="checkbox" className="et-cell-check" checked={value === "true"} disabled={readOnly} onChange={(e) => onSave(String(e.target.checked))} />;
+  }
+  if (type === "date") {
+    if (readOnly) return <>{value || "—"}</>;
+    return <input type="date" className="et-cell-date" value={value} onChange={(e) => onSave(e.target.value)} />;
+  }
+  if (type === "number") {
+    return <EditableText value={value} placeholder="—" inputClassName="et-cell-num" onSave={onSave} />;
+  }
+  if (type === "status") {
+    const pill = value ? <span className="et-pill" style={{ background: `${pillColor(value)}22`, color: pillColor(value), boxShadow: `inset 0 0 0 1px ${pillColor(value)}55` }}>{value}</span> : <span className="et-pill-empty">—</span>;
+    if (readOnly) return pill;
+    return <EditableText value={value} placeholder="—" onSave={onSave} render={pill} />;
+  }
+  return readOnly ? <>{value || ""}</> : <EditableText value={value} placeholder="—" onSave={onSave} />;
 }
 
 // ── Child progress: a bar per sub-workspace ──────────────────────────────────
@@ -266,6 +304,22 @@ function OverviewStyles() {
       .et-th-add button { background: none; border: none; color: var(--ink-faint); font-size: 1rem; cursor: pointer; }
       .et-table-addrow { margin-top: 0.5rem; background: none; border: none; color: var(--ink-soft); font: inherit; font-size: 0.85rem; cursor: pointer; }
       .et-table-addrow:hover { color: var(--color-iris); }
+      .et-col-menu { position: relative; }
+      .et-col-menu summary { list-style: none; cursor: pointer; color: var(--ink-faint); font-size: 0.7rem; width: 1.1rem; height: 1.1rem; display: inline-grid; place-items: center; border-radius: 4px; }
+      .et-col-menu summary::-webkit-details-marker { display: none; }
+      .et-col-menu summary:hover { background: var(--paper); color: var(--ink); }
+      .et-col-list { position: absolute; z-index: 20; top: 1.4rem; right: 0; background: var(--paper-raised); border: 1px solid var(--line-strong); border-radius: 9px; padding: 0.3rem; display: flex; flex-direction: column; min-width: 8rem; box-shadow: 0 8px 24px rgba(0,0,0,0.14); }
+      .et-col-list button { text-align: left; background: none; border: none; font: inherit; font-size: 0.85rem; color: var(--ink-soft); padding: 0.3rem 0.5rem; border-radius: 6px; cursor: pointer; }
+      .et-col-list button:hover { background: var(--color-iris-soft); color: var(--ink); }
+      .et-col-list button[data-on] { color: var(--color-iris); }
+      .et-col-del { border-top: 1px solid var(--line) !important; margin-top: 0.2rem; color: #c0392b !important; }
+      .et-pill { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.78rem; font-weight: 500; }
+      .et-pill-empty { color: var(--ink-faint); }
+      .et-table td[data-type="checkbox"], .et-table td[data-type="number"] { text-align: center; }
+      .et-cell-check { width: 15px; height: 15px; cursor: pointer; accent-color: var(--color-sage); }
+      .et-cell-date { background: none; border: none; font: inherit; font-size: 0.85rem; color: var(--ink); color-scheme: light dark; }
+      .et-cell-date:focus { outline: none; }
+      .et-cell-num { text-align: right; }
 
       .et-childprog { display: flex; flex-direction: column; }
       .et-childprog-row { display: grid; grid-template-columns: 9rem 1fr 2.4rem; align-items: center; gap: 0.7rem; padding: 0.4rem 0; text-decoration: none; color: var(--ink); border-bottom: 1px solid var(--line); }

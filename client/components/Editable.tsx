@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 // Click-to-edit text, Notion-style. Click to edit, Enter (or blur) saves, Esc
 // cancels. `multiline` uses a textarea and saves on blur only.
 export function EditableText({
-  value, onSave, placeholder = "Untitled", className = "", inputClassName = "", multiline = false, as = "span",
+  value, onSave, placeholder = "Untitled", className = "", inputClassName = "", multiline = false, as = "span", render,
 }: {
   value: string;
   onSave: (next: string) => void;
@@ -13,6 +13,7 @@ export function EditableText({
   inputClassName?: string;
   multiline?: boolean;
   as?: "span" | "h1" | "h2" | "div";
+  render?: React.ReactNode; // custom non-editing display (e.g. a status pill)
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -49,7 +50,7 @@ export function EditableText({
   return (
     <Tag className={`et-editable ${className}`} onClick={() => setEditing(true)} title="Click to edit"
       {...(value ? {} : { "data-empty": true })}>
-      {value || placeholder}
+      {render ?? (value || placeholder)}
       <EditableStyles />
     </Tag>
   );
