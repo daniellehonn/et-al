@@ -203,7 +203,7 @@ const spineCss = `
         .et-ws-row[data-dragging="true"] { opacity: 0.4; }
         .et-ws { cursor: grab; }
         .et-spine-label[data-drop="true"] { color: var(--color-iris); }
-        .et-ws-icon { font-size: 0.9rem; line-height: 1; flex: none; width: 6px; text-align: center; }
+        .et-ws-icon { font-size: 0.92rem; line-height: 1; flex: none; width: 1.05rem; text-align: center; margin-right: 0.1rem; }
         .et-ws-dot { width: 6px; height: 6px; border-radius: 2px; background: var(--ink-faint); flex: none; }
         .et-ws-dot[data-type="project"] { background: var(--color-iris); }
         .et-ws-dot[data-type="area"] { background: var(--color-sage); }
