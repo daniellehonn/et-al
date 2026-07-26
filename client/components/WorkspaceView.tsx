@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api, type Workspace, type Task, type Objective, type Document, type Decision, type RecentEvent } from "@/lib/api";
 import { BlockEditor } from "./BlockEditor";
 import { EditableText, DeleteButton } from "./Editable";
+import { OverviewView } from "./Overview";
 
 const TABS = ["Overview", "Tasks", "Documents", "Decisions", "Timeline"] as const;
 type Tab = (typeof TABS)[number];
@@ -75,7 +76,7 @@ export function WorkspaceView({ id, initialTab, initialDoc }: { id: string; init
       </nav>
 
       <div className="et-tab-body">
-        {tab === "Overview" && <Overview id={id} workspace={workspace} setTab={setTab} />}
+        {tab === "Overview" && <OverviewView id={id} workspace={workspace} setTab={(t) => setTab(t as Tab)} />}
         {tab === "Tasks" && <Tasks id={id} />}
         {tab === "Documents" && <Documents id={id} initialDoc={initialDoc} />}
         {tab === "Decisions" && <Decisions id={id} />}
@@ -88,82 +89,6 @@ export function WorkspaceView({ id, initialTab, initialDoc }: { id: string; init
 }
 
 // ── Overview ────────────────────────────────────────────────────────────────
-function Overview({ id, workspace, setTab }: { id: string; workspace: Workspace; setTab: (t: Tab) => void }) {
-  const qc = useQueryClient();
-  const { data: tasks } = useQuery({ queryKey: ["tasks", id], queryFn: () => api.get<Task[]>(`/workspaces/${id}/tasks`) });
-  const { data: docs } = useQuery({ queryKey: ["documents", id], queryFn: () => api.get<Document[]>(`/workspaces/${id}/documents`) });
-  const { data: workspaces } = useQuery({ queryKey: ["workspaces"], queryFn: () => api.get<Workspace[]>("/workspaces") });
-  const complete = useMutation({
-    mutationFn: () => api.patch(`/workspaces/${id}`, { status: "completed" }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["workspace", id] }); qc.invalidateQueries({ queryKey: ["workspaces"] }); },
-  });
-
-  const all = tasks ?? [];
-  const open = all.filter((t) => t.status !== "done");
-  const done = all.length - open.length;
-  const children = (workspaces ?? []).filter((w) => w.parent_id === id);
-  const finite = FINITE_TYPES.includes(workspace.type);
-  const pct = all.length ? Math.round((done / all.length) * 100) : 0;
-
-  return (
-    <div>
-      {/* Finite types (project/course): progress toward an outcome. */}
-      {finite && (
-        <div className="et-progress-card" data-complete={workspace.status === "completed" || undefined}>
-          {workspace.status === "completed" ? (
-            <div className="et-complete-note"><span className="serif et-complete-check">✓</span> This {workspace.type} is complete.</div>
-          ) : (
-            <>
-              <div className="et-progress-head">
-                <span className="eyebrow">Progress toward done</span>
-                <span className="et-progress-frac">{done} / {all.length} tasks</span>
-              </div>
-              <div className="et-progress-bar"><span style={{ width: `${pct}%` }} /></div>
-              {all.length > 0 && open.length === 0 && (
-                <button className="et-complete-cta" onClick={() => complete.mutate()}>All tasks done — mark this {workspace.type} complete →</button>
-              )}
-            </>
-          )}
-        </div>
-      )}
-
-      <div className="et-stat-row">
-        <button className="et-stat" onClick={() => setTab("Tasks")}>
-          <span className="serif et-stat-num">{open.length}</span><span className="eyebrow">Open tasks</span>
-        </button>
-        {!finite && (
-          <button className="et-stat" onClick={() => children[0] && (window.location.href = `/workspace/?id=${children[0].id}`)}>
-            <span className="serif et-stat-num">{children.length}</span><span className="eyebrow">Inside</span>
-          </button>
-        )}
-        <button className="et-stat" onClick={() => setTab("Documents")}>
-          <span className="serif et-stat-num">{(docs ?? []).length}</span><span className="eyebrow">Documents</span>
-        </button>
-      </div>
-
-      {/* Ongoing types (area/organization): what's inside — its projects. */}
-      {!finite && children.length > 0 && (
-        <div className="et-overview-children">
-          <span className="eyebrow">Inside this {workspace.type}</span>
-          {children.map((w) => (
-            <a key={w.id} href={`/workspace/?id=${w.id}`} className="et-child-row" data-status={w.status}>
-              <span className="et-ws-dot" data-type={w.type} />
-              <span className="et-child-title">{w.title}</span>
-              <span className="eyebrow et-child-type">{w.status === "completed" ? "✓ done" : w.type}</span>
-            </a>
-          ))}
-        </div>
-      )}
-
-      <div className="et-overview-next">
-        <span className="eyebrow">Next up</span>
-        {open.slice(0, 3).map((t) => <div key={t.id} className="et-next-task">{t.title}</div>)}
-        {open.length === 0 && <div className="et-empty">No open tasks. {finite ? "A finite project should have a next action, or be marked complete." : "Areas are ongoing — add a project or a standing task."}</div>}
-      </div>
-    </div>
-  );
-}
-
 // ── Tasks (with optional grouping by objective) ─────────────────────────────
 // Objectives are no longer a separate tab; an objective is a label a task can
 // carry, and "group by objective" turns the flat list into planning sections.

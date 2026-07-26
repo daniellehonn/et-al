@@ -83,3 +83,9 @@ api.get("/backlinks", async (c) => c.json(await store.getBacklinks(ctx(c), c.req
 api.get("/search", async (c) => c.json(await store.search(ctx(c), c.req.query("q") ?? "", {})));
 api.get("/health-scores", async (c) => c.json(await store.allHealth(ctx(c))));
 api.get("/context/:id", async (c) => c.json(await store.buildContext(ctx(c), c.req.param("id"), c.req.query("q"))));
+
+// ---- customizable Overview widgets ------------------------------------------
+api.get("/workspaces/:id/overview", async (c) => c.json(await store.listOverview(ctx(c), c.req.param("id"))));
+api.post("/workspaces/:id/overview", async (c) => { const { type } = await c.req.json(); return c.json(await store.addOverviewBlock(ctx(c), c.req.param("id"), type)); });
+api.patch("/overview/:bid", async (c) => c.json(await store.updateOverviewBlock(ctx(c), c.req.param("bid"), await c.req.json())));
+api.delete("/overview/:bid", async (c) => { await store.deleteOverviewBlock(ctx(c), c.req.param("bid")); return c.json({ ok: true }); });
