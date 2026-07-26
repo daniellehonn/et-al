@@ -37,6 +37,12 @@ export function WorkspaceView({ id, initialTab, initialDoc }: { id: string; init
 
   return (
     <div className="et-ws-page">
+      {workspace.cover && (
+        <div className="et-cover">
+          <img src={workspace.cover} alt="" />
+          <button className="et-cover-remove" onClick={() => patchWs.mutate({ cover: null })}>Remove cover</button>
+        </div>
+      )}
       <header className="et-ws-header">
         <div className="eyebrow et-crumbs">
           {crumbs.map((w, i) => (
@@ -45,8 +51,12 @@ export function WorkspaceView({ id, initialTab, initialDoc }: { id: string; init
             </span>
           ))}
         </div>
-        <EditableText as="h1" className="serif et-ws-title" value={workspace.title}
-          onSave={(title) => patchWs.mutate({ title })} />
+        <div className="et-title-row">
+          <EditableText className="et-page-icon" value={workspace.icon ?? ""} placeholder="＋" onSave={(icon) => patchWs.mutate({ icon })} />
+          <EditableText as="h1" className="serif et-ws-title" value={workspace.title}
+            onSave={(title) => patchWs.mutate({ title })} />
+          {!workspace.cover && <button className="et-add-cover" onClick={() => { const u = prompt("Cover image URL"); if (u) patchWs.mutate({ cover: u.trim() }); }}>Add cover</button>}
+        </div>
         <div className="et-ws-meta">
           <span className="et-tag" data-type={workspace.type}>{workspace.type}</span>
           {workspace.status === "archived" && <span className="et-tag">archived</span>}
@@ -359,6 +369,15 @@ function WorkspaceStyles() {
   return (
     <style>{`
       .et-ws-page { max-width: 54rem; margin: 0 auto; padding: 3.5rem 2.5rem 6rem; }
+      .et-cover { position: relative; margin: -3.5rem -2.5rem 1rem; height: 12rem; }
+      .et-cover img { width: 100%; height: 100%; object-fit: cover; }
+      .et-cover-remove { position: absolute; bottom: 0.6rem; right: 0.8rem; background: rgba(0,0,0,0.55); color: #fff; border: none; border-radius: 7px; font: inherit; font-size: 0.78rem; padding: 0.25rem 0.6rem; cursor: pointer; opacity: 0; transition: opacity 0.12s; }
+      .et-cover:hover .et-cover-remove { opacity: 1; }
+      .et-title-row { display: flex; align-items: center; gap: 0.6rem; }
+      .et-page-icon { font-size: 2.2rem; line-height: 1; min-width: 1.6rem; }
+      .et-page-icon[data-empty] { font-size: 1.1rem; color: var(--line-strong); }
+      .et-add-cover { background: none; border: none; color: var(--ink-faint); font: inherit; font-size: 0.8rem; cursor: pointer; margin-left: auto; align-self: flex-start; }
+      .et-add-cover:hover { color: var(--ink-soft); }
       .et-ws-header { margin-bottom: 1.6rem; }
       .et-crumbs a { color: var(--ink-faint); text-decoration: none; }
       .et-crumbs a:hover { color: var(--ink-soft); }

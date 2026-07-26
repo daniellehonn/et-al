@@ -15,6 +15,8 @@ export interface Document {
   title: string;
   type: string;
   status: string;
+  icon: string | null;
+  cover: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -67,12 +69,14 @@ export async function createDocument(c: Ctx, input: z.infer<typeof createDocumen
   return (await getDocument(c, did))!;
 }
 
-export async function updateDocument(c: Ctx, did: string, patch: { title?: string; status?: string }): Promise<Document> {
+export async function updateDocument(c: Ctx, did: string, patch: { title?: string; status?: string; icon?: string | null; cover?: string | null }): Promise<Document> {
   const existing = await getDocument(c, did);
   if (!existing) throw new RuleError(`document ${did} not found`, 404);
   await c.db
-    .prepare(`UPDATE document SET title = ?, status = ?, updated_at = ? WHERE id = ?`)
-    .bind(patch.title ?? existing.title, patch.status ?? existing.status, now(), did)
+    .prepare(`UPDATE document SET title = ?, status = ?, icon = ?, cover = ?, updated_at = ? WHERE id = ?`)
+    .bind(patch.title ?? existing.title, patch.status ?? existing.status,
+      patch.icon === undefined ? existing.icon : patch.icon,
+      patch.cover === undefined ? existing.cover : patch.cover, now(), did)
     .run();
   await ftsUpsert(c, "document", did, patch.title ?? existing.title, "");
   await logEvent(c, "update", "document", did, patch);

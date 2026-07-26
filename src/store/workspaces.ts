@@ -13,6 +13,8 @@ export interface Workspace {
   description: string | null;
   status: string;
   position: number;
+  icon: string | null;
+  cover: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -91,7 +93,7 @@ export async function updateWorkspace(c: Ctx, wid: string, input: z.infer<typeof
   if (!existing) throw new RuleError(`workspace ${wid} not found`, 404);
   await c.db
     .prepare(
-      `UPDATE workspace SET title = ?, description = ?, type = ?, status = ?, position = ?, updated_at = ? WHERE id = ?`,
+      `UPDATE workspace SET title = ?, description = ?, type = ?, status = ?, position = ?, icon = ?, cover = ?, updated_at = ? WHERE id = ?`,
     )
     .bind(
       data.title ?? existing.title,
@@ -99,6 +101,8 @@ export async function updateWorkspace(c: Ctx, wid: string, input: z.infer<typeof
       data.type ?? existing.type,
       data.status ?? existing.status,
       data.position ?? existing.position,
+      data.icon === undefined ? existing.icon : data.icon,
+      data.cover === undefined ? existing.cover : data.cover,
       now(),
       wid,
     )

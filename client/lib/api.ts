@@ -34,6 +34,7 @@ export const api = {
 export interface Workspace {
   id: string; parent_id: string | null; type: string; title: string;
   description: string | null; status: string; position: number;
+  icon: string | null; cover: string | null;
 }
 export interface Task {
   id: string; workspace_id: string; objective_id: string | null; title: string;
@@ -62,7 +63,8 @@ export interface Objective {
   title: string; description: string | null; status: string; priority: number;
 }
 export interface Document {
-  id: string; workspace_id: string; title: string; type: string; status: string; updated_at: number;
+  id: string; workspace_id: string; title: string; type: string; status: string;
+  icon: string | null; cover: string | null; updated_at: number;
 }
 export interface Block {
   id: string; document_id: string; type: string; content_json: string;
