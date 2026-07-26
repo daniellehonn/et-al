@@ -12,6 +12,11 @@
   handler — a store function can't forget to attribute itself.
 - **Documents are the exception**: agents never write blocks directly; they call
   `propose_document_patch` and the human accepts/rejects in the web app.
+- **Delete tools** exist for tasks, objectives, sources, insights, and decisions
+  — immediate but attributed; skills tell agents to confirm before destructive
+  changes. `delete_document` and `delete_workspace` are **not** exposed to agents:
+  a document is co-owned (patch-gated) and a workspace delete is a tree-wide
+  cascade, so both stay human-only in the web app.
 - Agents `capture` rather than invent structure when the destination is unclear.
 
 ---

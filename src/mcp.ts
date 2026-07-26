@@ -4,6 +4,11 @@
 //
 // Documents are the exception to immediate writes: agents get `propose_document_patch`
 // (surfaced as Accept/Reject in the web app), never a direct block write.
+//
+// Delete tools exist for tasks, objectives, sources, insights, and decisions —
+// immediate but attributed, and skills tell agents to confirm first. Two deletes
+// are deliberately NOT exposed to agents: deleting a document (it is co-owned and
+// patch-gated) and deleting a workspace (a tree-wide cascade). Both stay human-only.
 import type { Env } from "./schema";
 import * as store from "./store";
 
@@ -72,6 +77,8 @@ const TOOLS: Tool[] = [
   { name: "create_task", description: "Create a task.", inputSchema: obj({ workspace_id: str, title: str }, ["workspace_id", "title"]), handler: (c, a) => store.createTask(c, a as never) },
   { name: "update_task", description: "Update a task (status, priority, due date, …).", inputSchema: obj({ id: str }, ["id"]), handler: (c, a) => store.updateTask(c, String(a.id), a as never) },
   { name: "complete_task", description: "Mark a task done.", inputSchema: obj({ id: str }, ["id"]), handler: (c, a) => store.completeTask(c, String(a.id)) },
+  { name: "delete_task", description: "Delete a task. Destructive — confirm with the user first.", inputSchema: obj({ id: str }, ["id"]), handler: async (c, a) => { await store.deleteTask(c, String(a.id)); return { ok: true }; } },
+  { name: "delete_objective", description: "Delete an objective (its tasks survive, detached). Destructive — confirm first.", inputSchema: obj({ id: str }, ["id"]), handler: async (c, a) => { await store.deleteObjective(c, String(a.id)); return { ok: true }; } },
   // ---- daily 3 ----
   { name: "get_daily3", description: "Today's three focus slots, status, and streak.", inputSchema: obj({ date: str }), handler: (c, a) => store.getDaily3(c, a.date as string | undefined) },
   { name: "set_daily3", description: "Set/replace the three focus tasks (before the day is locked).", inputSchema: obj({ task_ids: { type: "array", items: str }, date: str }, ["task_ids"]), handler: (c, a) => store.setDaily3(c, a as never) },
@@ -80,8 +87,11 @@ const TOOLS: Tool[] = [
   { name: "capture", description: "Save a raw input to the inbox immediately (raw payload is immutable).", inputSchema: obj({ kind: str, title: str, url: str, raw: str, workspace_id: str }, ["kind"]), handler: (c, a) => store.capture(c, a as never) },
   { name: "list_inbox", description: "Sources still awaiting processing.", inputSchema: obj({}), handler: (c) => store.listInbox(c) },
   { name: "get_source", description: "A source with its parsed metadata.", inputSchema: obj({ id: str }, ["id"]), handler: (c, a) => store.getSource(c, String(a.id)) },
+  { name: "delete_source", description: "Delete a captured source. Destructive — confirm with the user first.", inputSchema: obj({ id: str }, ["id"]), handler: async (c, a) => { await store.deleteSource(c, String(a.id)); return { ok: true }; } },
   { name: "create_insight", description: "Create a knowledge node (optionally linked to its source).", inputSchema: obj({ title: str, body: str, workspace_id: str, source_id: str }, ["title", "body"]), handler: (c, a) => store.createInsight(c, a as never) },
   { name: "list_insights", description: "List insights (optionally within a workspace).", inputSchema: obj({ workspace_id: str }), handler: (c, a) => store.listInsights(c, a.workspace_id as string | undefined) },
+  { name: "update_insight", description: "Refine an insight's title or body.", inputSchema: obj({ id: str, title: str, body: str }, ["id"]), handler: (c, a) => store.updateInsight(c, String(a.id), a as never) },
+  { name: "delete_insight", description: "Delete an insight. Destructive — confirm with the user first.", inputSchema: obj({ id: str }, ["id"]), handler: async (c, a) => { await store.deleteInsight(c, String(a.id)); return { ok: true }; } },
   // ---- documents (patch-only for agents) ----
   { name: "get_document", description: "A document's metadata.", inputSchema: obj({ id: str }, ["id"]), handler: (c, a) => store.getDocument(c, String(a.id)) },
   { name: "list_documents", description: "A workspace's documents.", inputSchema: obj({ workspace_id: str }, ["workspace_id"]), handler: (c, a) => store.listDocuments(c, String(a.workspace_id)) },
@@ -92,6 +102,7 @@ const TOOLS: Tool[] = [
   // ---- decisions / graph / search ----
   { name: "record_decision", description: "Record an immutable decision (title, rationale, alternatives, impact).", inputSchema: obj({ workspace_id: str, title: str, rationale: str }, ["workspace_id", "title", "rationale"]), handler: (c, a) => store.recordDecision(c, a as never) },
   { name: "list_decisions", description: "A workspace's decisions.", inputSchema: obj({ workspace_id: str }, ["workspace_id"]), handler: (c, a) => store.listDecisions(c, String(a.workspace_id)) },
+  { name: "delete_decision", description: "Delete a decision record (content is immutable, but the record can be removed). Destructive — confirm first.", inputSchema: obj({ id: str }, ["id"]), handler: async (c, a) => { await store.deleteDecision(c, String(a.id)); return { ok: true }; } },
   { name: "relate", description: "Create a typed edge between two objects.", inputSchema: obj({ source_type: str, source_id: str, target_type: str, target_id: str, type: str }, ["source_type", "source_id", "target_type", "target_id", "type"]), handler: (c, a) => store.relate(c, a as never) },
   { name: "get_backlinks", description: "Everything referencing an object.", inputSchema: obj({ type: str, id: str }, ["type", "id"]), handler: (c, a) => store.getBacklinks(c, String(a.type), String(a.id)) },
   { name: "search", description: "Full-text search across every entity.", inputSchema: obj({ query: str }, ["query"]), handler: (c, a) => store.search(c, String(a.query), {}) },
