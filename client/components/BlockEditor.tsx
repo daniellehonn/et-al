@@ -116,6 +116,14 @@ export function BlockEditor({ documentId }: { documentId: string }) {
     qc.invalidateQueries({ queryKey: ["blocks", documentId] });
   }, [documentId, qc]);
 
+  // Delete a block reliably: remove it from the cache immediately (optimistic),
+  // then persist. The block vanishes on click regardless of any re-render.
+  const deleteBlock = useCallback((id: string) => {
+    qc.setQueryData<Block[]>(["blocks", documentId], (old) => (old ?? []).filter((b) => b.id !== id));
+    api.post(`/documents/${documentId}/blocks`, { ops: [{ op: "delete", id }] })
+      .finally(() => qc.invalidateQueries({ queryKey: ["blocks", documentId] }));
+  }, [documentId, qc]);
+
   const saveText = useCallback((b: Block, value: string) => {
     clearTimeout(debounce.current[b.id]);
     debounce.current[b.id] = setTimeout(() => {
@@ -202,12 +210,13 @@ export function BlockEditor({ documentId }: { documentId: string }) {
         <div key={b.id} className="et-block" data-type={b.type} data-ai={!!b.is_ai}>
           <div className="et-block-gutter">
             <details className="et-type-menu">
-              <summary aria-label="Change block type">⋮⋮</summary>
+              <summary aria-label="Change block type" title="Change type">⋮⋮</summary>
               <div className="et-type-list">
                 {TYPE_MENU.map((t) => <button key={t.type} onClick={(e) => { changeType(b, t.type); (e.currentTarget.closest("details") as HTMLDetailsElement).open = false; }}>{t.label}</button>)}
-                <button className="et-type-del" onClick={(e) => { applyOps([{ op: "delete", id: b.id }]); (e.currentTarget.closest("details") as HTMLDetailsElement).open = false; }}>Delete block</button>
               </div>
             </details>
+            <button className="et-block-del" title="Delete block" aria-label="Delete block"
+              onClick={() => { if (editingId === b.id) setEditingId(null); deleteBlock(b.id); }}>×</button>
           </div>
           {b.type === "divider" ? (
             <hr className="et-hr" />
@@ -390,6 +399,9 @@ function EditorStyles() {
       /* Keep the menu visible (and clickable) while it's open, even if the block loses hover. */
       .et-block:has(.et-type-menu[open]) .et-block-gutter { opacity: 1; }
       .et-type-menu summary { padding: 0.1rem 0.15rem; }
+      .et-block-gutter { display: flex; flex-direction: column; align-items: center; gap: 0.1rem; }
+      .et-block-del { background: none; border: none; color: var(--ink-faint); font-size: 1.05rem; line-height: 1; cursor: pointer; padding: 0 0.1rem; border-radius: 4px; }
+      .et-block-del:hover { color: #c0392b; background: color-mix(in srgb, #c0392b 12%, transparent); }
       .et-type-menu { position: relative; }
       .et-type-menu summary { list-style: none; cursor: grab; color: var(--ink-faint); font-size: 0.7rem; user-select: none; line-height: 1; letter-spacing: -1px; }
       .et-type-menu summary::-webkit-details-marker { display: none; }

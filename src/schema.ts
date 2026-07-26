@@ -75,6 +75,8 @@ export const updateWorkspaceInput = z.object({
   type: z.enum(WORKSPACE_TYPES).optional(),
   status: z.enum(WORKSPACE_STATUSES).optional(),
   position: z.number().optional(),
+  icon: z.string().nullish(),
+  cover: z.string().nullish(),
 });
 
 export const createObjectiveInput = z.object({
