@@ -129,8 +129,8 @@ function WidgetBody({ type, config, workspace, setTab, onConfigChange }: {
   type: string; config: Config; workspace: Workspace; setTab: (t: string) => void; onConfigChange?: (c: Config) => void;
 }) {
   if (type === "table") return <TableWidget config={config} onChange={onConfigChange} />;
-  if (type === "child_progress") return <ChildProgressWidget workspaceId={workspace.id} type={workspace.type} />;
-  if (type === "tasks") return <TasksWidget workspaceId={workspace.id} setTab={setTab} />;
+  if (type === "child_progress") return <ChildProgressWidget workspaceId={workspace.id} type={workspace.type} config={config} onChange={onConfigChange} />;
+  if (type === "tasks") return <TasksWidget workspaceId={workspace.id} setTab={setTab} config={config} onChange={onConfigChange} />;
   if (type === "text") return <TextWidget config={config} onChange={onConfigChange} />;
   if (type === "progress") return <ProgressWidget workspaceId={workspace.id} workspace={workspace} />;
   if (type === "deadlines") return <DeadlinesWidget workspaceId={workspace.id} setTab={setTab} />;
@@ -231,14 +231,24 @@ function Cell({ type, value, readOnly, onSave }: { type: ColType; value: string;
 }
 
 // ── Child progress: a bar per sub-workspace ──────────────────────────────────
-function ChildProgressWidget({ workspaceId, type }: { workspaceId: string; type: string }) {
+function ChildProgressWidget({ workspaceId, type, config, onChange }: { workspaceId: string; type: string; config?: Config; onChange?: (c: Config) => void }) {
   const { data: workspaces } = useQuery({ queryKey: ["workspaces"], queryFn: () => api.get<Workspace[]>("/workspaces") });
   const { data: health } = useQuery({ queryKey: ["health-scores"], queryFn: () => api.get<Health[]>("/health-scores") });
-  const children = (workspaces ?? []).filter((w) => w.parent_id === workspaceId);
   const byId = new Map((health ?? []).map((h) => [h.workspace_id, h]));
+  const pctOf = (id: string) => { const h = byId.get(id); const total = (h?.open_tasks ?? 0) + (h?.done_tasks ?? 0); return total ? Math.round(((h?.done_tasks ?? 0) / total) * 100) : 0; };
+  const sort = String(config?.sort ?? "name");
+  const children = (workspaces ?? []).filter((w) => w.parent_id === workspaceId).sort((a, b) =>
+    sort === "least" ? pctOf(a.id) - pctOf(b.id) : sort === "most" ? pctOf(b.id) - pctOf(a.id) : a.title.localeCompare(b.title));
   if (children.length === 0) return <div className="et-empty">Nothing inside this {type} yet.</div>;
   return (
     <div className="et-childprog">
+      {onChange && (
+        <div className="et-w-opts">
+          <select value={sort} onChange={(e) => onChange({ ...config, sort: e.target.value })} aria-label="Sort">
+            <option value="name">A–Z</option><option value="least">Least done</option><option value="most">Most done</option>
+          </select>
+        </div>
+      )}
       {children.map((w) => {
         const h = byId.get(w.id);
         const total = (h?.open_tasks ?? 0) + (h?.done_tasks ?? 0);
@@ -255,14 +265,23 @@ function ChildProgressWidget({ workspaceId, type }: { workspaceId: string; type:
   );
 }
 
-function TasksWidget({ workspaceId, setTab }: { workspaceId: string; setTab: (t: string) => void }) {
+function TasksWidget({ workspaceId, setTab, config, onChange }: { workspaceId: string; setTab: (t: string) => void; config?: Config; onChange?: (c: Config) => void }) {
   const { data: tasks } = useQuery({ queryKey: ["tasks", workspaceId], queryFn: () => api.get<Task[]>(`/workspaces/${workspaceId}/tasks`) });
-  const open = (tasks ?? []).filter((t) => t.status !== "done");
-  if (open.length === 0) return <div className="et-empty">No open tasks. <button className="et-link" onClick={() => setTab("Tasks")}>Add one →</button></div>;
+  const filter = String(config?.status_filter ?? "open");
+  const shown = (tasks ?? []).filter((t) => filter === "all" ? true : filter === "done" ? t.status === "done" : t.status !== "done");
+  const opts = onChange && (
+    <div className="et-w-opts">
+      <select value={filter} onChange={(e) => onChange({ ...config, status_filter: e.target.value })} aria-label="Filter">
+        <option value="open">Open</option><option value="all">All</option><option value="done">Done</option>
+      </select>
+    </div>
+  );
+  if (shown.length === 0) return <div className="et-taskswidget">{opts}<div className="et-empty">No {filter === "open" ? "open " : ""}tasks. <button className="et-link" onClick={() => setTab("Tasks")}>Add one →</button></div></div>;
   return (
     <div className="et-taskswidget">
-      {open.slice(0, 6).map((t) => <div key={t.id} className="et-tw-row"><span className="et-prio" data-p={t.priority} />{t.title}</div>)}
-      {open.length > 6 && <button className="et-link" onClick={() => setTab("Tasks")}>+{open.length - 6} more →</button>}
+      {opts}
+      {shown.slice(0, 6).map((t) => <div key={t.id} className="et-tw-row" data-done={t.status === "done" || undefined}><span className="et-prio" data-p={t.priority} />{t.title}</div>)}
+      {shown.length > 6 && <button className="et-link" onClick={() => setTab("Tasks")}>+{shown.length - 6} more →</button>}
     </div>
   );
 }
@@ -415,6 +434,9 @@ function OverviewStyles() {
       .et-taskswidget, .et-tw-row { display: flex; }
       .et-taskswidget { flex-direction: column; }
       .et-tw-row { align-items: center; gap: 0.55rem; padding: 0.35rem 0; border-bottom: 1px solid var(--line); font-size: 0.9rem; }
+      .et-tw-row[data-done] { color: var(--ink-faint); text-decoration: line-through; }
+      .et-w-opts { display: flex; gap: 0.4rem; margin-bottom: 0.6rem; }
+      .et-w-opts select { background: var(--paper); border: 1px solid var(--line-strong); border-radius: 7px; font: inherit; font-size: 0.78rem; color: var(--ink-soft); padding: 0.2rem 0.4rem; cursor: pointer; }
       .et-textwidget { white-space: pre-wrap; color: var(--ink-soft); font-size: 0.92rem; min-height: 1.5rem; }
       .et-link { background: none; border: none; color: var(--color-iris); font: inherit; cursor: pointer; padding: 0; }
       .et-progress-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.5rem; }
