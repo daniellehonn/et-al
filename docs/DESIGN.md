@@ -239,10 +239,12 @@ Quick Capture.
 
 ## Workspace page
 
-Tabs: **Overview · Objectives · Tasks · Documents · Knowledge · Sources ·
-Decisions · Timeline**. The **Documents** tab is the Notion-style block editor —
-the same blocks an agent writes through MCP. `[DEFER]` a per-workspace in-app "AI"
-chat tab; the agent lives outside for now.
+Tabs: **Overview · Tasks · Documents · Decisions · Timeline**. Objectives are not
+a separate tab — an objective is a label a task carries, and the Tasks tab has a
+**group-by-objective** toggle that turns the flat list into planning sections
+(each objective + its tasks, plus an "unassigned" bucket). The **Documents** tab
+is the Notion-style block editor — the same blocks an agent writes through MCP.
+`[DEFER]` a per-workspace in-app "AI" chat tab; the agent lives outside for now.
 
 ---
 

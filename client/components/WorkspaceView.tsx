@@ -5,7 +5,7 @@ import { api, type Workspace, type Task, type Objective, type Document, type Dec
 import { BlockEditor } from "./BlockEditor";
 import { EditableText, DeleteButton } from "./Editable";
 
-const TABS = ["Overview", "Objectives", "Tasks", "Documents", "Decisions", "Timeline"] as const;
+const TABS = ["Overview", "Tasks", "Documents", "Decisions", "Timeline"] as const;
 type Tab = (typeof TABS)[number];
 
 export function WorkspaceView({ id, initialTab, initialDoc }: { id: string; initialTab?: string; initialDoc?: string }) {
@@ -66,7 +66,6 @@ export function WorkspaceView({ id, initialTab, initialDoc }: { id: string; init
 
       <div className="et-tab-body">
         {tab === "Overview" && <Overview id={id} workspace={workspace} setTab={setTab} />}
-        {tab === "Objectives" && <Objectives id={id} />}
         {tab === "Tasks" && <Tasks id={id} />}
         {tab === "Documents" && <Documents id={id} initialDoc={initialDoc} />}
         {tab === "Decisions" && <Decisions id={id} />}
@@ -86,7 +85,7 @@ function Overview({ id, workspace, setTab }: { id: string; workspace: Workspace;
   const open = (tasks ?? []).filter((t) => t.status !== "done");
   const cards: Array<[string, number, Tab]> = [
     ["Open tasks", open.length, "Tasks"],
-    ["Objectives", (objectives ?? []).length, "Objectives"],
+    ["Objectives", (objectives ?? []).length, "Tasks"],
     ["Documents", (docs ?? []).length, "Documents"],
   ];
   return (
@@ -108,128 +107,140 @@ function Overview({ id, workspace, setTab }: { id: string; workspace: Workspace;
   );
 }
 
-// ── Objectives (planning view: tasks nested under each objective) ────────────
-function Objectives({ id }: { id: string }) {
-  const qc = useQueryClient();
-  const { data: objectives } = useQuery({ queryKey: ["objectives", id], queryFn: () => api.get<Objective[]>(`/workspaces/${id}/objectives`) });
-  const { data: tasks } = useQuery({ queryKey: ["tasks", id], queryFn: () => api.get<Task[]>(`/workspaces/${id}/tasks`) });
-  const [title, setTitle] = useState("");
-  const add = useMutation({
-    mutationFn: () => api.post("/objectives", { workspace_id: id, title }),
-    onSuccess: () => { setTitle(""); qc.invalidateQueries({ queryKey: ["objectives", id] }); },
-  });
-  const toggle = useMutation({
-    mutationFn: (t: Task) => api.patch(`/tasks/${t.id}`, { status: t.status === "done" ? "todo" : "done" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks", id] }),
-  });
-  const delTask = useMutation({
-    mutationFn: (tid: string) => api.del(`/tasks/${tid}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks", id] }),
-  });
-  const patchTask = useMutation({
-    mutationFn: ({ tid, body }: { tid: string; body: Partial<Task> }) => api.patch(`/tasks/${tid}`, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks", id] }),
-  });
-  const tasksFor = (oid: string) => (tasks ?? []).filter((t) => t.objective_id === oid);
-
-  return (
-    <div>
-      {(objectives ?? []).map((o) => (
-        <ObjectiveGroup key={o.id} workspaceId={id} objective={o} tasks={tasksFor(o.id)}
-          onToggle={(t) => toggle.mutate(t)} onDeleteTask={(tid) => delTask.mutate(tid)}
-          onRenameTask={(tid, title) => patchTask.mutate({ tid, body: { title } })} />
-      ))}
-      {objectives?.length === 0 && <div className="et-empty">No objectives yet — the &ldquo;why&rdquo; behind the work. Break one into tasks below.</div>}
-      <QuickAdd value={title} setValue={setTitle} onAdd={() => title.trim() && add.mutate()} placeholder="New objective — why does this matter?" pending={add.isPending} />
-    </div>
-  );
-}
-
-function ObjectiveGroup({ workspaceId, objective, tasks, onToggle, onDeleteTask, onRenameTask }: {
-  workspaceId: string; objective: Objective; tasks: Task[];
-  onToggle: (t: Task) => void; onDeleteTask: (tid: string) => void; onRenameTask: (tid: string, title: string) => void;
-}) {
-  const qc = useQueryClient();
-  const [taskTitle, setTaskTitle] = useState("");
-  const invalidate = () => { qc.invalidateQueries({ queryKey: ["tasks", workspaceId] }); qc.invalidateQueries({ queryKey: ["objectives", workspaceId] }); };
-  const addTask = useMutation({
-    mutationFn: () => api.post("/tasks", { workspace_id: workspaceId, objective_id: objective.id, title: taskTitle }),
-    onSuccess: () => { setTaskTitle(""); invalidate(); },
-  });
-  const renameObj = useMutation({ mutationFn: (title: string) => api.patch(`/objectives/${objective.id}`, { title }), onSuccess: invalidate });
-  const delObj = useMutation({ mutationFn: () => api.del(`/objectives/${objective.id}`), onSuccess: invalidate });
-  const open = tasks.filter((t) => t.status !== "done");
-  const done = tasks.filter((t) => t.status === "done");
-  return (
-    <div className="et-obj-group">
-      <div className="et-obj-head">
-        <span className="et-prio" data-p={objective.priority} />
-        <EditableText className="et-obj-title" value={objective.title} onSave={(title) => renameObj.mutate(title)} />
-        <span className="eyebrow et-status">{open.length} open{done.length ? ` · ${done.length} done` : ""}</span>
-        <DeleteButton onDelete={() => delObj.mutate()} confirm label="Delete objective" />
-      </div>
-      <div className="et-obj-tasks">
-        {[...open, ...done].map((t) => (
-          <div key={t.id} className="et-task-row" data-done={t.status === "done" || undefined}>
-            <button className="et-check-btn" aria-label="Toggle done" onClick={() => onToggle(t)}>
-              <span className="et-check" {...(t.status === "done" ? { "data-checked": true } : {})} />
-            </button>
-            <EditableText className="et-task-title" value={t.title} onSave={(title) => onRenameTask(t.id, title)} />
-            <DeleteButton onDelete={() => onDeleteTask(t.id)} />
-          </div>
-        ))}
-        <QuickAdd value={taskTitle} setValue={setTaskTitle} onAdd={() => taskTitle.trim() && addTask.mutate()} placeholder="Add a task to this objective" pending={addTask.isPending} />
-      </div>
-    </div>
-  );
-}
-
-// ── Tasks ───────────────────────────────────────────────────────────────────
+// ── Tasks (with optional grouping by objective) ─────────────────────────────
+// Objectives are no longer a separate tab; an objective is a label a task can
+// carry, and "group by objective" turns the flat list into planning sections.
 function Tasks({ id }: { id: string }) {
   const qc = useQueryClient();
-  const { data } = useQuery({ queryKey: ["tasks", id], queryFn: () => api.get<Task[]>(`/workspaces/${id}/tasks`) });
+  const { data: tasks } = useQuery({ queryKey: ["tasks", id], queryFn: () => api.get<Task[]>(`/workspaces/${id}/tasks`) });
+  const { data: objectives } = useQuery({ queryKey: ["objectives", id], queryFn: () => api.get<Objective[]>(`/workspaces/${id}/objectives`) });
+  const [groupBy, setGroupBy] = useState<"none" | "objective">("none");
   const [title, setTitle] = useState("");
-  const add = useMutation({
-    mutationFn: () => api.post("/tasks", { workspace_id: id, title }),
-    onSuccess: () => { setTitle(""); qc.invalidateQueries({ queryKey: ["tasks", id] }); },
+  const invalidate = () => { qc.invalidateQueries({ queryKey: ["tasks", id] }); qc.invalidateQueries({ queryKey: ["objectives", id] }); };
+
+  const addTask = useMutation({
+    mutationFn: (body: { title: string; objective_id?: string | null }) => api.post("/tasks", { workspace_id: id, ...body }),
+    onSuccess: invalidate,
   });
-  const toggle = useMutation({
-    mutationFn: (t: Task) => api.patch(`/tasks/${t.id}`, { status: t.status === "done" ? "todo" : "done" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks", id] }),
-  });
-  const patch = useMutation({
-    mutationFn: ({ tid, body }: { tid: string; body: Partial<Task> }) => api.patch(`/tasks/${tid}`, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks", id] }),
-  });
-  const del = useMutation({
-    mutationFn: (tid: string) => api.del(`/tasks/${tid}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks", id] }),
-  });
-  const open = (data ?? []).filter((t) => t.status !== "done");
-  const done = (data ?? []).filter((t) => t.status === "done");
-  const row = (t: Task) => (
-    <div key={t.id} className="et-task-row" data-done={t.status === "done" || undefined}>
-      <button className="et-check-btn" aria-label={t.status === "done" ? "Mark not done" : "Mark done"} onClick={() => toggle.mutate(t)}>
-        <span className="et-check" {...(t.status === "done" ? { "data-checked": true } : {})} />
-      </button>
-      {t.status !== "done" && <span className="et-prio" data-p={t.priority} />}
-      <EditableText className="et-task-title" value={t.title} onSave={(title) => patch.mutate({ tid: t.id, body: { title } })} />
-      <DeleteButton onDelete={() => del.mutate(t.id)} />
-    </div>
-  );
+  const toggle = useMutation({ mutationFn: (t: Task) => api.patch(`/tasks/${t.id}`, { status: t.status === "done" ? "todo" : "done" }), onSuccess: invalidate });
+  const patch = useMutation({ mutationFn: ({ tid, body }: { tid: string; body: Partial<Task> }) => api.patch(`/tasks/${tid}`, body), onSuccess: invalidate });
+  const del = useMutation({ mutationFn: (tid: string) => api.del(`/tasks/${tid}`), onSuccess: invalidate });
+  const addObj = useMutation({ mutationFn: (t: string) => api.post("/objectives", { workspace_id: id, title: t }), onSuccess: invalidate });
+
+  const handlers = {
+    objectives: objectives ?? [],
+    onToggle: (t: Task) => toggle.mutate(t),
+    onRename: (tid: string, tt: string) => patch.mutate({ tid, body: { title: tt } }),
+    onReassign: (tid: string, oid: string | null) => patch.mutate({ tid, body: { objective_id: oid } }),
+    onDelete: (tid: string) => del.mutate(tid),
+  };
+
+  const all = tasks ?? [];
+  const open = all.filter((t) => t.status !== "done");
+  const done = all.filter((t) => t.status === "done");
+
   return (
     <div>
-      {open.map(row)}
-      {open.length === 0 && <div className="et-empty">Nothing open.</div>}
-      <QuickAdd value={title} setValue={setTitle} onAdd={() => title.trim() && add.mutate()} placeholder="New task" pending={add.isPending} />
-      {done.length > 0 && (
-        <div className="et-done-group">
-          <span className="eyebrow">Done · {done.length}</span>
-          {done.map(row)}
+      <div className="et-tasks-toolbar">
+        <span className="eyebrow">Group by</span>
+        <div className="et-seg">
+          <button data-on={groupBy === "none"} onClick={() => setGroupBy("none")}>None</button>
+          <button data-on={groupBy === "objective"} onClick={() => setGroupBy("objective")}>Objective</button>
         </div>
+      </div>
+
+      {groupBy === "none" ? (
+        <>
+          {open.map((t) => <TaskRow key={t.id} task={t} showObjective {...handlers} />)}
+          {open.length === 0 && <div className="et-empty">Nothing open.</div>}
+          <QuickAdd value={title} setValue={setTitle} onAdd={() => title.trim() && addTask.mutate({ title })} placeholder="New task" pending={addTask.isPending} />
+          {done.length > 0 && (
+            <div className="et-done-group">
+              <span className="eyebrow">Done · {done.length}</span>
+              {done.map((t) => <TaskRow key={t.id} task={t} showObjective {...handlers} />)}
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          {(objectives ?? []).map((o) => (
+            <ObjectiveSection key={o.id} workspaceId={id} objective={o}
+              tasks={all.filter((t) => t.objective_id === o.id)} invalidate={invalidate}
+              addTask={(t) => addTask.mutate({ title: t, objective_id: o.id })} {...handlers} />
+          ))}
+          <ObjectiveSection workspaceId={id} objective={null}
+            tasks={all.filter((t) => !t.objective_id)} invalidate={invalidate}
+            addTask={(t) => addTask.mutate({ title: t, objective_id: null })} {...handlers} />
+          <NewObjective onAdd={(t) => addObj.mutate(t)} pending={addObj.isPending} />
+        </>
       )}
     </div>
   );
+}
+
+function TaskRow({ task, objectives, showObjective, onToggle, onRename, onReassign, onDelete }: {
+  task: Task; objectives: Objective[]; showObjective?: boolean;
+  onToggle: (t: Task) => void; onRename: (tid: string, title: string) => void;
+  onReassign: (tid: string, oid: string | null) => void; onDelete: (tid: string) => void;
+}) {
+  return (
+    <div className="et-task-row" data-done={task.status === "done" || undefined}>
+      <button className="et-check-btn" aria-label="Toggle done" onClick={() => onToggle(task)}>
+        <span className="et-check" {...(task.status === "done" ? { "data-checked": true } : {})} />
+      </button>
+      {task.status !== "done" && <span className="et-prio" data-p={task.priority} />}
+      <EditableText className="et-task-title" value={task.title} onSave={(t) => onRename(task.id, t)} />
+      {showObjective && (
+        <select className="et-task-obj" value={task.objective_id ?? ""} aria-label="Objective"
+          onChange={(e) => onReassign(task.id, e.target.value || null)}>
+          <option value="">— no objective</option>
+          {objectives.map((o) => <option key={o.id} value={o.id}>{o.title}</option>)}
+        </select>
+      )}
+      <DeleteButton onDelete={() => onDelete(task.id)} />
+    </div>
+  );
+}
+
+function ObjectiveSection({ workspaceId, objective, tasks, invalidate, addTask, objectives, onToggle, onRename, onReassign, onDelete }: {
+  workspaceId: string; objective: Objective | null; tasks: Task[]; invalidate: () => void; addTask: (title: string) => void;
+  objectives: Objective[]; onToggle: (t: Task) => void; onRename: (tid: string, title: string) => void;
+  onReassign: (tid: string, oid: string | null) => void; onDelete: (tid: string) => void;
+}) {
+  const qc = useQueryClient();
+  const [taskTitle, setTaskTitle] = useState("");
+  const renameObj = useMutation({ mutationFn: (title: string) => api.patch(`/objectives/${objective!.id}`, { title }), onSuccess: invalidate });
+  const delObj = useMutation({ mutationFn: () => api.del(`/objectives/${objective!.id}`), onSuccess: invalidate });
+  const open = tasks.filter((t) => t.status !== "done");
+  const done = tasks.filter((t) => t.status === "done");
+  void qc;
+  return (
+    <div className="et-obj-group">
+      <div className="et-obj-head">
+        {objective ? (
+          <>
+            <span className="et-prio" data-p={objective.priority} />
+            <EditableText className="et-obj-title" value={objective.title} onSave={(t) => renameObj.mutate(t)} />
+            <span className="eyebrow et-status">{open.length} open{done.length ? ` · ${done.length} done` : ""}</span>
+            <DeleteButton onDelete={() => delObj.mutate()} confirm label="Delete objective" />
+          </>
+        ) : (
+          <span className="et-obj-title et-obj-none">No objective</span>
+        )}
+      </div>
+      <div className="et-obj-tasks">
+        {[...open, ...done].map((t) => (
+          <TaskRow key={t.id} task={t} objectives={objectives} onToggle={onToggle} onRename={onRename} onReassign={onReassign} onDelete={onDelete} />
+        ))}
+        <QuickAdd value={taskTitle} setValue={setTaskTitle} onAdd={() => taskTitle.trim() && (addTask(taskTitle), setTaskTitle(""))} placeholder={objective ? "Add a task to this objective" : "Add an unassigned task"} pending={false} />
+      </div>
+    </div>
+  );
+}
+
+function NewObjective({ onAdd, pending }: { onAdd: (title: string) => void; pending: boolean }) {
+  const [title, setTitle] = useState("");
+  return <QuickAdd value={title} setValue={setTitle} onAdd={() => title.trim() && (onAdd(title), setTitle(""))} placeholder="New objective — the “why” behind a group of tasks" pending={pending} />;
 }
 
 // ── Documents (+ editor) ─────────────────────────────────────────────────────
@@ -422,6 +433,13 @@ function WorkspaceStyles() {
       .et-decision-form button { align-self: flex-start; background: var(--color-iris); color: #fff; border: none; border-radius: 8px; padding: 0.5rem 1.1rem; font: inherit; cursor: pointer; }
       .et-decision-form button:disabled { opacity: 0.4; cursor: default; }
 
+      .et-tasks-toolbar { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1.1rem; }
+      .et-seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
+      .et-seg button { background: none; border: none; font: inherit; font-size: 0.82rem; color: var(--ink-soft); padding: 0.28rem 0.75rem; cursor: pointer; }
+      .et-seg button[data-on="true"] { background: var(--color-iris); color: #fff; }
+      .et-task-obj { opacity: 0; background: none; border: 1px solid var(--line); border-radius: 6px; font: inherit; font-size: 0.78rem; color: var(--ink-faint); padding: 0.1rem 0.3rem; max-width: 9rem; transition: opacity 0.12s; }
+      .et-task-row:hover .et-task-obj, .et-task-obj:focus { opacity: 1; }
+      .et-obj-none { color: var(--ink-faint); font-style: italic; }
       .et-obj-group { margin-bottom: 1.6rem; }
       .et-obj-head { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0; border-bottom: 1px solid var(--line-strong); }
       .et-obj-title { font-weight: 500; flex: 1; }
