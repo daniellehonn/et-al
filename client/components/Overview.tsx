@@ -54,9 +54,10 @@ export function OverviewView({ id, workspace, setTab }: { id: string; workspace:
   return (
     <div className="et-ov">
       {custom.length > 0 ? (
-        <>
+        <div className="et-ov-grid">
           {custom.map((b) => (
-            <div key={b.id} className="et-widget-wrap" data-over={overId === b.id || undefined} data-dragging={dragId === b.id || undefined}
+            <div key={b.id} className="et-widget-wrap" data-width={parse(b).width === "half" ? "half" : undefined}
+              data-over={overId === b.id || undefined} data-dragging={dragId === b.id || undefined}
               onDragOver={(e) => { if (dragId && dragId !== b.id) { e.preventDefault(); setOverId(b.id); } }}
               onDragLeave={() => setOverId((c) => (c === b.id ? null : c))}
               onDrop={(e) => { e.preventDefault(); dropBefore(b.id); }}>
@@ -72,7 +73,7 @@ export function OverviewView({ id, workspace, setTab }: { id: string; workspace:
               Drop here to move to the end
             </div>
           )}
-        </>
+        </div>
       ) : (
         // No custom layout yet — show a smart default for the type, read-only.
         <div className="et-ov-default">
@@ -110,6 +111,8 @@ function Widget({ block, workspace, setTab, drag }: { block: OverviewBlock; work
         {drag && <span className="et-widget-drag" draggable onDragStart={drag.onStart} onDragEnd={drag.onEnd} title="Drag to reorder">⠿</span>}
         <EditableText className="et-widget-title" value={String(config.title ?? "")} placeholder="Untitled widget"
           onSave={(title) => setConfig({ ...config, title })} />
+        <button className="et-widget-width" title={config.width === "half" ? "Make full width" : "Make half width"}
+          onClick={() => setConfig({ ...config, width: config.width === "half" ? "full" : "half" })}>{config.width === "half" ? "▭" : "◧"}</button>
         <DeleteButton onDelete={() => del.mutate()} confirm label="Remove widget" />
       </div>
       <WidgetBody type={block.type} config={config} workspace={workspace} setTab={setTab} onConfigChange={setConfig} />
@@ -279,6 +282,13 @@ function OverviewStyles() {
   return (
     <style>{`
       .et-ov { display: flex; flex-direction: column; gap: 1.2rem; }
+      .et-ov-grid { display: flex; flex-flow: row wrap; gap: 1.2rem; align-items: flex-start; }
+      .et-widget-wrap { flex: 1 1 100%; min-width: 0; }
+      .et-widget-wrap[data-width="half"] { flex-basis: calc(50% - 0.6rem); }
+      @media (max-width: 720px) { .et-widget-wrap[data-width="half"] { flex-basis: 100%; } }
+      .et-widget-endzone { flex-basis: 100%; }
+      .et-widget-width { background: none; border: none; color: var(--ink-faint); cursor: pointer; font-size: 0.9rem; line-height: 1; padding: 0 0.2rem; }
+      .et-widget-width:hover { color: var(--ink); }
       .et-ov-default { display: flex; flex-direction: column; gap: 1.4rem; }
       .et-ov-hint { color: var(--ink-faint); font-size: 0.85rem; font-style: italic; margin: 0.2rem 0 0; }
       .et-widget-wrap { border-radius: 12px; transition: box-shadow 0.1s; }
