@@ -54,12 +54,14 @@ export async function createWorkspace(c: Ctx, input: z.infer<typeof createWorksp
   }
   const wid = id("ws");
   const t = now();
+  // A project starts life as an idea; other types start active.
+  const status = data.type === "project" ? "idea" : "active";
   await c.db
     .prepare(
       `INSERT INTO workspace (id, parent_id, type, title, description, status, position, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'active', 0, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
     )
-    .bind(wid, data.parent_id ?? null, data.type, data.title, data.description ?? null, t, t)
+    .bind(wid, data.parent_id ?? null, data.type, data.title, data.description ?? null, status, t, t)
     .run();
   await logEvent(c, "create", "workspace", wid, { title: data.title, type: data.type });
   await seedForType(c, wid, data.type);

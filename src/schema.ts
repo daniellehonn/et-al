@@ -29,7 +29,9 @@ export const ENTITY_TYPES = [
 export type EntityType = (typeof ENTITY_TYPES)[number];
 
 export const WORKSPACE_TYPES = ["area", "project", "course", "organization"] as const;
-export const WORKSPACE_STATUSES = ["active", "paused", "completed", "archived"] as const;
+// Finite workspaces move idea → active (in progress) → completed (done);
+// paused/archived apply to any type.
+export const WORKSPACE_STATUSES = ["idea", "active", "paused", "completed", "archived"] as const;
 // Finite types have an outcome and can be completed; ongoing types are maintained.
 export const FINITE_WORKSPACE_TYPES = ["project", "course"] as const;
 

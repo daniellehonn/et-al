@@ -49,16 +49,19 @@ export function WorkspaceView({ id, initialTab, initialDoc }: { id: string; init
           onSave={(title) => patchWs.mutate({ title })} />
         <div className="et-ws-meta">
           <span className="et-tag" data-type={workspace.type}>{workspace.type}</span>
-          {workspace.status === "completed" && <span className="et-tag et-tag-done">✓ completed</span>}
           {workspace.status === "archived" && <span className="et-tag">archived</span>}
           <EditableText className="et-ws-desc" value={workspace.description ?? ""} placeholder="Add a description…"
             onSave={(description) => patchWs.mutate({ description })} />
           <span className="et-ws-actions">
-            {FINITE_TYPES.includes(workspace.type) && (
-              <button className="et-ws-complete" data-done={workspace.status === "completed" || undefined}
-                onClick={() => patchWs.mutate({ status: workspace.status === "completed" ? "active" : "completed" })}>
-                {workspace.status === "completed" ? "Reopen" : "Mark complete"}
-              </button>
+            {FINITE_TYPES.includes(workspace.type) && workspace.status !== "archived" && (
+              <select className="et-ws-status" data-status={workspace.status}
+                value={["idea", "active", "completed", "paused"].includes(workspace.status) ? workspace.status : "active"}
+                onChange={(e) => patchWs.mutate({ status: e.target.value })} aria-label="Project status">
+                <option value="idea">Idea</option>
+                <option value="active">In progress</option>
+                <option value="completed">Done</option>
+                <option value="paused">Paused</option>
+              </select>
             )}
             <button className="et-ws-archive" onClick={() => patchWs.mutate({ status: workspace.status === "archived" ? "active" : "archived" })}>
               {workspace.status === "archived" ? "Unarchive" : "Archive"}
@@ -96,7 +99,7 @@ function Tasks({ id }: { id: string }) {
   const qc = useQueryClient();
   const { data: tasks } = useQuery({ queryKey: ["tasks", id], queryFn: () => api.get<Task[]>(`/workspaces/${id}/tasks`) });
   const { data: objectives } = useQuery({ queryKey: ["objectives", id], queryFn: () => api.get<Objective[]>(`/workspaces/${id}/objectives`) });
-  const [groupBy, setGroupBy] = useState<"none" | "objective">("none");
+  const [groupBy, setGroupBy] = useState<"none" | "objective">("objective");
   const [title, setTitle] = useState("");
   const invalidate = () => { qc.invalidateQueries({ queryKey: ["tasks", id] }); qc.invalidateQueries({ queryKey: ["objectives", id] }); };
 
@@ -363,9 +366,10 @@ function WorkspaceStyles() {
       .et-ws-actions { display: inline-flex; align-items: center; gap: 0.4rem; margin-left: auto; }
       .et-ws-archive { background: none; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--ink-soft); font: inherit; font-size: 0.8rem; padding: 0.25rem 0.7rem; cursor: pointer; }
       .et-ws-archive:hover { color: var(--ink); border-color: var(--ink-faint); }
-      .et-ws-complete { background: var(--color-sage); border: 1px solid var(--color-sage); border-radius: 7px; color: #fff; font: inherit; font-size: 0.8rem; padding: 0.25rem 0.7rem; cursor: pointer; }
-      .et-ws-complete[data-done] { background: none; color: var(--ink-soft); border-color: var(--line-strong); }
-      .et-tag-done { color: var(--color-sage) !important; border-color: color-mix(in srgb, var(--color-sage) 45%, transparent) !important; }
+      .et-ws-status { font: inherit; font-size: 0.8rem; border-radius: 7px; padding: 0.25rem 0.6rem; cursor: pointer; border: 1px solid var(--line-strong); background: var(--paper-raised); color: var(--ink-soft); }
+      .et-ws-status[data-status="idea"] { color: var(--color-amber); border-color: color-mix(in srgb, var(--color-amber) 45%, transparent); }
+      .et-ws-status[data-status="active"] { color: var(--color-iris); border-color: color-mix(in srgb, var(--color-iris) 45%, transparent); }
+      .et-ws-status[data-status="completed"] { color: var(--color-sage); border-color: color-mix(in srgb, var(--color-sage) 45%, transparent); }
 
       .et-progress-card { border: 1px solid var(--line); background: var(--paper-raised); border-radius: 12px; padding: 1.1rem 1.2rem; margin-bottom: 1.6rem; }
       .et-progress-card[data-complete] { border-color: color-mix(in srgb, var(--color-sage) 40%, transparent); }
