@@ -62,7 +62,8 @@ export function WorkspaceView({ id, initialTab, initialDoc }: { id: string; init
             <button className="et-ws-archive" onClick={() => patchWs.mutate({ status: workspace.status === "archived" ? "active" : "archived" })}>
               {workspace.status === "archived" ? "Unarchive" : "Archive"}
             </button>
-            <DeleteButton onDelete={() => deleteWs.mutate()} confirm label="Delete workspace" size="md" />
+            <DeleteButton onDelete={() => deleteWs.mutate()} confirm size="md"
+              label={(all ?? []).some((w) => w.parent_id === id) ? "Delete (sub-workspaces move up)" : "Delete workspace"} />
           </span>
         </div>
       </header>

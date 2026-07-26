@@ -127,16 +127,21 @@ export async function moveWorkspace(c: Ctx, wid: string, newParentId: string | n
   return (await getWorkspace(c, wid))!;
 }
 
-/** Delete a workspace and everything inside it. Rejected if it still has child
- *  workspaces — archive or delete those first, so a delete is never a surprise
- *  cascade across the tree. */
+/** Delete a workspace and its own contents. Its sub-workspaces are NOT deleted —
+ *  they are promoted up to this workspace's parent, so removing a grouping folder
+ *  keeps everything inside it (moved up a level) instead of cascading the tree. */
 export async function deleteWorkspace(c: Ctx, wid: string): Promise<void> {
   const existing = await getWorkspace(c, wid);
   if (!existing) throw new RuleError(`workspace ${wid} not found`, 404);
+  // Promote direct children to this workspace's parent (root if it was a root).
   const children = await all<{ id: string }>(c, `SELECT id FROM workspace WHERE parent_id = ?`, wid);
-  if (children.length) throw new RuleError(`workspace has ${children.length} sub-workspace(s) — remove those first`);
+  if (children.length) {
+    await c.db.prepare(`UPDATE workspace SET parent_id = ?, updated_at = ? WHERE parent_id = ?`).bind(existing.parent_id, now(), wid).run();
+    await logEvent(c, "update", "workspace", wid, { promoted_children: children.length, to: existing.parent_id });
+  }
 
-  // Clear FTS for every searchable child entity, then the rows themselves.
+  // Clear FTS for every searchable entity that belongs to THIS workspace (the
+  // promoted children keep their own contents), then the rows themselves.
   for (const type of ["task", "document", "source", "insight", "decision"]) {
     await c.db
       .prepare(`DELETE FROM search_fts WHERE entity_type = ? AND entity_id IN (SELECT id FROM ${type} WHERE workspace_id = ?)`)

@@ -47,7 +47,9 @@ export function Spine() {
   };
 
   const byParent = new Map<string | null, Workspace[]>();
+  const byId = new Map<string, Workspace>();
   for (const w of workspaces ?? []) {
+    byId.set(w.id, w);
     const key = w.parent_id;
     (byParent.get(key) ?? byParent.set(key, []).get(key)!).push(w);
   }
@@ -111,6 +113,15 @@ export function Spine() {
         <button className="et-ws-add-root" title="New workspace" onClick={() => { setTitle(""); setCreating(null); }}>+</button>
       </div>
       <div className="et-tree">
+        {/* Appears only while dragging: drop here to pull a workspace out to root. */}
+        {dragId && (byId.get(dragId)?.parent_id) && (
+          <div className="et-root-drop" data-drop={dropId === null || undefined}
+            onDragOver={(e) => { e.preventDefault(); setDropId(null); }}
+            onDragLeave={() => setDropId((cur) => (cur === null ? undefined : cur))}
+            onDrop={(e) => { e.preventDefault(); drop(null); }}>
+            ↑ Move to top level
+          </div>
+        )}
         {renderTree(null, 0)}
         {creating === null && newInput(null, 0)}
       </div>
@@ -156,6 +167,8 @@ export function Spine() {
         .et-ws-new input { flex: 1; min-width: 0; background: var(--paper-raised); border: 1px solid var(--color-iris); border-radius: 6px; padding: 0.28rem 0.5rem; font: inherit; font-size: 0.86rem; color: var(--ink); }
         .et-ws-new input:focus { outline: none; }
         .et-ws-new select { background: var(--paper-raised); border: 1px solid var(--line-strong); border-radius: 6px; font: inherit; font-size: 0.75rem; color: var(--ink-soft); padding: 0 0.1rem; }
+        .et-root-drop { margin: 0 0.6rem 0.4rem; padding: 0.4rem 0.6rem; border: 1px dashed var(--line-strong); border-radius: 7px; font-size: 0.8rem; color: var(--ink-faint); text-align: center; }
+        .et-root-drop[data-drop="true"] { border-color: var(--color-iris); border-style: solid; background: var(--color-iris-soft); color: var(--color-iris); }
         .et-ws-row { border-radius: 6px; }
         .et-ws-row[data-drop="true"] { background: var(--color-iris-soft); box-shadow: inset 0 0 0 1px var(--color-iris); }
         .et-ws-row[data-dragging="true"] { opacity: 0.4; }
