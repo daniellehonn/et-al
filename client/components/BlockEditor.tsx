@@ -687,8 +687,9 @@ function EditorStyles() {
       .et-role-at { color: var(--ink-faint); font-size: 0.9rem; }
       .et-role-company { font-weight: 500; color: var(--color-iris); }
       .et-role-meta { font-size: 0.82rem; color: var(--ink-soft); margin: 0.2rem 0 0.5rem; display: flex; gap: 0.35rem; align-items: baseline; flex-wrap: wrap; }
-      .et-role-bullets { margin: 0; padding-left: 1.2rem; }
-      .et-role-bullets li { margin: 0.15rem 0; }
+      .et-role-bullets { margin: 0; padding-left: 1.2rem; list-style: disc; }
+      .et-role-bullets li { margin: 0.15rem 0; display: list-item; list-style: disc; }
+      .et-role-bullets li::marker { color: var(--ink-faint); }
       .et-role-addb { background: none; border: none; color: var(--ink-faint); font: inherit; font-size: 0.8rem; cursor: pointer; margin-top: 0.3rem; }
       .et-role-addb:hover { color: var(--color-iris); }
       .et-block-gutter { opacity: 0; transition: opacity 0.12s; padding-top: 0.35rem; }
