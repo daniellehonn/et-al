@@ -1,0 +1,21 @@
+{
+  "name": "et al.",
+  "short_name": "et al.",
+  "description": "An MCP-native personal operating system.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f5f4f0",
+  "theme_color": "#f5f4f0",
+  "icons": [
+    { "src": "/icon-192.png", "type": "image/png", "sizes": "192x192" },
+    { "src": "/icon-512.png", "type": "image/png", "sizes": "512x512" },
+    { "src": "/icon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "maskable" }
+  ],
+
+  "share_target": {
+    "action": "/share/",
+    "method": "GET",
+    "params": { "url": "url", "title": "title", "text": "text" }
+  }
+}

@@ -3,6 +3,7 @@
 // the web app CAN write document blocks directly — it is the human surface.
 import { Hono } from "hono";
 import type { Env } from "./schema";
+import { SOURCE_KINDS } from "./schema";
 import * as store from "./store";
 
 type Vars = { actor: string };
@@ -49,6 +50,55 @@ api.post("/daily3/confirm", async (c) => c.json(await store.confirmDaily3(ctx(c)
 // ---- inbox / sources / insights ---------------------------------------------
 api.get("/inbox", async (c) => c.json(await store.listInbox(ctx(c))));
 api.post("/capture", async (c) => c.json(await store.capture(ctx(c), await c.req.json())));
+
+// Share-sheet front door. `/capture` is strict — it demands a `kind` from the
+// vocabulary. A share sheet can't supply that: iOS hands over a URL, sometimes a
+// page title, and a text blob that may itself just be the URL again. So this
+// endpoint is deliberately forgiving where `/capture` is deliberately strict —
+// it accepts JSON or form encoding, untangles the url/text/title overlap, infers
+// the kind, and delegates. Keeping it separate leaves `/capture` honest as the
+// typed API that MCP and the web app use.
+api.post("/share", async (c) => {
+  const ct = c.req.header("content-type") ?? "";
+  const raw: Record<string, unknown> = ct.includes("json")
+    ? await c.req.json().catch(() => ({}))
+    : Object.fromEntries(await c.req.formData().catch(() => new FormData()));
+
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const text = str(raw.text) ?? str(raw.raw);
+  const title = str(raw.title);
+  // Android puts the URL in `url`; iOS Shortcuts and many apps bury it in the
+  // text blob instead. Take the first http(s) token we can find either way.
+  const url = str(raw.url) ?? text?.match(/https?:\/\/\S+/)?.[0] ?? null;
+  // If the text was only ever the URL, it carries no extra signal — drop it so
+  // the inbox row doesn't show the same link twice.
+  const note = text && text !== url ? text : null;
+
+  if (!url && !note && !title) return c.json({ error: "nothing to capture" }, 400);
+
+  // Default to `note` even when a URL is present. This looks wrong but matches
+  // Quick Capture, which also files links as notes: `note` is an inline kind, so
+  // it does NOT enqueue ingest, and the row stays put with status 'inbox'. The
+  // link-ish kinds (url/youtube/pdf) enqueue a fetch that flips the source to
+  // 'processed', which would drop a share straight out of the inbox — the exact
+  // opposite of capture-first-organize-later. The URL is still stored in `url`,
+  // so the inbox renders it as a link and process_inbox can type it properly.
+  // A Shortcut that genuinely wants eager fetching can pass `kind` explicitly.
+  // Narrow against the vocabulary rather than casting: an unknown `kind` from a
+  // hand-built Shortcut falls back to `note` instead of reaching zod as a 400.
+  const asked = str(raw.kind);
+  const kind = (SOURCE_KINDS as readonly string[]).includes(asked ?? "")
+    ? (asked as (typeof SOURCE_KINDS)[number])
+    : "note";
+
+  return c.json(await store.capture(ctx(c), {
+    kind,
+    title: title ?? url ?? note?.slice(0, 60),
+    url,
+    raw: note,
+    workspace_id: str(raw.workspace_id),
+  }));
+});
 api.get("/sources/:id", async (c) => c.json(await store.getSource(ctx(c), c.req.param("id"))));
 api.patch("/sources/:id", async (c) => c.json(await store.updateSource(ctx(c), c.req.param("id"), await c.req.json())));
 api.delete("/sources/:id", async (c) => { await store.deleteSource(ctx(c), c.req.param("id")); return c.json({ ok: true }); });

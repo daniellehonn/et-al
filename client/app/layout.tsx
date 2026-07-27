@@ -12,6 +12,20 @@ const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-jetbrains", 
 export const metadata: Metadata = {
   title: "et al.",
   description: "An MCP-native personal operating system.",
+  manifest: "/manifest.webmanifest",
+  // `capable` is what makes the home-screen launch run without Safari chrome.
+  // The manifest declares a `share_target`, but note that only Chrome on Android
+  // honours it — iOS has never shipped the Web Share Target API, so on iPhone
+  // the share sheet entry comes from a Shortcut instead (docs/IOS-SHARE.md).
+  appleWebApp: { capable: true, title: "et al.", statusBarStyle: "default" },
+  icons: {
+    icon: [{ url: "/icon-192.png", sizes: "192x192", type: "image/png" }],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
+  // Next 15 emits only the standardised `mobile-web-app-capable`, which iOS did
+  // not honour until 17.4. Keep the legacy Apple name alongside it so older
+  // iPhones still launch the home-screen app without Safari chrome.
+  other: { "apple-mobile-web-app-capable": "yes" },
 };
 
 // `viewport-fit=cover` so the safe-area insets used by the mobile bar resolve on
