@@ -65,11 +65,18 @@ api.post("/share", async (c) => {
     : Object.fromEntries(await c.req.formData().catch(() => new FormData()));
 
   const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
-  const text = str(raw.text) ?? str(raw.raw);
   const title = str(raw.title);
+
+  // A share sheet decides what goes in which field, and it is regularly wrong:
+  // share a text selection and `url` arrives holding prose. Trusting it would
+  // fail zod's .url() and 500 — so treat `url` as a candidate, not a promise,
+  // and demote it to text when it isn't actually a link.
+  const claimed = str(raw.url);
+  const isLink = (s: string | null) => !!s && /^https?:\/\/\S+$/i.test(s);
+  const text = str(raw.text) ?? str(raw.raw) ?? (isLink(claimed) ? null : claimed);
   // Android puts the URL in `url`; iOS Shortcuts and many apps bury it in the
   // text blob instead. Take the first http(s) token we can find either way.
-  const url = str(raw.url) ?? text?.match(/https?:\/\/\S+/)?.[0] ?? null;
+  const url = (isLink(claimed) ? claimed : null) ?? text?.match(/https?:\/\/\S+/)?.[0] ?? null;
   // If the text was only ever the URL, it carries no extra signal — drop it so
   // the inbox row doesn't show the same link twice.
   const note = text && text !== url ? text : null;

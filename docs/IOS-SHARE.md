@@ -38,7 +38,12 @@ two minutes to build, once.
    - **Headers**: add `x-api-key` → *your API key* (the value in `.dev.vars`,
      the same one you type to unlock the web app)
    - **Request Body**: `JSON`
-   - Add field **url** (type Text) → value **Shortcut Input**
+   - Add field **text** (type Text) → value **Shortcut Input**
+
+   Use **text**, not `url`. Shortcut Input is whatever the share sheet handed
+   over, which is a link from Safari but prose when you share a text selection.
+   The endpoint pulls a link out of `text` when there is one and files a plain
+   note when there isn't, so one field covers both.
 
 5. Done. Share any page from Safari, Reader, Mail, anywhere → scroll to
    **Capture to et al.** → it lands in your inbox.
@@ -59,10 +64,14 @@ encoding and any of:
 
 | field   | meaning                                                       |
 | ------- | ------------------------------------------------------------- |
-| `url`   | the shared link                                               |
+| `text`  | free text; any link inside it becomes the `url`               |
+| `url`   | the shared link — demoted to text if it isn't actually a link |
 | `title` | page title, if the sharing app provides one                   |
-| `text`  | free text; a URL found inside it is used when `url` is absent |
 | `kind`  | optional, see below — omit it in normal use                   |
+
+`url` is treated as a candidate rather than a promise because share sheets
+routinely put prose in it (share a text selection from Safari and you get the
+selection, not a link). Sending only `text` is the simplest correct thing.
 
 If `text` is only a repeat of the URL it's dropped, so the inbox row doesn't
 show the same link twice.
