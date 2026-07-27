@@ -41,6 +41,14 @@ export function AuthGate() {
         .et-gate-form input:focus { outline: none; border-color: var(--color-iris); }
         .et-gate-form button { background: var(--ink); color: var(--paper); border: none; border-radius: 7px; padding: 0.3rem 0.9rem; font: inherit; font-size: 0.85rem; cursor: pointer; }
         .et-gate-form button:disabled { opacity: 0.4; cursor: default; }
+        @media (max-width: 860px) {
+          /* Wrap to two rows: the message reads first, the form spans full
+             width beneath it instead of crushing into the remaining inches. */
+          .et-gate { flex-wrap: wrap; gap: 0.5rem; padding: 0.6rem 1.1rem; }
+          .et-gate-msg { flex: 1 1 100%; font-size: 0.82rem; }
+          .et-gate-form { flex: 1 1 100%; }
+          .et-gate-form input { flex: 1; width: auto; min-width: 0; }
+        }
       `}</style>
     </div>
   );

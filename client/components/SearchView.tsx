@@ -72,6 +72,11 @@ export function SearchView() {
         .et-hit-snippet { font-size: 0.85rem; color: var(--ink-soft); margin-top: 0.15rem; }
         .et-hit-snippet mark { background: var(--color-iris-soft); color: var(--ink); padding: 0 0.1em; border-radius: 2px; }
         .et-search-hint, .et-empty { color: var(--ink-faint); font-style: italic; margin-top: 1.5rem; }
+        @media (max-width: 860px) {
+          /* Still the largest type on the page, but small enough that a typed
+             query doesn't immediately scroll out of view. */
+          .et-search-input { font-size: 1.5rem; }
+        }
       `}</style>
     </div>
   );

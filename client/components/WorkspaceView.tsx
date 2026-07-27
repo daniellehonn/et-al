@@ -625,6 +625,44 @@ function WorkspaceStyles() {
       .et-tl-time { color: var(--ink-faint); }
 
       /* .et-empty moved to globals.css */
+
+      @media (max-width: 860px) {
+        /* The cover bleeds to the page edges, so its negative margins must
+           track the mobile page padding set in globals.css. */
+        .et-cover { margin: -1.5rem -1.1rem 1rem; height: 8rem; }
+        .et-ws-title { font-size: 1.9rem; }
+        .et-page-icon { font-size: 1.8rem; }
+        .et-doc-title { font-size: 1.5rem; }
+        .et-crumbs { font-size: 0.85rem; }
+
+        /* Tabs are the primary in-page nav; let them scroll edge to edge
+           rather than compressing, and fade the page padding out of the way. */
+        .et-tabs { margin: 0 -1.1rem 1.4rem; padding: 0 1.1rem; scrollbar-width: none; }
+        .et-tabs::-webkit-scrollbar { display: none; }
+
+        /* Three stat cards side by side leave no room for the numerals. */
+        .et-stat-row { flex-wrap: wrap; gap: 0.7rem; }
+        .et-stat { flex: 1 1 8rem; padding: 0.85rem 0.9rem; }
+        .et-stat-num { font-size: 1.7rem; }
+
+        .et-ws-actions { margin-left: 0; width: 100%; }
+        .et-tasks-toolbar { flex-wrap: wrap; }
+        .et-task-obj { max-width: 6rem; }
+
+        /* A 7-column month grid can't hold task chips on a phone; keep the
+           grid but let cells shrink and show the chips as compact bars. */
+        .et-cal-cell { min-height: 3.4rem; padding: 0.2rem; }
+        .et-cal-month { font-size: 1.05rem; min-width: 7.5rem; }
+        .et-cal-task { font-size: 0.62rem; padding: 0.05rem 0.2rem; }
+        .et-cal-num { font-size: 0.7rem; }
+
+        /* The board already scrolls horizontally — just narrow the columns
+           so a second one peeks in and the gesture is discoverable. */
+        .et-board { grid-auto-columns: minmax(13rem, 78vw); margin: 0 -1.1rem; padding: 0 1.1rem 0.5rem; }
+
+        .et-tl-row, .et-act-row { grid-template-columns: 1rem 1fr; row-gap: 0.1rem; }
+        .et-tl-time, .et-act-time { grid-column: 2; font-size: 0.78rem; }
+      }
     `}</style>
   );
 }

@@ -45,6 +45,9 @@
 
 * { box-sizing: border-box; }
 html, body { padding: 0; margin: 0; }
+/* Nothing in this app is meant to pan sideways; individual wide surfaces
+   (tables, the kanban board) scroll inside their own container instead. */
+html, body { overflow-x: hidden; }
 body {
   background: var(--paper);
   color: var(--ink);
@@ -84,3 +87,31 @@ body {
 .et-seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
 .et-seg button { background: none; border: none; font: inherit; font-size: 0.82rem; color: var(--ink-soft); padding: 0.28rem 0.75rem; cursor: pointer; }
 .et-seg button[data-on="true"] { background: var(--color-iris); color: #fff; }
+
+/* ── Shell ─────────────────────────────────────────────────────────────────── */
+.et-shell { display: grid; grid-template-columns: auto minmax(0, 1fr); min-height: 100vh; }
+.et-shell > main { min-width: 0; }
+
+/* ── Mobile ────────────────────────────────────────────────────────────────────
+   Below 860px the Spine leaves the layout (it becomes a fixed drawer — see
+   Spine.tsx), so the shell collapses to ordinary block flow. */
+@media (max-width: 860px) {
+  .et-shell { display: block; }
+
+  /* Every page shares the same reading-column padding; reclaim the horizontal
+     inches on a phone but keep the generous bottom run-off. */
+  .et-home, .et-ws-page, .et-inbox-page, .et-know-page, .et-search-page {
+    padding: 1.5rem 1.1rem 5rem;
+  }
+
+  /* Hover is unavailable on touch, so anything gated behind :hover would be
+     permanently unreachable. Reveal the affordances that create or edit. */
+  .et-ws-add, .et-task-obj, .et-task-due, .et-cover-remove,
+  .et-embed-edit-btn, .et-col-menu summary { opacity: 1; }
+
+  /* iOS zooms the viewport on focus for any control under 16px. */
+  input, select, textarea { font-size: 16px; }
+
+  /* Wide-by-nature surfaces scroll themselves rather than the page. */
+  .et-doctable-wrap, .et-table-wrap, .et-board { -webkit-overflow-scrolling: touch; }
+}

@@ -741,6 +741,25 @@ function EditorStyles() {
       .et-block[data-type="todo"] { position: relative; }
       .et-block[data-ai="true"] .et-block-input { border-left: 2px solid color-mix(in srgb, var(--color-iris) 45%, transparent); padding-left: 0.7rem; }
       .et-hr { border: none; border-top: 1px solid var(--line-strong); margin: 0.8rem 0; }
+
+      @media (max-width: 860px) {
+        /* Reclaim the gutter: a 1.4rem handle column costs ~8% of a phone's
+           width on every block. Keep it, but tighter, and pull the bullet and
+           todo markers in to match. */
+        .et-block { grid-template-columns: 1rem 1fr; }
+        .et-block[data-type="bullet"]::before,
+        .et-block[data-type="todo"]::before { left: 1rem; }
+        .et-slash-menu { left: 1rem; right: 0; min-width: 0; }
+        .et-block[data-type="heading"] .et-block-render,
+        .et-block[data-type="heading"] .et-block-input { font-size: 1.35rem; }
+        .et-embed-iframe { height: 14rem; }
+        /* Drag handles are hover-revealed and unusable on touch — the type
+           menu they double as still opens on tap, so keep them visible. */
+        .et-type-menu summary { font-size: 0.85rem; }
+        /* Columns side by side are unreadable at phone widths; stack them. */
+        .et-columns { grid-template-columns: 1fr !important; }
+        .et-star-field { grid-template-columns: 1fr; gap: 0.1rem; }
+      }
     `}</style>
   );
 }

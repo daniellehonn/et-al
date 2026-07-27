@@ -185,6 +185,24 @@ function HomeStyles() {
       .et-act-time { color: var(--ink-faint); }
 
       .et-empty { color: var(--ink-faint); font-size: 0.88rem; padding: 0.6rem 0; font-style: italic; }
+
+      @media (max-width: 860px) {
+        /* The display sizes are tuned for a 60rem column; scale them to a phone
+           so the greeting and streak still fit on one line each. */
+        .et-hello { font-size: 2rem; }
+        .et-streak-num { font-size: 1.7rem; }
+        .et-home-head { margin-bottom: 1.8rem; }
+        .et-daily3, .et-capture { margin-bottom: 2rem; }
+        .et-d3-num { font-size: 1.5rem; width: 1.2rem; }
+        .et-d3-title { font-size: 1.02rem; }
+        .et-d3-slot { gap: 0.8rem; padding: 0.85rem 0; }
+        .et-two-col { gap: 2rem; }
+        /* Stack the capture field above its button — side by side, the button
+           squeezes the input below a usable width. */
+        .et-capture form { flex-direction: column; }
+        .et-capture button { padding: 0.7rem 1.3rem; }
+        .et-health-row { grid-template-columns: 5rem 1fr 1.8rem; }
+      }
     `}</style>
   );
 }

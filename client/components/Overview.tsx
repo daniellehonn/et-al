@@ -384,7 +384,7 @@ function OverviewStyles() {
       .et-ov-grid { display: flex; flex-flow: row wrap; gap: 1.2rem; align-items: flex-start; }
       .et-widget-wrap { flex: 1 1 100%; min-width: 0; }
       .et-widget-wrap[data-width="half"] { flex-basis: calc(50% - 0.6rem); }
-      @media (max-width: 720px) { .et-widget-wrap[data-width="half"] { flex-basis: 100%; } }
+      @media (max-width: 860px) { .et-widget-wrap[data-width="half"] { flex-basis: 100%; } }
       .et-widget-endzone { flex-basis: 100%; }
       .et-widget-width { background: none; border: none; color: var(--ink-faint); cursor: pointer; font-size: 0.9rem; line-height: 1; padding: 0 0.2rem; }
       .et-widget-width:hover { color: var(--ink); }
@@ -486,6 +486,21 @@ function OverviewStyles() {
       .et-image-img { max-width: 100%; border-radius: 8px; display: block; }
       .et-image-url { width: 100%; margin-top: 0.5rem; background: var(--paper); border: 1px solid var(--line-strong); border-radius: 7px; padding: 0.35rem 0.55rem; font: inherit; font-size: 0.82rem; color: var(--ink); }
       .et-image-cap { font-size: 0.82rem; color: var(--ink-soft); margin-top: 0.3rem; display: inline-block; }
+
+      @media (max-width: 860px) {
+        .et-widget { padding: 0.9rem 0.95rem; border-radius: 10px; }
+        /* Widget drag-reorder is a pointer gesture; the handle only takes room
+           on touch, so hide it rather than leave a dead affordance. */
+        .et-widget-drag, .et-widget-width { display: none; }
+        .et-metric-value { font-size: 2rem; }
+        .et-childprog-row { grid-template-columns: 6rem 1fr 2.4rem; }
+        /* Column resizing needs a precise drag; drop the handles and let the
+           table scroll in its wrapper instead. */
+        .et-col-resize { display: none; }
+        .et-table { font-size: 0.85rem; }
+        .et-table th, .et-table td { padding: 0.4rem 0.5rem; }
+        .et-table-wrap { margin: 0 -1.1rem; padding: 0 1.1rem; }
+      }
     `}</style>
   );
 }

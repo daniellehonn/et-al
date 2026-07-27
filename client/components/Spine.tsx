@@ -22,9 +22,21 @@ export function Spine() {
     queryFn: () => api.get<Workspace[]>("/workspaces"),
   });
 
-  // Collapsible rail — persisted across sessions.
+  // Collapsible rail — persisted across sessions. Desktop only; on mobile the
+  // rail is an off-canvas drawer driven by `drawer` instead.
   const [collapsed, setCollapsed] = useState(false);
   useEffect(() => { setCollapsed(localStorage.getItem("et-spine-collapsed") === "1"); }, []);
+
+  // Mobile drawer. Never persisted — it should always start closed, and it
+  // closes on navigation so a tapped workspace link doesn't leave it covering
+  // the page it just opened.
+  const [drawer, setDrawer] = useState(false);
+  useEffect(() => { setDrawer(false); }, [pathname]);
+  useEffect(() => {
+    // Lock the page behind the drawer so touch-scrolling doesn't move both.
+    document.body.style.overflow = drawer ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [drawer]);
   const toggleCollapsed = () => setCollapsed((c) => { const n = !c; try { localStorage.setItem("et-spine-collapsed", n ? "1" : "0"); } catch { /* ignore */ } return n; });
 
   // Which tree nodes are collapsed (default: everything expanded). Persisted.
@@ -99,7 +111,9 @@ export function Spine() {
             {hasKids
               ? <button className="et-ws-caret" onClick={(e) => { e.preventDefault(); toggleNode(w.id); }} aria-label={open ? "Collapse" : "Expand"}>{open ? "▾" : "▸"}</button>
               : <span className="et-ws-caret et-ws-caret-empty" />}
-            <a href={`/workspace/?id=${w.id}`} className="et-ws">
+            {/* Closes the drawer explicitly: workspace links only vary by query
+                string, so the pathname-driven close above never fires for them. */}
+            <a href={`/workspace/?id=${w.id}`} className="et-ws" onClick={() => setDrawer(false)}>
               {w.icon ? <span className="et-ws-icon">{w.icon}</span> : <span className="et-ws-dot" data-type={w.type} />}
               {w.title}
             </a>
@@ -114,23 +128,40 @@ export function Spine() {
     </>
   );
 
-  if (collapsed) {
-    return (
-      <aside className="et-spine" data-collapsed>
-        <button className="et-collapse" onClick={toggleCollapsed} title="Expand sidebar" aria-label="Expand sidebar">»</button>
-        <a href="/" className="et-amp-only serif" aria-label="et al. home">&amp;</a>
-        <style>{spineCss}</style>
-      </aside>
-    );
-  }
+  // The mobile header — hidden above the breakpoint by CSS. It is the only way
+  // to reach the workspace tree on a phone, so it renders in both rail states.
+  const mobileBar = (
+    <header className="et-mobilebar">
+      <button className="et-burger" onClick={() => setDrawer(true)} aria-label="Open navigation" aria-expanded={drawer}>
+        <span /><span /><span />
+      </button>
+      <a href="/" className="et-mobilebrand" aria-label="et al. home">
+        <span className="serif">et al.</span><span className="et-amp">&amp;</span>
+      </a>
+    </header>
+  );
 
+  // Tapping the scrim is the primary dismiss gesture on touch.
+  const scrim = drawer ? <div className="et-scrim" onClick={() => setDrawer(false)} aria-hidden /> : null;
+
+  // One rail, always fully rendered. `data-collapsed` is a purely presentational
+  // desktop state that CSS narrows to an icon strip; below the breakpoint the
+  // media query undoes it, so a rail collapsed on desktop still opens as a full
+  // drawer on a phone without duplicating this markup.
   return (
-    <aside className="et-spine">
+    <>
+    {mobileBar}
+    {scrim}
+    <aside className="et-spine" data-collapsed={collapsed || undefined} data-drawer={drawer || undefined}>
       <div className="et-spine-top">
         <a href="/" className="et-brand" aria-label="et al. home">
           <span className="serif">et al.</span><span className="et-amp">&amp;</span>
         </a>
-        <button className="et-collapse" onClick={toggleCollapsed} title="Collapse sidebar" aria-label="Collapse sidebar">«</button>
+        <a href="/" className="et-amp-only serif" aria-label="et al. home">&amp;</a>
+        <button className="et-collapse" onClick={toggleCollapsed}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}>{collapsed ? "»" : "«"}</button>
+        <button className="et-drawer-close" onClick={() => setDrawer(false)} aria-label="Close navigation">×</button>
       </div>
 
       <nav className="et-nav">
@@ -162,6 +193,7 @@ export function Spine() {
 
       <style>{spineCss}</style>
     </aside>
+    </>
   );
 }
 
@@ -174,8 +206,17 @@ const spineCss = `
           position: sticky; top: 0; height: 100vh; overflow-y: auto;
           background: var(--paper);
         }
+        /* Collapsed: an icon strip. Everything but the mark and the toggle is
+           hidden rather than unmounted, so mobile can restore it (see below). */
         .et-spine[data-collapsed] { width: 3rem; padding: 1.4rem 0.4rem; align-items: center; gap: 0.8rem; }
+        .et-spine[data-collapsed] .et-spine-top { flex-direction: column-reverse; gap: 0.6rem; }
+        .et-spine[data-collapsed] .et-brand,
+        .et-spine[data-collapsed] .et-nav,
+        .et-spine[data-collapsed] .et-spine-label,
+        .et-spine[data-collapsed] .et-tree { display: none; }
         .et-spine-top { display: flex; align-items: center; justify-content: space-between; }
+        .et-amp-only, .et-drawer-close { display: none; }
+        .et-spine[data-collapsed] .et-amp-only { display: block; }
         .et-collapse { background: none; border: none; color: var(--ink-faint); font-size: 1.05rem; line-height: 1; cursor: pointer; padding: 0.1rem 0.35rem; border-radius: 6px; }
         .et-collapse:hover { color: var(--ink); background: var(--paper-raised); }
         .et-amp-only { color: var(--color-iris); font-size: 1.5rem; text-decoration: none; }
@@ -227,4 +268,58 @@ const spineCss = `
         .et-ws-dot[data-type="project"] { background: var(--color-iris); }
         .et-ws-dot[data-type="area"] { background: var(--color-sage); }
         .et-ws-dot[data-type="course"] { background: var(--color-amber); }
+
+        /* ── Mobile: the rail becomes an off-canvas drawer ──────────────────── */
+        .et-mobilebar, .et-scrim { display: none; }
+
+        @media (max-width: 860px) {
+          .et-mobilebar {
+            display: flex; align-items: center; gap: 0.7rem;
+            position: sticky; top: 0; z-index: 40;
+            padding: 0.55rem 0.9rem; padding-top: max(0.55rem, env(safe-area-inset-top));
+            background: color-mix(in srgb, var(--paper) 88%, transparent);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--line);
+          }
+          .et-mobilebrand { display: flex; align-items: baseline; gap: 0.15rem; text-decoration: none; color: var(--ink); font-size: 1.2rem; letter-spacing: -0.02em; }
+          .et-burger {
+            display: flex; flex-direction: column; justify-content: center; gap: 4px;
+            width: 40px; height: 40px; margin-left: -0.5rem; padding: 0 0.6rem;
+            background: none; border: none; cursor: pointer; border-radius: 8px;
+          }
+          .et-burger span { display: block; height: 1.5px; width: 100%; background: var(--ink-soft); border-radius: 2px; }
+
+          .et-scrim { display: block; position: fixed; inset: 0; z-index: 49; background: rgba(0,0,0,0.42); }
+
+          /* Always the full rail on mobile, regardless of the desktop collapse. */
+          .et-spine, .et-spine[data-collapsed] {
+            position: fixed; top: 0; left: 0; bottom: 0; z-index: 50;
+            width: min(19rem, 84vw); height: 100dvh;
+            padding: 1.1rem 0.7rem calc(2rem + env(safe-area-inset-bottom));
+            align-items: stretch; gap: 0.35rem;
+            transform: translateX(-100%); transition: transform 0.22s ease;
+            box-shadow: 0 0 40px rgba(0,0,0,0.18);
+            overscroll-behavior: contain;
+          }
+          .et-spine[data-drawer], .et-spine[data-collapsed][data-drawer] { transform: translateX(0); }
+          .et-spine[data-collapsed] .et-spine-top { flex-direction: row; }
+          .et-spine[data-collapsed] .et-brand,
+          .et-spine[data-collapsed] .et-nav,
+          .et-spine[data-collapsed] .et-spine-label,
+          .et-spine[data-collapsed] .et-tree { display: flex; }
+          .et-spine[data-collapsed] .et-spine-label { display: flex; }
+
+          /* The desktop collapse toggle is meaningless here; offer close instead. */
+          .et-collapse, .et-spine[data-collapsed] .et-amp-only { display: none; }
+          .et-drawer-close { display: block; background: none; border: none; color: var(--ink-faint); font-size: 1.6rem; line-height: 1; cursor: pointer; padding: 0 0.4rem; }
+
+          /* Touch targets: the tree is the densest surface in the app. */
+          .et-ws { padding: 0.55rem 0.6rem; font-size: 0.95rem; }
+          .et-ws-caret { width: 1.8rem; padding: 0.5rem 0; font-size: 0.7rem; }
+          .et-nav-item { padding: 0.55rem 0.6rem; font-size: 0.98rem; }
+          .et-ws-add { opacity: 1; padding: 0.35rem 0.5rem; }
+          .et-ws-new input, .et-ws-new select { font-size: 16px; }
+        }
+
+        @media (prefers-reduced-motion: reduce) { .et-spine { transition: none; } }
 `;

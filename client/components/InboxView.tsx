@@ -91,6 +91,16 @@ export function InboxView() {
         .et-clear:hover { color: var(--ink); }
         .et-delete:hover { color: #c0392b; }
         /* .et-empty moved to globals.css */
+        @media (max-width: 860px) {
+          /* Each item becomes two rows — content, then its triage controls —
+             so the route/dismiss controls keep a full-width tap target. */
+          .et-inbox-item { grid-template-columns: 1fr; gap: 0.5rem; }
+          .et-inbox-actions { justify-content: flex-end; }
+          .et-inbox-actions select { flex: 1; min-width: 0; }
+          /* .et-capture is itself the form here (unlike Home's wrapper). */
+          .et-capture { flex-direction: column; }
+          .et-capture button { padding: 0.7rem 1.3rem; }
+        }
       `}</style>
     </div>
   );
