@@ -85,6 +85,29 @@ export interface Insight {
 export interface Source {
   id: string; workspace_id: string | null; kind: string; title: string | null;
   url: string | null; raw: string | null; status: string; created_at: number;
+  metadata_json: string | null;
+}
+
+// What the enrich_source queue job writes onto a captured link.
+export interface LinkMeta {
+  site?: string; title?: string; description?: string; image?: string;
+  enriched_at?: number;
+}
+export function linkMeta(s: Source): LinkMeta | null {
+  if (!s.metadata_json) return null;
+  try {
+    const m = JSON.parse(s.metadata_json) as LinkMeta;
+    return m.enriched_at ? m : null;
+  } catch { return null; }
+}
+// A link captured but not yet decorated. The UI polls while any row is in this
+// state, so it must become false eventually no matter what — a link captured
+// before enrichment existed, or whose job was dropped, would otherwise keep the
+// inbox refetching forever. The job lands in seconds; anything still bare after
+// this window is never getting enriched, so stop waiting on it.
+const ENRICH_WINDOW_MS = 2 * 60 * 1000;
+export function awaitingEnrichment(s: Source): boolean {
+  return !!s.url && !linkMeta(s) && Date.now() - s.created_at < ENRICH_WINDOW_MS;
 }
 export interface SearchHit {
   entity_type: string; entity_id: string; title: string; snippet: string; workspace_id: string | null;

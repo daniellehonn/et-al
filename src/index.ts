@@ -112,6 +112,8 @@ export default {
         const body = msg.body as { type: string; source_id?: string; insight_id?: string };
         if (body.type === "ingest_source" && body.source_id) {
           await ingestSource(c, env, body.source_id);
+        } else if (body.type === "enrich_source" && body.source_id) {
+          await enrichSource(c, env, body.source_id);
         } else if (body.type === "embed_insight" && body.insight_id) {
           await embedInsight(c, env, body.insight_id);
         }
@@ -122,6 +124,92 @@ export default {
     }
   },
 };
+
+// Give a captured link a face: title, description, site, image.
+//
+// Deliberately NOT ingestSource. That one drives a source through its lifecycle
+// and lands it on 'processed', which pulls it out of the inbox. Enrichment is
+// the opposite contract — it only ever decorates, and never touches `status`, so
+// a pasted link stays in the inbox looking like something you can recognise
+// instead of a bare URL. Best-effort throughout: a link that won't fetch or
+// won't parse is still a perfectly good capture.
+async function enrichSource(c: store.Ctx, env: Env, sourceId: string): Promise<void> {
+  const src = await store.getSource(c, sourceId);
+  if (!src?.url) return;
+
+  let target: URL;
+  try { target = new URL(src.url); } catch { return; }
+  if (target.protocol !== "http:" && target.protocol !== "https:") return;
+
+  const meta = await fetchLinkMeta(target);
+  // Always record the site, so even a failed fetch leaves the row more legible
+  // than a raw URL — and so the UI can tell "enriched" from "not yet tried".
+  const merged = { site: target.hostname.replace(/^www\./, ""), ...meta, enriched_at: Date.now() };
+
+  // Only claim the title if the human never wrote one. `/api/share` seeds title
+  // from the URL when a bare link is pasted, so that counts as unwritten too.
+  const keepTitle = src.title && src.title !== src.url;
+  const title = keepTitle ? src.title : (meta.title ?? src.title);
+
+  await env.DB
+    .prepare(`UPDATE source SET title = ?, metadata_json = ?, updated_at = ? WHERE id = ?`)
+    .bind(title, JSON.stringify(merged), Date.now(), sourceId)
+    .run();
+  await store.ftsUpsert(c, "source", sourceId, title ?? src.url, [src.raw, meta.description].filter(Boolean).join("\n"));
+}
+
+// Parse OpenGraph/meta out of a page with HTMLRewriter — streaming, so we never
+// buffer the document, and we can abandon the body once <head> is done.
+async function fetchLinkMeta(target: URL): Promise<{ title?: string; description?: string; image?: string; site?: string }> {
+  const out: { title?: string; description?: string; image?: string; site?: string } = {};
+  try {
+    const res = await fetch(target.toString(), {
+      redirect: "follow",
+      headers: {
+        // Many sites serve a stub or a consent wall to unknown agents; a plain
+        // browser UA gets the real markup with the OG tags on it.
+        "user-agent": "Mozilla/5.0 (compatible; et-al/1.0; +https://et-al.daniellehonnn.workers.dev)",
+        accept: "text/html,application/xhtml+xml",
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok || !res.headers.get("content-type")?.includes("html")) return out;
+
+    // og:* wins over twitter:* wins over the bare tags, so only fill a blank.
+    const set = (k: keyof typeof out, v: string | null, force = false) => {
+      const t = v?.trim().replace(/\s+/g, " ").slice(0, 400);
+      if (t && (force || !out[k])) out[k] = t;
+    };
+
+    // <title> arrives in arbitrary text chunks, so accumulate separately and
+    // only commit once the element closes — set() refuses to overwrite.
+    let titleBuf = "";
+    await new HTMLRewriter()
+      .on("meta", {
+        element(el) {
+          const key = (el.getAttribute("property") ?? el.getAttribute("name") ?? "").toLowerCase();
+          const content = el.getAttribute("content");
+          // force=true for og:*: it outranks a <title> we may already have taken.
+          if (key === "og:title" || key === "twitter:title") set("title", content, key === "og:title");
+          else if (key === "og:description" || key === "twitter:description" || key === "description") set("description", content, key === "og:description");
+          else if (key === "og:image" || key === "twitter:image") set("image", content);
+          else if (key === "og:site_name") set("site", content, true);
+        },
+      })
+      .on("title", {
+        text(t) {
+          titleBuf += t.text;
+          if (t.lastInTextNode) { set("title", titleBuf); titleBuf = ""; }
+        },
+      })
+      .transform(res)
+      .arrayBuffer();
+  } catch { /* offline, timeout, malformed — the capture survives regardless */ }
+
+  // Resolve a relative og:image against the page it came from.
+  if (out.image) { try { out.image = new URL(out.image, target).toString(); } catch { delete out.image; } }
+  return out;
+}
 
 async function ingestSource(c: store.Ctx, env: Env, sourceId: string): Promise<void> {
   const src = await store.getSource(c, sourceId);

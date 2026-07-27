@@ -17,7 +17,11 @@ export default function HomePage() {
   const [capture, setCapture] = useState("");
 
   const captureMut = useMutation({
-    mutationFn: (text: string) => api.post("/capture", { kind: "note", raw: text, title: text.slice(0, 60) }),
+    // /share rather than /capture: it pulls any link out of the pasted text into
+    // the `url` column, which is what triggers enrichment (title, description,
+    // site). /capture is the strict typed API and would file the link as opaque
+    // `raw` text, leaving the inbox row showing a bare URL forever.
+    mutationFn: (text: string) => api.post("/share", { text }),
     onSuccess: () => { setCapture(""); qc.invalidateQueries({ queryKey: ["home"] }); },
   });
 

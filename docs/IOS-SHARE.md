@@ -86,6 +86,27 @@ renders it as a real link and `process_inbox` can classify it properly later.
 Pass `kind` explicitly (e.g. `"url"`) only if you want that eager fetch and
 accept that the capture leaves the inbox on its own.
 
+### Link enrichment
+
+Filing a link as a `note` would normally leave the inbox showing a bare URL, so
+any capture that carries a `url` enqueues an **`enrich_source`** job. It fetches
+the page, pulls title / description / site / image out of the OpenGraph and
+`<meta>` tags with `HTMLRewriter`, and writes them to `metadata_json`.
+
+It is strictly decorative — unlike `ingest_source` it **never touches `status`**,
+so the capture stays in the inbox where you put it. It also only claims the
+`title` when you didn't write one (a title equal to the URL counts as unwritten),
+so a note you typed yourself is never overwritten.
+
+Everything about it is best-effort. A page that 404s, times out, blocks the
+fetch, or isn't HTML still records the hostname, so the row is more legible than
+a raw URL and the UI can tell "tried" from "not yet tried". The inbox polls
+while a capture is awaiting enrichment and stops as soon as none is — bounded by
+a two-minute window, so a link that will never enrich can't poll forever.
+
+Quick Capture on Home and Inbox posts here rather than to `/capture`, which is
+what lets a pasted link be recognised as a link at all.
+
 ## The `/share/` page
 
 `/share/?url=…&title=…&text=…` captures the same way and shows a confirmation

@@ -1,19 +1,28 @@
 "use client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { api, type Source, type Workspace } from "@/lib/api";
+import { api, awaitingEnrichment, linkMeta, type Source, type Workspace } from "@/lib/api";
 
 // The inbox: captured material not yet processed. Humans can file a capture to a
 // workspace or clear it; the deeper move — turning it into Insights — is an
 // agent's job (process_inbox), which is why the hint points there.
 export function InboxView() {
   const qc = useQueryClient();
-  const { data: inbox, isLoading } = useQuery({ queryKey: ["inbox"], queryFn: () => api.get<Source[]>("/inbox") });
+  const { data: inbox, isLoading } = useQuery({
+    queryKey: ["inbox"],
+    queryFn: () => api.get<Source[]>("/inbox"),
+    // Enrichment happens on the queue, so a freshly pasted link arrives bare and
+    // fills in a moment later. Poll only while something is actually pending —
+    // once every link has its metadata the interval switches off.
+    refetchInterval: (q) => (q.state.data?.some(awaitingEnrichment) ? 2000 : false),
+  });
   const { data: workspaces } = useQuery({ queryKey: ["workspaces"], queryFn: () => api.get<Workspace[]>("/workspaces") });
   const [capture, setCapture] = useState("");
 
   const captureMut = useMutation({
-    mutationFn: (text: string) => api.post("/capture", { kind: "note", raw: text, title: text.slice(0, 60) }),
+    // See the note on Home's capture: /share extracts the link so it can be
+    // enriched, /capture would store it as opaque text.
+    mutationFn: (text: string) => api.post("/share", { text }),
     onSuccess: () => { setCapture(""); qc.invalidateQueries({ queryKey: ["inbox"] }); },
   });
   const fileMut = useMutation({
@@ -43,13 +52,28 @@ export function InboxView() {
       </form>
 
       <div className="et-inbox-list">
-        {(inbox ?? []).map((s) => (
+        {(inbox ?? []).map((s) => {
+          const meta = linkMeta(s);
+          const pending = awaitingEnrichment(s);
+          // The raw paste is only worth showing when it says something the title
+          // doesn't: for a bare link it repeats the URL, and for a short note
+          // /share seeds the title from the text itself.
+          const showRaw = s.raw && s.raw !== s.url && s.raw !== s.title;
+          return (
           <div key={s.id} className="et-inbox-item">
             <div className="et-inbox-main">
               <span className="et-kind" data-kind={s.kind}>{s.kind}</span>
+              {meta?.image && <img className="et-inbox-thumb" src={meta.image} alt="" loading="lazy" />}
               <div className="et-inbox-body">
                 <div className="et-inbox-title">{s.title ?? s.url ?? "(untitled)"}</div>
-                {s.raw && <div className="et-inbox-raw">{s.raw}</div>}
+                {meta?.description && <div className="et-inbox-desc">{meta.description}</div>}
+                {s.url && (
+                  <a className="et-inbox-link" href={s.url} target="_blank" rel="noopener noreferrer">
+                    {meta?.site ?? s.url}
+                  </a>
+                )}
+                {pending && <div className="et-inbox-pending">Fetching link details…</div>}
+                {showRaw && <div className="et-inbox-raw">{s.raw}</div>}
               </div>
             </div>
             <div className="et-inbox-actions">
@@ -62,7 +86,8 @@ export function InboxView() {
               <button className="et-clear et-delete" onClick={() => deleteMut.mutate(s.id)} aria-label="Delete capture">Delete</button>
             </div>
           </div>
-        ))}
+          );
+        })}
         {!isLoading && (inbox?.length ?? 0) === 0 && <div className="et-empty">Inbox zero. Nothing waiting.</div>}
       </div>
 
@@ -83,8 +108,23 @@ export function InboxView() {
         .et-kind[data-kind="idea"] { color: var(--color-amber); }
         .et-kind[data-kind="url"], .et-kind[data-kind="youtube"] { color: var(--color-iris); }
         .et-inbox-body { min-width: 0; }
-        .et-inbox-title { font-size: 0.95rem; }
+        /* Page titles are arbitrary length and some sites stuff the whole
+           description in there; clamp so one capture can't dominate the queue. */
+        .et-inbox-title {
+          font-size: 0.95rem;
+          display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+        }
         .et-inbox-raw { font-size: 0.85rem; color: var(--ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 0.15rem; }
+        /* Enriched link detail. The thumbnail is small on purpose — this is a
+           triage queue, not a feed; it aids recognition without inviting reading. */
+        .et-inbox-thumb { width: 3rem; height: 3rem; object-fit: cover; border-radius: 7px; flex: none; border: 1px solid var(--line); background: var(--paper-raised); }
+        .et-inbox-desc {
+          font-size: 0.85rem; color: var(--ink-soft); margin-top: 0.15rem;
+          display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+        }
+        .et-inbox-link { font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.04em; color: var(--color-iris); text-decoration: none; display: inline-block; margin-top: 0.25rem; overflow-wrap: anywhere; }
+        .et-inbox-link:hover { text-decoration: underline; }
+        .et-inbox-pending { font-size: 0.78rem; color: var(--ink-faint); font-style: italic; margin-top: 0.2rem; }
         .et-inbox-actions { display: flex; gap: 0.5rem; align-items: center; flex: none; }
         .et-inbox-actions select { background: var(--paper-raised); border: 1px solid var(--line-strong); border-radius: 7px; padding: 0.35rem 0.5rem; font: inherit; font-size: 0.82rem; color: var(--ink-soft); }
         .et-clear { background: none; border: none; color: var(--ink-faint); font: inherit; font-size: 0.82rem; cursor: pointer; padding: 0.35rem 0.4rem; }

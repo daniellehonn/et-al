@@ -77,6 +77,11 @@ export async function capture(c: Ctx, input: z.infer<typeof captureInput>): Prom
   // Inline kinds are done. Others need fetch/parse/embed — enqueue if available.
   if (!inline && c.env.JOBS) {
     await c.env.JOBS.send({ type: "ingest_source", source_id: sid });
+  } else if (inline && data.url && c.env.JOBS) {
+    // A pasted or shared link arrives as an inline `note` so it stays in the
+    // inbox (see /api/share). It still deserves a title and a description, so
+    // enqueue enrichment — which decorates the row without advancing `status`.
+    await c.env.JOBS.send({ type: "enrich_source", source_id: sid });
   }
   return (await getSource(c, sid))!;
 }
