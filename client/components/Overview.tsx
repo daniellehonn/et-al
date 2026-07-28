@@ -306,6 +306,9 @@ function BacklinksWidget({ workspaceId }: { workspaceId: string }) {
 
 function BacklinkRow({ rel }: { rel: Relationship }) {
   const isDoc = rel.source_type === "document";
+  // Note this renders the edge's *source* — what points here. Sources (the
+  // captured kind) can be a mention target, so they show up as targets rather
+  // than here; the branch below still guards against an unexpected type.
   const { data: doc } = useQuery({ queryKey: ["document", rel.source_id], queryFn: () => api.get<Document>(`/documents/${rel.source_id}`), enabled: isDoc });
   const { data: workspaces } = useQuery({ queryKey: ["workspaces"], queryFn: () => api.get<Workspace[]>("/workspaces"), enabled: !isDoc });
   if (isDoc) {

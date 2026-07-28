@@ -106,6 +106,7 @@ api.post("/share", async (c) => {
     workspace_id: str(raw.workspace_id),
   }));
 });
+api.get("/sources", async (c) => c.json(await store.listSources(ctx(c), c.req.query("q"))));
 api.get("/workspaces/:id/sources", async (c) => c.json(await store.listWorkspaceSources(ctx(c), c.req.param("id"))));
 api.get("/sources/:id", async (c) => c.json(await store.getSource(ctx(c), c.req.param("id"))));
 api.patch("/sources/:id", async (c) => c.json(await store.updateSource(ctx(c), c.req.param("id"), await c.req.json())));

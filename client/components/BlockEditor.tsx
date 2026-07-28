@@ -1,7 +1,7 @@
 "use client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, blockText, type Block, type BlockOp, type DocumentPatch, type Workspace, type Document } from "@/lib/api";
+import { api, blockText, linkMeta, type Block, type BlockOp, type DocumentPatch, type Workspace, type Document, type Source } from "@/lib/api";
 import { EditableText, DeleteButton } from "./Editable";
 import { WidgetBlock, TableWidget, WidgetStyles } from "./Overview";
 import { useDragReorder } from "@/lib/dnd";
@@ -82,6 +82,12 @@ function renderInline(src: string): React.ReactNode {
     if (m[1]) nodes.push(<strong key={k++}>{m[2]}</strong>);
     else if (m[3]) nodes.push(<em key={k++}>{m[4]}</em>);
     else if (m[5]) nodes.push(<code key={k++} className="et-inline-code">{m[5]}</code>);
+    // A relative href is an @-mention of something inside et al., not an
+    // outbound link: render it as a chip and navigate in place. Opening your own
+    // app in a new tab on every mention click is pure friction.
+    else if (m[6] && m[7].startsWith("/")) nodes.push(
+      <a key={k++} href={m[7]} className="et-mention-chip" onClick={(e) => e.stopPropagation()}>{m[6]}</a>,
+    );
     else if (m[6]) nodes.push(<a key={k++} href={m[7]} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{m[6]}</a>);
     else if (m[8]) nodes.push(<a key={k++} href={m[8]} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{m[8]}</a>);
     last = re.lastIndex;
@@ -385,16 +391,53 @@ export function BlockEditor({ documentId }: { documentId: string }) {
   const [slash, setSlash] = useState<{ id: string; query: string } | null>(null);
   const slashOptions = (q: string) => TYPE_MENU.filter((t) => `${t.label} ${t.type} ${t.kw ?? ""}`.toLowerCase().includes(q.toLowerCase()));
 
-  // @-mention: typing "@" links another workspace and records a backlink edge.
+  // @-mention: typing "@" links another object and records a backlink edge.
+  // Workspaces and saved sources both appear; each mention is a markdown link in
+  // the block text plus a `references` edge, so the graph and the prose agree.
   const { data: allWorkspaces } = useQuery({ queryKey: ["workspaces"], queryFn: () => api.get<Workspace[]>("/workspaces") });
   const [mention, setMention] = useState<{ id: string; query: string } | null>(null);
-  const mentionOptions = (q: string) => (allWorkspaces ?? []).filter((w) => w.title.toLowerCase().includes(q.toLowerCase())).slice(0, 8);
-  const pickMention = (b: Block, w: Workspace) => {
+  // Sources are queried server-side rather than filtered client-side: there can
+  // be arbitrarily many of them, and unlike workspaces they aren't already
+  // loaded for the sidebar.
+  const { data: mentionSources } = useQuery({
+    queryKey: ["mention-sources", mention?.query ?? ""],
+    queryFn: () => api.get<Source[]>(`/sources?q=${encodeURIComponent(mention?.query ?? "")}`),
+    enabled: mention !== null,
+  });
+
+  type MentionOption =
+    | { kind: "workspace"; id: string; label: string; hint: string; href: string }
+    | { kind: "source"; id: string; label: string; hint: string; href: string };
+
+  const mentionOptions = (q: string): MentionOption[] => {
+    const ws: MentionOption[] = (allWorkspaces ?? [])
+      .filter((w) => w.title.toLowerCase().includes(q.toLowerCase()))
+      .slice(0, 5)
+      .map((w) => ({ kind: "workspace", id: w.id, label: w.title, hint: w.type, href: `/workspace/?id=${w.id}` }));
+    const srcs: MentionOption[] = (mentionSources ?? [])
+      .slice(0, 6)
+      .map((s) => ({
+        kind: "source",
+        id: s.id,
+        // A capture with no title falls back to its URL, which is still a
+        // recognisable handle — better than an unlabelled row.
+        label: s.title ?? s.url ?? "(untitled)",
+        hint: linkMeta(s)?.site ?? s.kind,
+        // Always the detail page: it resolves whatever happens to the filing.
+        href: `/source/?id=${s.id}`,
+      }));
+    return [...ws, ...srcs];
+  };
+
+  const pickMention = (b: Block, o: MentionOption) => {
     const cur = text[b.id] ?? "";
-    const next = cur.replace(/@[^\s@]*$/, `[${w.title}](/workspace/?id=${w.id}) `);
+    // Pipes and brackets in a title would break the markdown link the mention
+    // becomes, so flatten them rather than emit something unparseable.
+    const label = o.label.replace(/[[\]|]/g, " ").replace(/\s+/g, " ").trim() || o.id;
+    const next = cur.replace(/@[^\s@]*$/, `[${label}](${o.href}) `);
     setText((s) => ({ ...s, [b.id]: next }));
     void api.post(`/documents/${documentId}/blocks`, { ops: [{ op: "update", id: b.id, type: b.type, content: { text: next } }] });
-    void api.post("/relate", { source_type: "document", source_id: documentId, target_type: "workspace", target_id: w.id, type: "references" });
+    void api.post("/relate", { source_type: "document", source_id: documentId, target_type: o.kind, target_id: o.id, type: "references" });
     setMention(null);
   };
   const pickType = (b: Block, type: string) => {
@@ -537,9 +580,12 @@ export function BlockEditor({ documentId }: { documentId: string }) {
                 </div>
               )}
               {mention?.id === b.id && mentionOptions(mention.query).length > 0 && (
-                <div className="et-slash-menu">
-                  {mentionOptions(mention.query).map((w) => (
-                    <button key={w.id} onMouseDown={(e) => { e.preventDefault(); pickMention(b, w); }}>{w.icon ? `${w.icon} ` : "↗ "}{w.title}</button>
+                <div className="et-slash-menu et-mention-menu">
+                  {mentionOptions(mention.query).map((o) => (
+                    <button key={`${o.kind}:${o.id}`} onMouseDown={(e) => { e.preventDefault(); pickMention(b, o); }}>
+                      <span className="et-mention-label">{o.kind === "workspace" ? "↗" : "◆"} {o.label}</span>
+                      <span className="et-mention-hint">{o.hint}</span>
+                    </button>
                   ))}
                 </div>
               )}
@@ -640,6 +686,12 @@ function EditorStyles() {
       .et-slash-menu { position: absolute; z-index: 30; left: 1.4rem; margin-top: 0.1rem; background: var(--paper-raised); border: 1px solid var(--line-strong); border-radius: 9px; padding: 0.3rem; display: flex; flex-direction: column; min-width: 10rem; box-shadow: 0 8px 24px rgba(0,0,0,0.16); max-height: 16rem; overflow-y: auto; }
       .et-slash-menu button { text-align: left; background: none; border: none; font: inherit; font-size: 0.88rem; color: var(--ink-soft); padding: 0.34rem 0.5rem; border-radius: 6px; cursor: pointer; }
       .et-slash-menu button:hover, .et-slash-menu button:first-child { background: var(--color-iris-soft); color: var(--ink); }
+      /* Mention rows carry a second line of context (workspace type, or the
+         source's site) because two saved links often share a similar title. */
+      .et-mention-menu { min-width: 15rem; max-width: 22rem; }
+      .et-mention-menu button { display: flex; flex-direction: column; gap: 0.05rem; align-items: flex-start; }
+      .et-mention-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+      .et-mention-hint { font-family: var(--font-mono); font-size: 0.66rem; letter-spacing: 0.05em; color: var(--ink-faint); text-transform: uppercase; }
       .et-embed { position: relative; margin: 0.4rem 0; }
       .et-embed-iframe { width: 100%; height: 24rem; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-raised); }
       .et-embed-edit-btn { position: absolute; top: 0.5rem; right: 0.5rem; background: var(--paper); border: 1px solid var(--line-strong); border-radius: 6px; font: inherit; font-size: 0.75rem; color: var(--ink-soft); padding: 0.15rem 0.5rem; cursor: pointer; opacity: 0; transition: opacity 0.12s; }
@@ -720,6 +772,13 @@ function EditorStyles() {
       .et-block-render a { color: var(--color-iris); }
       .et-block-render strong { font-weight: 650; }
       .et-inline-code { font-family: var(--font-mono); font-size: 0.85em; background: var(--paper-raised); padding: 0.05em 0.32em; border-radius: 4px; }
+      /* A mention reads as one object, not a run of linked words. */
+      .et-mention-chip {
+        color: var(--color-iris); text-decoration: none; background: var(--color-iris-soft);
+        padding: 0.02em 0.36em; border-radius: 5px; box-decoration-break: clone; -webkit-box-decoration-break: clone;
+      }
+      .et-mention-chip:hover { text-decoration: underline; }
+      @media (prefers-color-scheme: dark) { .et-mention-chip { background: color-mix(in srgb, var(--color-iris) 20%, transparent); } }
       .et-block[data-type="heading"] .et-block-render { font-family: var(--font-display); font-size: 1.7rem; line-height: 1.2; padding-top: 0.6rem; }
       .et-block[data-type="quote"] .et-block-render { border-left: 2px solid var(--color-iris); padding-left: 0.9rem; color: var(--ink-soft); font-style: italic; }
       .et-block[data-type="bullet"] .et-block-render, .et-block[data-type="todo"] .et-block-render, .et-block[data-type="numbered"] .et-block-render { padding-left: 1.1rem; }

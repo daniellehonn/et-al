@@ -28,6 +28,22 @@ export function listInbox(c: Ctx): Promise<Source[]> {
   return all<Source>(c, `SELECT * FROM source WHERE status = 'inbox' ORDER BY created_at DESC`);
 }
 
+/** Sources across every workspace, newest first, optionally filtered by title
+ *  or URL. Backs the @-mention picker, which needs to reach anything saved
+ *  anywhere — not just the current workspace's shelf or the inbox. LIKE rather
+ *  than FTS on purpose: the picker filters as you type, including on partial
+ *  words that FTS would not match until they were complete. */
+export function listSources(c: Ctx, q?: string, limit = 20): Promise<Source[]> {
+  const term = q?.trim();
+  if (!term) return all<Source>(c, `SELECT * FROM source ORDER BY created_at DESC LIMIT ?`, limit);
+  const like = `%${term.replace(/[%_]/g, (ch) => `\\${ch}`)}%`;
+  return all<Source>(
+    c,
+    `SELECT * FROM source WHERE title LIKE ? ESCAPE '\\' OR url LIKE ? ESCAPE '\\' ORDER BY created_at DESC LIMIT ?`,
+    like, like, limit,
+  );
+}
+
 /** Everything filed into a workspace — the saved-material shelf. Deliberately
  *  not filtered by status: a capture belongs to its workspace from the moment
  *  it is filed, whatever the ingest pipeline later does to it. */
