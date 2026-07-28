@@ -149,13 +149,26 @@ async function enrichSource(c: store.Ctx, env: Env, sourceId: string): Promise<v
   // Only claim the title if the human never wrote one. `/api/share` seeds title
   // from the URL when a bare link is pasted, so that counts as unwritten too.
   const keepTitle = src.title && src.title !== src.url;
-  const title = keepTitle ? src.title : (meta.title ?? src.title);
+  const title = keepTitle ? src.title : (usefulTitle(meta.title, merged.site) ?? src.title);
 
   await env.DB
     .prepare(`UPDATE source SET title = ?, metadata_json = ?, updated_at = ? WHERE id = ?`)
     .bind(title, JSON.stringify(merged), Date.now(), sourceId)
     .run();
   await store.ftsUpsert(c, "source", sourceId, title ?? src.url, [src.raw, meta.description].filter(Boolean).join("\n"));
+}
+
+// Reject a fetched title that only names the platform. Login-walled feeds serve
+// a JS shell to any anonymous fetch — Instagram returns <title>Instagram</title>
+// on every reel — so taking it would label every saved item identically and lose
+// the URL, which at least identifies the thing. Better to keep the link and let
+// the human name it.
+function usefulTitle(title: string | undefined, site: string): string | undefined {
+  if (!title) return undefined;
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const t = norm(title);
+  // The site as given ("Instagram") and its bare hostname token ("instagram").
+  return t && t !== norm(site) && t !== norm(site.split(".")[0]) ? title : undefined;
 }
 
 // Parse OpenGraph/meta out of a page with HTMLRewriter — streaming, so we never

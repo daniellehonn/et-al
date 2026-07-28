@@ -105,9 +105,18 @@ body {
   }
 
   /* Hover is unavailable on touch, so anything gated behind :hover would be
-     permanently unreachable. Reveal the affordances that create or edit. */
-  .et-ws-add, .et-task-obj, .et-task-due, .et-cover-remove,
-  .et-embed-edit-btn, .et-col-menu summary { opacity: 1; }
+     permanently unreachable. Reveal the affordances that create or edit.
+     `.et-del` is the shared DeleteButton — without it there is no way to delete
+     anything at all on a phone.
+
+     The `body` prefix is load-bearing, not decoration. Every component ships its
+     own <style> block, which React injects into the DOM *after* this stylesheet,
+     so at equal specificity the component's `opacity: 0` wins and this whole
+     rule silently does nothing. `body .x` (0,1,1) outranks `.x` (0,1,0) and wins
+     regardless of order. Any future override of a component-owned class from
+     this file needs the same treatment. */
+  body .et-ws-add, body .et-task-obj, body .et-task-due, body .et-cover-remove,
+  body .et-embed-edit-btn, body .et-col-menu summary, body .et-del { opacity: 1; }
 
   /* iOS zooms the viewport on focus for any control under 16px. */
   input, select, textarea { font-size: 16px; }

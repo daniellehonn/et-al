@@ -97,6 +97,7 @@ const TOOLS: Tool[] = [
   // ---- inbox / sources / insights ----
   { name: "capture", description: "Save a raw input to the inbox immediately (raw payload is immutable).", inputSchema: obj({ kind: str, title: str, url: str, raw: str, workspace_id: str }, ["kind"]), handler: (c, a) => store.capture(c, a as never) },
   { name: "list_inbox", description: "Sources still awaiting processing.", inputSchema: obj({}), handler: (c) => store.listInbox(c) },
+  { name: "list_workspace_sources", description: "Material saved into a workspace — the shelf of filed captures, whatever their status.", inputSchema: obj({ workspace_id: str }, ["workspace_id"]), handler: (c, a) => store.listWorkspaceSources(c, String(a.workspace_id)) },
   { name: "get_source", description: "A source with its parsed metadata.", inputSchema: obj({ id: str }, ["id"]), handler: (c, a) => store.getSource(c, String(a.id)) },
   { name: "delete_source", description: "Delete a captured source. Destructive — confirm with the user first.", inputSchema: obj({ id: str }, ["id"]), handler: async (c, a) => { await store.deleteSource(c, String(a.id)); return { ok: true }; } },
   { name: "create_insight", description: "Create a knowledge node (optionally linked to its source).", inputSchema: obj({ title: str, body: str, workspace_id: str, source_id: str }, ["title", "body"]), handler: (c, a) => store.createInsight(c, a as never) },

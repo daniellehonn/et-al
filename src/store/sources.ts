@@ -28,24 +28,37 @@ export function listInbox(c: Ctx): Promise<Source[]> {
   return all<Source>(c, `SELECT * FROM source WHERE status = 'inbox' ORDER BY created_at DESC`);
 }
 
-/** Assign a capture to a workspace and/or move it out of the inbox. `raw` is
- *  never touched — only the routing fields are mutable. */
+/** Everything filed into a workspace — the saved-material shelf. Deliberately
+ *  not filtered by status: a capture belongs to its workspace from the moment
+ *  it is filed, whatever the ingest pipeline later does to it. */
+export function listWorkspaceSources(c: Ctx, workspaceId: string): Promise<Source[]> {
+  return all<Source>(c, `SELECT * FROM source WHERE workspace_id = ? ORDER BY created_at DESC`, workspaceId);
+}
+
+/** Assign a capture to a workspace, move it out of the inbox, or relabel it.
+ *  `raw` is still never touched — the captured payload is write-once. `title` is
+ *  a label rather than payload, and has to be editable: plenty of sites (any
+ *  login-walled feed, for one) hand back nothing usable to enrich with, so
+ *  naming a saved link yourself is the only way it stays findable. */
 export async function updateSource(
   c: Ctx,
   sid: string,
-  patch: { workspace_id?: string | null; status?: string },
+  patch: { workspace_id?: string | null; status?: string; title?: string },
 ): Promise<Source> {
   const existing = await getSource(c, sid);
   if (!existing) throw new RuleError(`source ${sid} not found`, 404);
+  const title = patch.title?.trim() ? patch.title.trim() : existing.title;
   await c.db
-    .prepare(`UPDATE source SET workspace_id = ?, status = ?, updated_at = ? WHERE id = ?`)
+    .prepare(`UPDATE source SET workspace_id = ?, status = ?, title = ?, updated_at = ? WHERE id = ?`)
     .bind(
       patch.workspace_id === undefined ? existing.workspace_id : patch.workspace_id,
       patch.status ?? existing.status,
+      title,
       now(),
       sid,
     )
     .run();
+  if (title !== existing.title) await ftsUpsert(c, "source", sid, title ?? existing.url ?? existing.kind, existing.raw ?? "");
   await logEvent(c, "update", "source", sid, patch);
   return (await getSource(c, sid))!;
 }

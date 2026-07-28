@@ -121,7 +121,9 @@ export function hitHref(h: SearchHit): string | null {
   const tabFor: Record<string, string> = { task: "Tasks", decision: "Decisions", document: "Documents" };
   if (h.entity_type === "workspace") return `/workspace/?id=${h.entity_id}`;
   if (h.entity_type === "insight") return "/knowledge/";
-  if (h.entity_type === "source") return "/inbox/";
+  // An unfiled capture is in the inbox; a filed one is on its workspace shelf.
+  // Sending both to /inbox/ meant every filed source was a dead link.
+  if (h.entity_type === "source") return h.workspace_id ? `/workspace/?id=${h.workspace_id}&tab=Sources` : "/inbox/";
   if (!h.workspace_id) return null;
   const tab = tabFor[h.entity_type];
   const doc = h.entity_type === "document" ? `&doc=${h.entity_id}` : "";

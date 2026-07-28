@@ -106,6 +106,7 @@ api.post("/share", async (c) => {
     workspace_id: str(raw.workspace_id),
   }));
 });
+api.get("/workspaces/:id/sources", async (c) => c.json(await store.listWorkspaceSources(ctx(c), c.req.param("id"))));
 api.get("/sources/:id", async (c) => c.json(await store.getSource(ctx(c), c.req.param("id"))));
 api.patch("/sources/:id", async (c) => c.json(await store.updateSource(ctx(c), c.req.param("id"), await c.req.json())));
 api.delete("/sources/:id", async (c) => { await store.deleteSource(ctx(c), c.req.param("id")); return c.json({ ok: true }); });

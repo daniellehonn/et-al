@@ -1,14 +1,16 @@
 "use client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { api, type Workspace, type Task, type Objective, type Document, type Decision, type RecentEvent } from "@/lib/api";
+import { api, linkMeta, type Workspace, type Task, type Objective, type Document, type Decision, type RecentEvent, type Source } from "@/lib/api";
 import { BlockEditor } from "./BlockEditor";
 import { EditableText, DeleteButton } from "./Editable";
 import { EmojiPicker } from "./EmojiPicker";
 import { isOverdue, fmtDate } from "@/lib/util";
 import { useDragReorder } from "@/lib/dnd";
 
-const TABS = ["Overview", "Tasks", "Documents", "Decisions", "Timeline"] as const;
+// "Sources" sits next to Documents: both are material you keep, one written
+// here and one collected from elsewhere.
+const TABS = ["Overview", "Tasks", "Documents", "Sources", "Decisions", "Timeline"] as const;
 type Tab = (typeof TABS)[number];
 const FINITE_TYPES = ["project", "course"]; // finite = has an outcome, can be completed
 
@@ -94,6 +96,7 @@ export function WorkspaceView({ id, initialTab, initialDoc }: { id: string; init
         {tab === "Overview" && <OverviewHome id={id} />}
         {tab === "Tasks" && <Tasks id={id} />}
         {tab === "Documents" && <Documents id={id} initialDoc={initialDoc} />}
+        {tab === "Sources" && <Sources id={id} />}
         {tab === "Decisions" && <Decisions id={id} />}
         {tab === "Timeline" && <Timeline id={id} />}
       </div>
@@ -418,6 +421,66 @@ function Documents({ id, initialDoc }: { id: string; initialDoc?: string }) {
   );
 }
 
+// ── Sources: the saved shelf ─────────────────────────────────────────────────
+// Material collected from elsewhere and filed here. Distinct from the inbox,
+// which is a queue you empty; this is a shelf you browse. Enrichment gives most
+// links a title and a thumbnail, but plenty of sites (any login-walled feed)
+// give back nothing, so the title is editable — naming a saved link yourself is
+// often the only thing that makes it findable later.
+function Sources({ id }: { id: string }) {
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ["sources", id], queryFn: () => api.get<Source[]>(`/workspaces/${id}/sources`) });
+  const invalidate = () => { qc.invalidateQueries({ queryKey: ["sources", id] }); qc.invalidateQueries({ queryKey: ["inbox"] }); };
+
+  const rename = useMutation({
+    mutationFn: ({ sid, title }: { sid: string; title: string }) => api.patch(`/sources/${sid}`, { title }),
+    onSuccess: invalidate,
+  });
+  const unfile = useMutation({
+    mutationFn: (sid: string) => api.patch(`/sources/${sid}`, { workspace_id: null, status: "inbox" }),
+    onSuccess: invalidate,
+  });
+  const del = useMutation({ mutationFn: (sid: string) => api.del(`/sources/${sid}`), onSuccess: invalidate });
+
+  if (!data) return <div className="et-empty">Loading…</div>;
+  if (data.length === 0) {
+    return <div className="et-empty">Nothing saved here yet. File a capture from the inbox and it lands on this shelf.</div>;
+  }
+
+  return (
+    <div className="et-srcs">
+      {data.map((s) => {
+        const meta = linkMeta(s);
+        const note = s.raw && s.raw !== s.url && s.raw !== s.title ? s.raw : null;
+        return (
+          <div key={s.id} className="et-src">
+            {meta?.image
+              ? <img className="et-src-thumb" src={meta.image} alt="" loading="lazy" />
+              // No thumbnail is the common case for login-walled sites; a domain
+              // initial still gives the eye something stable to scan by.
+              : <span className="et-src-thumb" data-fallback>{(meta?.site ?? s.kind).charAt(0).toUpperCase()}</span>}
+            <div className="et-src-body">
+              <EditableText className="et-src-title" value={s.title ?? ""} placeholder="Name this…"
+                onSave={(title) => rename.mutate({ sid: s.id, title })} />
+              {meta?.description && <div className="et-src-desc">{meta.description}</div>}
+              {note && <div className="et-src-note">{note}</div>}
+              {s.url && (
+                <a className="et-src-link" href={s.url} target="_blank" rel="noopener noreferrer">
+                  {meta?.site ?? s.url}
+                </a>
+              )}
+            </div>
+            <div className="et-src-actions">
+              <button className="et-src-unfile" onClick={() => unfile.mutate(s.id)} title="Send back to the inbox">Unfile</button>
+              <DeleteButton onDelete={() => del.mutate(s.id)} confirm label="Delete source" />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Decisions ────────────────────────────────────────────────────────────────
 function Decisions({ id }: { id: string }) {
   const qc = useQueryClient();
@@ -615,6 +678,29 @@ function WorkspaceStyles() {
       .et-obj-title { font-weight: 500; flex: 1; }
       .et-obj-tasks { padding-left: 1.1rem; margin-top: 0.2rem; }
       .et-obj-tasks .et-task-row { border-bottom: 1px solid var(--line); }
+
+      /* Saved sources: a shelf, so rows are taller and more visual than the
+         inbox queue — you browse these, you don't process them. */
+      .et-srcs { display: flex; flex-direction: column; }
+      .et-src { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 0.85rem; align-items: start; padding: 0.85rem 0; border-bottom: 1px solid var(--line); }
+      .et-src-thumb { width: 4rem; height: 4rem; object-fit: cover; border-radius: 9px; flex: none; border: 1px solid var(--line); background: var(--paper-raised); }
+      span.et-src-thumb[data-fallback] { display: grid; place-items: center; font-family: var(--font-display); font-size: 1.5rem; color: var(--ink-faint); }
+      .et-src-body { min-width: 0; }
+      /* EditableText renders a span; force block so the link below it starts on
+         its own line rather than trailing the title. */
+      .et-src-title { font-size: 0.98rem; display: block; }
+      .et-src-desc { font-size: 0.85rem; color: var(--ink-soft); margin-top: 0.15rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+      .et-src-note { font-size: 0.85rem; color: var(--ink-faint); margin-top: 0.15rem; }
+      .et-src-link { font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.04em; color: var(--color-iris); text-decoration: none; display: inline-block; margin-top: 0.3rem; overflow-wrap: anywhere; }
+      .et-src-link:hover { text-decoration: underline; }
+      .et-src-actions { display: flex; align-items: center; gap: 0.3rem; }
+      .et-src-unfile { background: none; border: none; color: var(--ink-faint); font: inherit; font-size: 0.8rem; cursor: pointer; padding: 0.2rem 0.4rem; border-radius: 6px; opacity: 0; transition: opacity 0.12s; }
+      .et-src:hover .et-src-unfile { opacity: 1; }
+      .et-src-unfile:hover { color: var(--ink); background: var(--paper-raised); }
+      @media (max-width: 860px) {
+        .et-src-unfile { opacity: 1; }
+        .et-src-thumb { width: 3rem; height: 3rem; }
+      }
 
       .et-timeline { display: flex; flex-direction: column; }
       .et-tl-row { display: grid; grid-template-columns: 1rem 1fr auto; align-items: baseline; gap: 0.6rem; padding: 0.45rem 0; border-bottom: 1px solid var(--line); font-size: 0.88rem; }
