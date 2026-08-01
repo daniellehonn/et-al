@@ -117,7 +117,7 @@ const TOOLS: Tool[] = [
   { name: "delete_decision", description: "Delete a decision record (content is immutable, but the record can be removed). Destructive — confirm first.", inputSchema: obj({ id: str }, ["id"]), handler: async (c, a) => { await store.deleteDecision(c, String(a.id)); return { ok: true }; } },
   { name: "relate", description: "Create a typed edge between two objects.", inputSchema: obj({ source_type: str, source_id: str, target_type: str, target_id: str, type: str }, ["source_type", "source_id", "target_type", "target_id", "type"]), handler: (c, a) => store.relate(c, a as never) },
   { name: "get_backlinks", description: "Everything referencing an object.", inputSchema: obj({ type: str, id: str }, ["type", "id"]), handler: (c, a) => store.getBacklinks(c, String(a.type), String(a.id)) },
-  { name: "search", description: "Full-text search across every entity.", inputSchema: obj({ query: str }, ["query"]), handler: (c, a) => store.search(c, String(a.query), {}) },
+  { name: "search", description: "Search across every entity. Hybrid: keyword matching everywhere, plus semantic matching over insights, so a note phrased differently from the query still surfaces.", inputSchema: obj({ query: str }, ["query"]), handler: (c, a) => store.search(c, String(a.query), {}) },
   // ---- health & review ----
   { name: "get_workspace_health", description: "The activity/flow health score for a workspace (or all).", inputSchema: obj({ workspace_id: str }), handler: (c, a) => (a.workspace_id ? store.workspaceHealth(c, String(a.workspace_id)) : store.allHealth(c)) },
   { name: "weekly_review", description: "The raw material for a guided weekly review.", inputSchema: obj({}), handler: (c) => store.getWeeklyReview(c) },
