@@ -66,7 +66,7 @@ app.onError((err, c) => {
 app.get("/health", (c) => {
   return c.json({
     app: c.env.APP_NAME ?? "et al.",
-    version: "7.0.0",
+    version: "8.0.0",
     bindings: {
       d1: !!c.env.DB,
       r2: !!c.env.VAULT,

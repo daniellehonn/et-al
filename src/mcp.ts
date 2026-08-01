@@ -166,7 +166,7 @@ export async function handleMcp(request: Request, env: Env, agentName: string): 
       return Response.json(rpcResult(id, {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "et-al", version: "7.0.0" },
+        serverInfo: { name: "et-al", version: "8.0.0" },
       }));
     }
     if (method === "notifications/initialized") {
