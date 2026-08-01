@@ -55,6 +55,29 @@ function TreeNode({ node, depth, activeId }: { node: PageNode; depth: number; ac
     window.location.href = `/page/?id=${page.id}`;
   };
 
+  const rename = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    (e.currentTarget.closest("details") as HTMLDetailsElement).open = false;
+    const title = prompt("Rename page", node.title);
+    if (title == null) return;
+    await api.patch(`/pages/${node.id}`, { title });
+    qc.invalidateQueries({ queryKey: ["tree"] });
+    qc.invalidateQueries({ queryKey: ["page", node.id] });
+  };
+
+  // Deleting a page takes everything under it, so the count is spelled out
+  // rather than left as a generic "are you sure?".
+  const remove = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    (e.currentTarget.closest("details") as HTMLDetailsElement).open = false;
+    const kids = countDescendants(node);
+    const detail = kids ? ` and ${kids} page${kids === 1 ? "" : "s"} inside it` : "";
+    if (!confirm(`Delete "${node.title || "Untitled"}"${detail}? This cannot be undone.`)) return;
+    await api.del(`/pages/${node.id}`);
+    qc.invalidateQueries({ queryKey: ["tree"] });
+    if (node.id === activeId) window.location.href = "/";
+  };
+
   return (
     <div className="et-tree-node">
       <div className="et-tree-row" data-active={node.id === activeId} style={{ paddingLeft: `${0.4 + depth * 0.85}rem` }}>
@@ -65,10 +88,21 @@ function TreeNode({ node, depth, activeId }: { node: PageNode; depth: number; ac
           <span className="et-tree-label">{node.title || "Untitled"}</span>
         </a>
         <button className="et-tree-add" title="Add a page inside" onClick={addChild}>+</button>
+        <details className="et-tree-menu">
+          <summary title="Page options" aria-label="Page options">···</summary>
+          <div className="et-tree-menu-list">
+            <button onClick={rename}>Rename</button>
+            <button className="et-tree-del" onClick={remove}>Delete</button>
+          </div>
+        </details>
       </div>
       {open && node.children.map((k) => <TreeNode key={k.id} node={k} depth={depth + 1} activeId={activeId} />)}
     </div>
   );
+}
+
+function countDescendants(node: PageNode): number {
+  return node.children.reduce((n, k) => n + 1 + countDescendants(k), 0);
 }
 
 function contains(node: PageNode, id?: string): boolean {
@@ -92,7 +126,15 @@ function TreeStyles() {
       /* Long page names truncate rather than widening the sidebar. */
       .et-tree-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .et-tree-add { opacity: 0; background: none; border: none; color: var(--ink-faint); cursor: pointer; font-size: 0.9rem; padding: 0 0.2rem; }
-      .et-tree-row:hover .et-tree-add { opacity: 1; }
+      .et-tree-row:hover .et-tree-add, .et-tree-row:hover .et-tree-menu { opacity: 1; }
+      .et-tree-menu { opacity: 0; position: relative; }
+      .et-tree-menu summary { list-style: none; cursor: pointer; color: var(--ink-faint); font-size: 0.85rem; padding: 0 0.15rem; }
+      .et-tree-menu summary::-webkit-details-marker { display: none; }
+      .et-tree-menu[open] { opacity: 1; }
+      .et-tree-menu-list { position: absolute; z-index: 40; right: 0; top: 1.3rem; background: var(--paper-raised); border: 1px solid var(--line-strong); border-radius: 8px; padding: 0.25rem; display: flex; flex-direction: column; min-width: 8rem; box-shadow: 0 8px 24px rgba(0,0,0,0.16); }
+      .et-tree-menu-list button { text-align: left; background: none; border: none; font: inherit; font-size: 0.85rem; color: var(--ink-soft); padding: 0.32rem 0.5rem; border-radius: 5px; cursor: pointer; }
+      .et-tree-menu-list button:hover { background: var(--color-iris-soft); color: var(--ink); }
+      .et-tree-del:hover { color: var(--color-rust, #b4462e); }
       .et-tree-new, .et-tree-link { background: none; border: none; text-align: left; font: inherit; font-size: 0.85rem; color: var(--ink-faint); cursor: pointer; padding: 0.35rem 0.6rem; text-decoration: none; border-radius: 5px; }
       .et-tree-new:hover, .et-tree-link:hover { background: var(--surface-3, rgba(128,128,128,0.12)); color: var(--ink); }
     `}</style>

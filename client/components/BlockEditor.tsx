@@ -33,6 +33,9 @@ const TYPE_MENU: Array<{ type: string; label: string; kw?: string }> = [
   { type: "columns", label: "Columns", kw: "layout side" },
   { type: "divider", label: "Divider", kw: "hr line" },
   { type: "table", label: "Table" },
+  // Creates a real child page and leaves a link to it in the body — Notion's
+  // /page. The block stores only the id, so renaming the page updates the link.
+  { type: "page", label: "Page", kw: "subpage child new" },
   { type: "image", label: "Image", kw: "picture photo" },
   { type: "embed", label: "Embed", kw: "iframe url video" },
   { type: "toc", label: "Table of contents", kw: "outline headings" },
@@ -280,6 +283,24 @@ function TocBlock({ blocks }: { blocks: Block[] }) {
   );
 }
 
+/** A link to a child page, rendered inline in the body. Reads its title live so
+ *  renaming the page updates every link to it, rather than freezing whatever the
+ *  title happened to be when the link was made. */
+function PageLinkBlock({ pageId }: { pageId: string }) {
+  const { data: page } = useQuery({
+    queryKey: ["page", pageId],
+    queryFn: () => api.get<Page>(`/pages/${pageId}`),
+    enabled: !!pageId,
+  });
+  if (!pageId) return null;
+  return (
+    <a className="et-page-link" href={`/page/?id=${pageId}`}>
+      <span className="et-page-link-icon">{page?.icon ?? "📄"}</span>
+      <span className="et-page-link-title">{page ? page.title || "Untitled" : "…"}</span>
+    </a>
+  );
+}
+
 /** How deep a block sits, by walking parent_block_id. Blocks arrive flat but in
  *  document order, so depth is purely a rendering concern. */
 function depthOf(b: Block, all: Block[]): number {
@@ -470,10 +491,27 @@ export function BlockEditor({ pageId }: { pageId: string }) {
     void api.post("/relate", { source_type: "page", source_id: pageId, target_type: "page", target_id: o.id, type: "references" });
     setMention(null);
   };
-  const pickType = (b: Block, type: string) => {
+  const pickType = async (b: Block, type: string) => {
+    // Drop just the "/query" fragment, keeping anything typed around it.
+    const raw = text[b.id] ?? "";
+    const kept = raw.replace(/\/[^/\s]*$/, "").trimEnd();
     setSlash(null);
-    setText((s) => ({ ...s, [b.id]: "" }));
-    applyOps([{ op: "update", id: b.id, type, content: defaultContentFor(type, "") }]);
+
+    if (type === "page") {
+      // A new child page, linked from here. Created first so the block can
+      // reference a real id rather than a placeholder that might never resolve.
+      const child = await api.post<{ id: string }>("/pages", { parent_page_id: pageId, title: "Untitled" });
+      qc.invalidateQueries({ queryKey: ["tree"] });
+      setText((s) => ({ ...s, [b.id]: "" }));
+      applyOps([{ op: "update", id: b.id, type: "page_link", content: { page_id: child.id } }]);
+      setEditingId(null);
+      return;
+    }
+
+    // "heading2" is a menu label; the stored type is `heading` with a level.
+    const stored = headingLevel(type) ? "heading" : type;
+    setText((s) => ({ ...s, [b.id]: kept }));
+    applyOps([{ op: "update", id: b.id, type: stored, content: defaultContentFor(type, kept) }]);
     if (["divider", "table", "embed"].includes(type)) setEditingId(null);
   };
 
@@ -526,7 +564,9 @@ export function BlockEditor({ pageId }: { pageId: string }) {
               </div>
             </details>
           </div>
-          {b.type === "collection" ? (
+          {b.type === "page_link" ? (
+            <PageLinkBlock pageId={String(blockContent(b).page_id ?? "")} />
+          ) : b.type === "collection" ? (
             <CollectionBlock collectionId={String(blockContent(b).collection_id ?? "")} />
           ) : b.type === "divider" ? (
             <hr className="et-hr" />
@@ -585,7 +625,11 @@ export function BlockEditor({ pageId }: { pageId: string }) {
                   const v = e.target.value;
                   setText((s) => ({ ...s, [b.id]: v }));
                   saveText(b, v);
-                  if (v.startsWith("/")) setSlash({ id: b.id, query: v.slice(1) });
+                  // Notion opens the menu on "/" wherever it is typed, as long
+                  // as it starts a word. Matching only v.startsWith("/") meant
+                  // the menu never appeared on a line that already had text.
+                  const sm = v.match(/(?:^|\s)\/([^/\s]*)$/);
+                  if (sm) setSlash({ id: b.id, query: sm[1] });
                   else if (slash?.id === b.id) setSlash(null);
                   const mm = v.match(/@([^\s@]*)$/);
                   if (mm) setMention({ id: b.id, query: mm[1] });
@@ -847,6 +891,9 @@ function EditorStyles() {
       .et-block[data-type="todo"] { position: relative; }
       .et-block[data-ai="true"] .et-block-input { border-left: 2px solid color-mix(in srgb, var(--color-iris) 45%, transparent); padding-left: 0.7rem; }
       .et-hr { border: none; border-top: 1px solid var(--line-strong); margin: 0.8rem 0; }
+      .et-page-link { display: flex; align-items: center; gap: 0.45rem; padding: 0.3rem 0; color: inherit; text-decoration: none; width: 100%; }
+      .et-page-link-title { border-bottom: 1px solid var(--line-strong); font-weight: 500; }
+      .et-page-link:hover .et-page-link-title { border-bottom-color: var(--ink); }
 
       @media (max-width: 860px) {
         /* Reclaim the gutter: a 1.4rem handle column costs ~8% of a phone's
