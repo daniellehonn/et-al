@@ -30,7 +30,23 @@ api.get("/pages/:id/ancestors", async (c) => c.json(await store.getAncestors(ctx
 api.post("/pages", async (c) => c.json(await store.createPage(ctx(c), await c.req.json())));
 api.patch("/pages/:id", async (c) => c.json(await store.updatePage(ctx(c), c.req.param("id"), await c.req.json())));
 api.post("/pages/:id/move", async (c) => c.json(await store.movePage(ctx(c), c.req.param("id"), await c.req.json())));
-api.delete("/pages/:id", async (c) => { await store.deletePage(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
+// Delete means trash: reversible by default, because an accidental delete takes
+// the whole subtree with it. ?permanent=1 is the irreversible version.
+api.delete("/pages/:id", async (c) => {
+  const id = c.req.param("id");
+  if (c.req.query("permanent")) await store.deletePage(ctx(c), id);
+  else await store.trashPage(ctx(c), id);
+  return c.json({ ok: true });
+});
+api.get("/trash", async (c) => c.json(await store.listTrash(ctx(c))));
+api.post("/pages/:id/restore", async (c) => c.json(await store.restorePage(ctx(c), c.req.param("id"))));
+api.post("/pages/:id/duplicate", async (c) => c.json(await store.duplicatePage(ctx(c), c.req.param("id"))));
+api.post("/pages/:id/favorite", async (c) => {
+  const { favorite } = await c.req.json();
+  return c.json(await store.setFavorite(ctx(c), c.req.param("id"), !!favorite));
+});
+api.get("/pages/:id/history", async (c) => c.json(await store.pageHistory(ctx(c), c.req.param("id"))));
+api.post("/revisions/:id/restore", async (c) => { await store.restoreRevision(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
 
 api.get("/pages/:id/blocks", async (c) => c.json(await store.getBlocks(ctx(c), c.req.param("id"))));
 api.post("/pages/:id/blocks", async (c) => {
