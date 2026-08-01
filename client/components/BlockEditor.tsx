@@ -370,11 +370,102 @@ export function BlockEditor({ pageId }: { pageId: string }) {
     alert(/unauthor/i.test(msg) ? "You're in read-only mode — click Unlock at the top and enter your API key, then try again." : `Couldn't save: ${msg}`);
   }, [qc]);
 
-  const applyOps = useCallback(async (ops: BlockOp[]) => {
+  // Undo/redo. The inverse of each write is computed from the block list as it
+  // stood before the write, then pushed onto a stack. Server-side history exists
+  // per block (block_revision), but undo has to reverse whole operations —
+  // including inserts and deletes, which leave no revision behind.
+  const undoStack = useRef<BlockOp[][]>([]);
+  const redoStack = useRef<BlockOp[][]>([]);
+
+  const invert = useCallback((ops: BlockOp[], before: Block[]): BlockOp[] => {
+    const byId = new Map(before.map((b) => [b.id, b]));
+    const prevSibling = (b: Block): string | null => {
+      const sibs = before.filter((x) => x.parent_block_id === b.parent_block_id);
+      const i = sibs.findIndex((x) => x.id === b.id);
+      return i > 0 ? sibs[i - 1].id : null;
+    };
+    const out: BlockOp[] = [];
+    // Reversed: undoing a batch has to unwind it back to front.
+    for (const op of [...ops].reverse()) {
+      if (op.op === "update") {
+        const b = byId.get(op.id);
+        if (b) out.push({ op: "update", id: b.id, type: b.type, content: blockContent(b) });
+      } else if (op.op === "delete") {
+        const b = byId.get(op.id);
+        // Re-inserting cannot restore the original id, so anything that
+        // referenced it stays broken — acceptable for text, and the reason
+        // replace_content is not undoable below.
+        if (b) out.push({ op: "insert", after: prevSibling(b), parent: b.parent_block_id, type: b.type, content: blockContent(b) });
+      } else if (op.op === "move") {
+        const b = byId.get(op.id);
+        if (b) out.push({ op: "move", id: b.id, parent: b.parent_block_id, after: prevSibling(b) });
+      }
+      // insert has no inverse recorded here: the new block's id is unknown until
+      // the server answers, so it is handled by the caller re-reading state.
+    }
+    return out;
+  }, []);
+
+  const applyOps = useCallback(async (ops: BlockOp[], opts: { history?: boolean } = {}) => {
+    const before = blocks ?? [];
+    const record = opts.history !== false;
+    // Snapshot the whole body for ops whose inverse cannot be expressed —
+    // replace_content wipes ids, and an insert's id is not known until it lands.
+    const needsSnapshot = ops.some((o) => o.op === "replace_content" || o.op === "insert");
+    if (record) {
+      undoStack.current.push(needsSnapshot ? [{ op: "__snapshot", blocks: before } as never] : invert(ops, before));
+      if (undoStack.current.length > 50) undoStack.current.shift();
+      redoStack.current = [];
+    }
     try { await api.post(`/pages/${pageId}/blocks`, { ops }); }
     catch (e) { onWriteError(e); }
     finally { qc.invalidateQueries({ queryKey: ["blocks", pageId] }); }
-  }, [pageId, qc, onWriteError]);
+  }, [pageId, qc, onWriteError, blocks, invert]);
+
+  /** Rebuild the body from a snapshot, preserving nesting. Used when an
+   *  operation had no expressible inverse. */
+  const restoreSnapshot = useCallback(async (snap: Block[]) => {
+    const ops: BlockOp[] = [{ op: "replace_content", content: "" }];
+    await api.post(`/pages/${pageId}/blocks`, { ops });
+    // Re-insert parents before children so parent ids resolve.
+    const idMap = new Map<string, string>();
+    const ordered = [...snap].sort((a, b) => (a.parent_block_id ? 1 : 0) - (b.parent_block_id ? 1 : 0));
+    for (const b of ordered) {
+      const created = await api.post<Block[]>(`/pages/${pageId}/blocks`, {
+        ops: [{ op: "insert", parent: b.parent_block_id ? idMap.get(b.parent_block_id) ?? null : null, after: null, type: b.type, content: blockContent(b) }],
+      });
+      const fresh = created.find((x) => !idMap.has(x.id) && ![...idMap.values()].includes(x.id));
+      if (fresh) idMap.set(b.id, fresh.id);
+    }
+    qc.invalidateQueries({ queryKey: ["blocks", pageId] });
+  }, [pageId, qc]);
+
+  const undo = useCallback(async () => {
+    const entry = undoStack.current.pop();
+    if (!entry) return;
+    redoStack.current.push([{ op: "__snapshot", blocks: blocks ?? [] } as never]);
+    const snap = entry[0] as unknown as { op: string; blocks: Block[] };
+    if (snap?.op === "__snapshot") await restoreSnapshot(snap.blocks);
+    else await applyOps(entry, { history: false });
+  }, [applyOps, restoreSnapshot, blocks]);
+
+  const redo = useCallback(async () => {
+    const entry = redoStack.current.pop();
+    if (!entry) return;
+    const snap = entry[0] as unknown as { op: string; blocks: Block[] };
+    if (snap?.op === "__snapshot") await restoreSnapshot(snap.blocks);
+  }, [restoreSnapshot]);
+
+  // Page-level shortcut: undo has to work whether or not a block has focus.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z") return;
+      e.preventDefault();
+      if (e.shiftKey) void redo(); else void undo();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo, redo]);
 
   // Drag a block by its ⣿ handle to drop it before another block.
   const dnd = useDragReorder();
@@ -390,13 +481,28 @@ export function BlockEditor({ pageId }: { pageId: string }) {
   // Delete a block reliably: remove it from the cache immediately (optimistic),
   // then persist. The block vanishes on click regardless of any re-render.
   const deleteBlock = useCallback((id: string) => {
+    // Optimistic removal keeps the click feeling instant; the write goes through
+    // applyOps so the deletion lands on the undo stack like any other change.
     qc.setQueryData<Block[]>(["blocks", pageId], (old) => (old ?? []).filter((b) => b.id !== id));
-    api.post(`/pages/${pageId}/blocks`, { ops: [{ op: "delete", id }] })
-      .catch(onWriteError)
-      .finally(() => qc.invalidateQueries({ queryKey: ["blocks", pageId] }));
-  }, [pageId, qc, onWriteError]);
+    void applyOps([{ op: "delete", id }]);
+  }, [pageId, qc, applyOps]);
+
+  // One undo entry per editing session, not per keystroke: undo should walk back
+  // an edit, not a character. Recorded on the first save after focus, using the
+  // server's copy of the block — which is still the pre-edit text at that point.
+  const recorded = useRef<Record<string, true>>({});
+  const recordTextUndo = useCallback((b: Block) => {
+    if (recorded.current[b.id]) return;
+    recorded.current[b.id] = true;
+    const original = (blocks ?? []).find((x) => x.id === b.id);
+    if (!original) return;
+    undoStack.current.push([{ op: "update", id: b.id, type: original.type, content: blockContent(original) }]);
+    if (undoStack.current.length > 50) undoStack.current.shift();
+    redoStack.current = [];
+  }, [blocks]);
 
   const saveText = useCallback((b: Block, value: string) => {
+    recordTextUndo(b);
     clearTimeout(debounce.current[b.id]);
     debounce.current[b.id] = setTimeout(() => {
       // Per-keystroke: don't alert, but refresh auth so the read-only banner shows.
@@ -404,15 +510,16 @@ export function BlockEditor({ pageId }: { pageId: string }) {
         ops: [{ op: "update", id: b.id, type: b.type, content: { text: value } }],
       }).catch(() => qc.invalidateQueries({ queryKey: ["session"] }));
     }, 500);
-  }, [pageId, qc]);
+  }, [pageId, qc, recordTextUndo]);
 
   // Persist a block immediately (on blur), cancelling any pending debounce.
   const flush = useCallback((b: Block) => {
+    recordTextUndo(b);
     clearTimeout(debounce.current[b.id]);
     api.post(`/pages/${pageId}/blocks`, {
       ops: [{ op: "update", id: b.id, type: b.type, content: { text: text[b.id] ?? "" } }],
     }).catch(onWriteError);
-  }, [pageId, text, onWriteError]);
+  }, [pageId, text, onWriteError, recordTextUndo]);
 
   // Siblings of a block, in order — the basis for indent/outdent.
   const siblingsOf = (b: Block): Block[] =>
@@ -697,7 +804,7 @@ export function BlockEditor({ pageId }: { pageId: string }) {
                   }
                   onKeyDown(e, b);
                 }}
-                onBlur={() => { flush(b); setEditingId(null); setSlash(null); setMention(null); }}
+                onBlur={() => { flush(b); delete recorded.current[b.id]; setEditingId(null); setSlash(null); setMention(null); }}
               />
               {slash?.id === b.id && slashOptions(slash.query).length > 0 && (
                 <div className="et-slash-menu">
