@@ -168,6 +168,31 @@ export async function deleteCollection(c: Ctx, cid: string): Promise<void> {
   await logEvent(c, "delete", "collection", cid, { title: existing.title, rows_removed: rows.length });
 }
 
+/** Add, rename or remove a property. Renaming a *key* rewrites the stored value
+ *  on every row — a property whose key changed without migrating its data would
+ *  silently blank the column. Removing one drops its values for the same reason:
+ *  leaving orphaned keys in the JSON means a re-added property resurrects old
+ *  data the user thought they had deleted. */
+export async function setProperties(c: Ctx, cid: string, next: PropertyDef[]): Promise<Collection> {
+  const existing = await getCollection(c, cid);
+  if (!existing) throw new RuleError(`collection ${cid} not found`, 404);
+  const before = collectionSchema(existing);
+  const removed = before.filter((p) => !next.some((n) => n.key === p.key));
+
+  for (const p of removed) {
+    await c.db
+      .prepare(`UPDATE page SET properties_json = json_remove(properties_json, '$.' || ?), updated_at = ? WHERE collection_id = ?`)
+      .bind(p.key, now(), cid)
+      .run();
+  }
+  await c.db
+    .prepare(`UPDATE collection SET schema_json = ?, updated_at = ? WHERE id = ?`)
+    .bind(JSON.stringify(next), now(), cid)
+    .run();
+  await logEvent(c, "update", "collection", cid, { properties: next.length, removed: removed.length });
+  return (await getCollection(c, cid))!;
+}
+
 export async function createView(c: Ctx, input: z.input<typeof createViewInput>): Promise<CollectionView> {
   const data = createViewInput.parse(input);
   const vid = id("cvw");

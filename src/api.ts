@@ -64,10 +64,17 @@ api.post("/patches/:id/resolve", async (c) => {
 api.get("/pages/:id/collections", async (c) => c.json(await store.listCollections(ctx(c), c.req.param("id"))));
 api.get("/collections/:id", async (c) => c.json(await store.getCollection(ctx(c), c.req.param("id"))));
 api.get("/collections/:id/rows", async (c) => c.json(await store.queryCollection(ctx(c), c.req.param("id"), {})));
+// POST rather than GET: a view's filters and sorts are structured, and encoding
+// them into a query string would mean a second parser to keep in step.
+api.post("/collections/:id/query", async (c) => c.json(await store.queryCollection(ctx(c), c.req.param("id"), await c.req.json())));
 api.get("/collections/:id/views", async (c) => c.json(await store.listViews(ctx(c), c.req.param("id"))));
 api.post("/collections", async (c) => c.json(await store.createCollection(ctx(c), await c.req.json())));
 api.patch("/collections/:id", async (c) => c.json(await store.updateCollection(ctx(c), c.req.param("id"), await c.req.json())));
 api.delete("/collections/:id", async (c) => { await store.deleteCollection(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
+api.put("/collections/:id/properties", async (c) => {
+  const { schema } = await c.req.json();
+  return c.json(await store.setProperties(ctx(c), c.req.param("id"), schema));
+});
 api.post("/views", async (c) => c.json(await store.createView(ctx(c), await c.req.json())));
 api.patch("/views/:id", async (c) => c.json(await store.updateView(ctx(c), c.req.param("id"), await c.req.json())));
 api.delete("/views/:id", async (c) => { await store.deleteView(ctx(c), c.req.param("id")); return c.json({ ok: true }); });

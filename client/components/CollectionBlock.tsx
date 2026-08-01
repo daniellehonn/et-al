@@ -11,10 +11,19 @@ import {
   api, collectionSchema, props,
   type Collection, type CollectionView, type Page, type PropertyDef,
 } from "@/lib/api";
+import {
+  CalendarView, CollectionExtraStyles, GalleryView, ListView, PropertyConfig, ViewConfig,
+  VIEW_TYPES, type Filter, type Sort,
+} from "./CollectionExtras";
+
+const parseJson = <T,>(raw: string, fallback: T): T => {
+  try { return JSON.parse(raw) as T; } catch { return fallback; }
+};
 
 export function CollectionBlock({ collectionId }: { collectionId: string }) {
   const qc = useQueryClient();
   const [viewId, setViewId] = useState<string | null>(null);
+  const [config, setConfig] = useState<"none" | "view" | "props">("none");
 
   const { data: collection } = useQuery({
     queryKey: ["collection", collectionId],
@@ -26,9 +35,15 @@ export function CollectionBlock({ collectionId }: { collectionId: string }) {
     queryFn: () => api.get<CollectionView[]>(`/collections/${collectionId}/views`),
     enabled: !!collectionId,
   });
+  const view = views?.find((v) => v.id === viewId) ?? views?.[0] ?? null;
+  const filter: Filter[] = view ? parseJson<Filter[]>(view.filter_json, []) : [];
+  const sort: Sort[] = view ? parseJson<Sort[]>(view.sort_json, []) : [];
+
+  // Filtering and sorting are applied server-side against the saved view, so a
+  // configured view shows the same rows wherever it is opened.
   const { data: rows } = useQuery({
-    queryKey: ["rows", collectionId],
-    queryFn: () => api.get<Page[]>(`/collections/${collectionId}/rows`),
+    queryKey: ["rows", collectionId, view?.id, view?.filter_json, view?.sort_json],
+    queryFn: () => api.post<Page[]>(`/collections/${collectionId}/query`, { filter, sort }),
     enabled: !!collectionId,
   });
 
@@ -36,9 +51,10 @@ export function CollectionBlock({ collectionId }: { collectionId: string }) {
   if (!collection) return <div className="et-col-loading">Loading…</div>;
 
   const schema = collectionSchema(collection);
-  const view = views?.find((v) => v.id === viewId) ?? views?.[0] ?? null;
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["rows", collectionId] });
+    qc.invalidateQueries({ queryKey: ["views", collectionId] });
+    qc.invalidateQueries({ queryKey: ["collection", collectionId] });
     qc.invalidateQueries({ queryKey: ["tasks"] });
   };
 
@@ -57,15 +73,55 @@ export function CollectionBlock({ collectionId }: { collectionId: string }) {
               onClick={() => setViewId(v.id)}>{v.name}</button>
           ))}
         </div>
+        <details className="et-col-viewadd">
+          <summary title="Add a view">+ view</summary>
+          <div className="et-col-viewadd-list">
+            {VIEW_TYPES.map((t) => (
+              <button key={t} onClick={async (e) => {
+                (e.currentTarget.closest("details") as HTMLDetailsElement).open = false;
+                const v = await api.post<CollectionView>("/views", {
+                  collection_id: collectionId, name: t[0].toUpperCase() + t.slice(1), type: t,
+                  group_by: t === "board" ? (schema.find((d) => d.type === "select")?.key ?? "status") : null,
+                });
+                setViewId(v.id);
+                refresh();
+              }}>{t}</button>
+            ))}
+          </div>
+        </details>
+        <button className="et-col-cfg" data-on={config === "view" || undefined}
+          onClick={() => setConfig(config === "view" ? "none" : "view")}>filter</button>
+        <button className="et-col-cfg" data-on={config === "props" || undefined}
+          onClick={() => setConfig(config === "props" ? "none" : "props")}>properties</button>
         <button className="et-col-add" onClick={addRow}>+ New</button>
       </div>
 
-      {view?.type === "board"
-        ? <BoardView rows={rows ?? []} schema={schema} groupBy={view.group_by ?? "status"} onChange={refresh} />
-        : <TableView rows={rows ?? []} schema={schema} onChange={refresh} />}
+      {config === "view" && view && (
+        <ViewConfig viewId={view.id} schema={schema} filter={filter} sort={sort} onSaved={refresh} />
+      )}
+      {config === "props" && (
+        <PropertyConfig collectionId={collectionId} schema={schema} onSaved={refresh} />
+      )}
 
-      {rows?.length === 0 && <div className="et-col-empty">Empty — click New to add a row.</div>}
+      {view?.type === "board" ? (
+        <BoardView rows={rows ?? []} schema={schema} groupBy={view.group_by ?? "status"} onChange={refresh} />
+      ) : view?.type === "list" ? (
+        <ListView rows={rows ?? []} onOpen={openPage} />
+      ) : view?.type === "gallery" ? (
+        <GalleryView rows={rows ?? []} schema={schema} onOpen={openPage} />
+      ) : view?.type === "calendar" ? (
+        <CalendarView rows={rows ?? []} schema={schema} onOpen={openPage} />
+      ) : (
+        <TableView rows={rows ?? []} schema={schema} onChange={refresh} />
+      )}
+
+      {rows?.length === 0 && (
+        <div className="et-col-empty">
+          {filter.length ? "No rows match this view's filters." : "Empty — click New to add a row."}
+        </div>
+      )}
       <CollectionStyles />
+      <CollectionExtraStyles />
     </div>
   );
 }
@@ -200,7 +256,15 @@ function CollectionStyles() {
       .et-col-views { display: flex; gap: 0.2rem; margin-left: 0.4rem; }
       .et-col-view { background: none; border: none; font: inherit; font-size: 0.82rem; color: var(--ink-faint); padding: 0.2rem 0.5rem; border-radius: 5px; cursor: pointer; }
       .et-col-view[data-active="true"] { background: var(--surface-2); color: var(--ink); }
-      .et-col-add { margin-left: auto; background: none; border: none; font: inherit; font-size: 0.82rem; color: var(--color-iris); cursor: pointer; }
+      .et-col-add { background: none; border: none; font: inherit; font-size: 0.82rem; color: var(--color-iris); cursor: pointer; }
+      .et-col-cfg { background: none; border: none; font: inherit; font-size: 0.8rem; color: var(--ink-faint); cursor: pointer; padding: 0.15rem 0.35rem; border-radius: 5px; }
+      .et-col-cfg[data-on] { background: var(--surface-2); color: var(--ink); }
+      .et-col-viewadd { margin-left: auto; position: relative; }
+      .et-col-viewadd summary { list-style: none; cursor: pointer; font-size: 0.8rem; color: var(--ink-faint); }
+      .et-col-viewadd summary::-webkit-details-marker { display: none; }
+      .et-col-viewadd-list { position: absolute; z-index: 30; right: 0; top: 1.4rem; background: var(--paper-raised); border: 1px solid var(--line-strong); border-radius: 8px; padding: 0.25rem; display: flex; flex-direction: column; min-width: 7rem; box-shadow: 0 8px 24px rgba(0,0,0,0.16); }
+      .et-col-viewadd-list button { text-align: left; background: none; border: none; font: inherit; font-size: 0.82rem; color: var(--ink-soft); padding: 0.28rem 0.45rem; border-radius: 5px; cursor: pointer; text-transform: capitalize; }
+      .et-col-viewadd-list button:hover { background: var(--color-iris-soft); color: var(--ink); }
       .et-col-empty { padding: 0.8rem; color: var(--ink-faint); font-size: 0.85rem; }
       .et-col-loading { padding: 0.6rem; color: var(--ink-faint); font-size: 0.85rem; }
       /* The table scrolls inside its own box; the page body must never scroll sideways. */
