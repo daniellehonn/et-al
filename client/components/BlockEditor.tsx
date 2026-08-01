@@ -17,7 +17,12 @@ function parseContent(json: string): Record<string, unknown> { try { return JSON
 // server-assigned ids.
 const TYPE_MENU: Array<{ type: string; label: string; kw?: string }> = [
   { type: "paragraph", label: "Text" },
-  { type: "heading", label: "Heading", kw: "h1 title" },
+  // Three heading levels, as Notion has. They are all the `heading` block type —
+  // the level is content, not a separate type, so changing it never rewrites the
+  // block's identity or loses its text.
+  { type: "heading1", label: "Heading 1", kw: "h1 title" },
+  { type: "heading2", label: "Heading 2", kw: "h2 subtitle" },
+  { type: "heading3", label: "Heading 3", kw: "h3" },
   { type: "bullet", label: "Bulleted list", kw: "ul" },
   { type: "numbered", label: "Numbered list", kw: "ol" },
   { type: "todo", label: "To-do", kw: "checkbox task" },
@@ -51,10 +56,19 @@ const CAREER_TYPES = new Set(["accomplishment", "resume_bullet", "role", "projec
 
 // The ⋮⋮ "turn into" menu only offers text-like conversions — not media, tables,
 // or live widgets (those are inserted fresh via the "/" menu).
-const TURN_INTO = new Set(["paragraph", "heading", "bullet", "numbered", "todo", "quote", "code", "callout", "divider", "toggle", "columns"]);
+const TURN_INTO = new Set(["paragraph", "heading1", "heading2", "heading3", "bullet", "numbered", "todo", "quote", "code", "callout", "divider", "toggle", "columns"]);
 
 // The default content a block gets when its type changes.
+// "heading2" is a menu label, not a stored type: it becomes a heading block with
+// level 2. Kept in one place so the menu, the slash picker and turn-into agree.
+function headingLevel(type: string): number | null {
+  const m = /^heading([123])$/.exec(type);
+  return m ? Number(m[1]) : null;
+}
+
 function defaultContentFor(type: string, keepText: string): Record<string, unknown> {
+  const level = headingLevel(type);
+  if (level) return { text: keepText, level };
   if (type === "table") return { columns: [{ id: "c1", name: "Name", type: "text" }, { id: "c2", name: "Status", type: "status" }], rows: [] };
   if (type === "embed") return { url: "" };
   if (type === "image") return { url: "", caption: "" };
@@ -398,7 +412,8 @@ export function BlockEditor({ pageId }: { pageId: string }) {
   };
 
   const changeType = (b: Block, type: string) => {
-    applyOps([{ op: "update", id: b.id, type, content: defaultContentFor(type, text[b.id] ?? "") }]);
+    const stored = headingLevel(type) ? "heading" : type;
+    applyOps([{ op: "update", id: b.id, type: stored, content: defaultContentFor(type, text[b.id] ?? "") }]);
     if (["divider", "table", "embed", "toc", "toggle", "columns"].includes(type) || WIDGET_TYPES.has(type) || CAREER_TYPES.has(type)) setEditingId(null);
   };
 
