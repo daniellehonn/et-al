@@ -683,7 +683,9 @@ function EditorStyles() {
       .et-doctable-plus button { background: none; border: none; color: var(--ink-faint); font-size: 1rem; cursor: pointer; }
       .et-doctable-addrow { margin-top: 0.4rem; background: none; border: none; color: var(--ink-soft); font: inherit; font-size: 0.84rem; cursor: pointer; }
       .et-doctable-addrow:hover { color: var(--color-iris); }
-      .et-editor { max-width: 44rem; }
+      /* No measure of its own: the page decides the width, so the full-width
+         toggle actually reaches the body instead of stopping at the editor. */
+      .et-editor { max-width: 100%; }
       .et-patches { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 1.5rem; }
       .et-patch {
         display: grid; grid-template-columns: 1.4rem 1fr auto; gap: 0.7rem; align-items: center;
