@@ -414,15 +414,59 @@ export function BlockEditor({ pageId }: { pageId: string }) {
     }).catch(onWriteError);
   }, [pageId, text, onWriteError]);
 
+  // Siblings of a block, in order — the basis for indent/outdent.
+  const siblingsOf = (b: Block): Block[] =>
+    (blocks ?? []).filter((x) => x.parent_block_id === b.parent_block_id);
+
+  /** Tab: nest under the preceding sibling, as Notion does. The first item in a
+   *  list has nothing to nest under, so it stays put rather than jumping. */
+  const indent = (b: Block) => {
+    const sibs = siblingsOf(b);
+    const i = sibs.findIndex((x) => x.id === b.id);
+    if (i <= 0) return;
+    const newParent = sibs[i - 1];
+    const kids = (blocks ?? []).filter((x) => x.parent_block_id === newParent.id);
+    applyOps([{ op: "move", id: b.id, parent: newParent.id, after: kids[kids.length - 1]?.id ?? null }]);
+  };
+
+  /** Shift+Tab: pop out one level, landing directly after the old parent. */
+  const outdent = (b: Block) => {
+    if (!b.parent_block_id) return;
+    const parent = (blocks ?? []).find((x) => x.id === b.parent_block_id);
+    if (!parent) return;
+    applyOps([{ op: "move", id: b.id, parent: parent.parent_block_id, after: parent.id }]);
+  };
+
+  const LIST_TYPES = new Set(["bullet", "numbered", "todo"]);
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>, b: Block) => {
     const value = text[b.id] ?? "";
+    if (e.key === "Tab") {
+      e.preventDefault();
+      if (e.shiftKey) outdent(b); else indent(b);
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      // Enter on an empty list item outdents it, then unwraps it to a paragraph
+      // — the standard way to end a list without reaching for the mouse.
+      if (LIST_TYPES.has(b.type) && value.trim() === "") {
+        if (b.parent_block_id) outdent(b);
+        else applyOps([{ op: "update", id: b.id, type: "paragraph", content: { text: "" } }]);
+        return;
+      }
       focusAfter.current = { afterId: b.id };
-      // Flush the current block, then insert a fresh paragraph after it.
+      // The new block keeps the current one's nesting, and continues the list
+      // type if there is one — otherwise every sub-bullet would break the list.
       applyOps([
         { op: "update", id: b.id, type: b.type, content: { text: value } },
-        { op: "insert", after: b.id, type: "paragraph", content: { text: "" } },
+        {
+          op: "insert",
+          after: b.id,
+          parent: b.parent_block_id,
+          type: LIST_TYPES.has(b.type) ? b.type : "paragraph",
+          content: { text: "" },
+        },
       ]);
     } else if (e.key === "Backspace" && value === "" && (blocks?.length ?? 0) > 1) {
       e.preventDefault();
@@ -494,7 +538,7 @@ export function BlockEditor({ pageId }: { pageId: string }) {
   const pickType = async (b: Block, type: string) => {
     // Drop just the "/query" fragment, keeping anything typed around it.
     const raw = text[b.id] ?? "";
-    const kept = raw.replace(/\/[^/\s]*$/, "").trimEnd();
+    const kept = raw.replace(/\/[^/]*$/, "").trimEnd();
     setSlash(null);
 
     if (type === "page") {
@@ -628,8 +672,13 @@ export function BlockEditor({ pageId }: { pageId: string }) {
                   // Notion opens the menu on "/" wherever it is typed, as long
                   // as it starts a word. Matching only v.startsWith("/") meant
                   // the menu never appeared on a line that already had text.
-                  const sm = v.match(/(?:^|\s)\/([^/\s]*)$/);
-                  if (sm) setSlash({ id: b.id, query: sm[1] });
+                  //
+                  // The query may contain spaces — the options are named things
+                  // like "Heading 2", so stopping at the first space made those
+                  // unreachable by typing. The menu closes instead when nothing
+                  // matches, which is what keeps ordinary prose from opening it.
+                  const sm = v.match(/(?:^|\s)\/([^/]*)$/);
+                  if (sm && slashOptions(sm[1]).length > 0) setSlash({ id: b.id, query: sm[1] });
                   else if (slash?.id === b.id) setSlash(null);
                   const mm = v.match(/@([^\s@]*)$/);
                   if (mm) setMention({ id: b.id, query: mm[1] });
