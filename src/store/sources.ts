@@ -79,12 +79,23 @@ export async function updateSource(
   return (await getSource(c, sid))!;
 }
 
+/** Delete a capture. Insights derived from it are DETACHED, not deleted: a
+ *  knowledge note is the thing you kept, and it has to outlive the link it came
+ *  from — otherwise clearing a stale inbox silently destroys writing. Without
+ *  this detach the `insight.source_id` foreign key rejects the delete outright,
+ *  which is what made digested captures unremovable. Dead relationship edges go
+ *  too — those carry no content of their own, only a pointer to a gone row. */
 export async function deleteSource(c: Ctx, sid: string): Promise<void> {
   const existing = await getSource(c, sid);
   if (!existing) throw new RuleError(`source ${sid} not found`, 404);
+  const detached = await c.db.prepare(`UPDATE insight SET source_id = NULL, updated_at = ? WHERE source_id = ?`).bind(now(), sid).run();
+  await c.db
+    .prepare(`DELETE FROM relationship WHERE (source_type = 'source' AND source_id = ?) OR (target_type = 'source' AND target_id = ?)`)
+    .bind(sid, sid)
+    .run();
   await c.db.prepare(`DELETE FROM source WHERE id = ?`).bind(sid).run();
   await ftsDelete(c, "source", sid);
-  await logEvent(c, "delete", "source", sid, { kind: existing.kind });
+  await logEvent(c, "delete", "source", sid, { kind: existing.kind, detached_insights: detached.meta?.changes ?? 0 });
 }
 
 /** Save a raw input immediately. Never blocks on a fetch; queues async ingest. */

@@ -158,7 +158,14 @@ export async function deleteWorkspace(c: Ctx, wid: string): Promise<void> {
   await c.db.prepare(`DELETE FROM block WHERE document_id IN (SELECT id FROM document WHERE workspace_id = ?)`).bind(wid).run();
   await c.db.prepare(`DELETE FROM document_patch WHERE document_id IN (SELECT id FROM document WHERE workspace_id = ?)`).bind(wid).run();
   await c.db.prepare(`DELETE FROM daily_focus_slot WHERE task_id IN (SELECT id FROM task WHERE workspace_id = ?)`).bind(wid).run();
-  for (const table of ["task", "objective", "document", "source", "insight", "decision"]) {
+  // Detach any insight still pointing at a source that is about to go — including
+  // insights filed in OTHER workspaces, which the deletes below never touch.
+  // insight.source_id is a foreign key, so a surviving pointer rejects the delete.
+  await c.db
+    .prepare(`UPDATE insight SET source_id = NULL, updated_at = ? WHERE source_id IN (SELECT id FROM source WHERE workspace_id = ?)`)
+    .bind(now(), wid)
+    .run();
+  for (const table of ["task", "objective", "document", "insight", "source", "decision"]) {
     await c.db.prepare(`DELETE FROM ${table} WHERE workspace_id = ?`).bind(wid).run();
   }
   await c.db.prepare(`DELETE FROM search_fts WHERE entity_type = 'workspace' AND entity_id = ?`).bind(wid).run();
