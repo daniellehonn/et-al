@@ -3,11 +3,21 @@
 // v7 had a workspace spine plus per-workspace tabs plus separate Knowledge and
 // Inbox screens — four ways of getting somewhere. There is one now.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, type PageNode } from "@/lib/api";
 
-export function PageTree({ activeId }: { activeId?: string }) {
+export function PageTree() {
   const qc = useQueryClient();
+  // The tree lives in the layout, so it cannot be handed the current page as a
+  // prop. Read it from the URL instead — these routes are statically exported,
+  // and useSearchParams would force a Suspense boundary around the whole shell.
+  const [activeId, setActiveId] = useState<string | undefined>();
+  useEffect(() => {
+    const read = () => setActiveId(new URLSearchParams(window.location.search).get("id") ?? undefined);
+    read();
+    window.addEventListener("popstate", read);
+    return () => window.removeEventListener("popstate", read);
+  }, []);
   const { data: tree } = useQuery({ queryKey: ["tree"], queryFn: () => api.get<PageNode[]>("/tree") });
 
   const addRoot = async () => {
@@ -69,9 +79,9 @@ function contains(node: PageNode, id?: string): boolean {
 function TreeStyles() {
   return (
     <style jsx global>{`
-      .et-tree { width: 15rem; min-width: 15rem; border-right: 1px solid var(--rule); height: 100vh; position: sticky; top: 0; display: flex; flex-direction: column; padding: 0.7rem 0.3rem; gap: 0.2rem; overflow-y: auto; background: var(--surface-2); }
+      .et-tree { width: 15rem; min-width: 15rem; border-right: 1px solid var(--rule); height: 100vh; position: sticky; top: 0; display: flex; flex-direction: column; padding: 0.7rem 0.3rem; gap: 0.2rem; overflow: hidden; background: var(--surface-2); }
       .et-tree-home { font-weight: 600; padding: 0.2rem 0.6rem 0.6rem; color: var(--ink); text-decoration: none; }
-      .et-tree-body { flex: 1; min-height: 0; }
+      .et-tree-body { flex: 1; min-height: 0; overflow-y: auto; }
       .et-tree-row { display: flex; align-items: center; gap: 0.15rem; border-radius: 5px; padding-right: 0.25rem; }
       .et-tree-row:hover { background: var(--surface-3, rgba(128,128,128,0.12)); }
       .et-tree-row[data-active="true"] { background: var(--surface-3, rgba(128,128,128,0.18)); font-weight: 500; }

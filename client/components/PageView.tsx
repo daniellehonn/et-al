@@ -12,11 +12,14 @@ import { EmojiPicker } from "./EmojiPicker";
 
 export function PageView({ id }: { id: string }) {
   const qc = useQueryClient();
-  const { data: page } = useQuery({ queryKey: ["page", id], queryFn: () => api.get<Page>(`/pages/${id}`) });
+  const { data: page, isLoading, error } = useQuery({ queryKey: ["page", id], queryFn: () => api.get<Page>(`/pages/${id}`) });
   const { data: ancestors } = useQuery({ queryKey: ["ancestors", id], queryFn: () => api.get<Page[]>(`/pages/${id}/ancestors`) });
   const { data: collections } = useQuery({ queryKey: ["collections", id], queryFn: () => api.get<Collection[]>(`/pages/${id}/collections`) });
 
-  if (!page) return <div className="et-page-loading">Loading…</div>;
+  if (isLoading) return <div className="et-page-loading">Loading…</div>;
+  // A bad or stale id used to sit on "Loading…" forever, which reads as a hang
+  // rather than a dead link.
+  if (error || !page) return <div className="et-page-loading">That page doesn&rsquo;t exist. It may have been deleted.</div>;
 
   const save = async (patch: Record<string, unknown>) => {
     await api.patch(`/pages/${id}`, patch);

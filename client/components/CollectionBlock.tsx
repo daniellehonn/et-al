@@ -208,7 +208,8 @@ function CollectionStyles() {
       .et-col-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
       .et-col-table th { text-align: left; font-weight: 500; color: var(--ink-faint); font-size: 0.78rem; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--rule); white-space: nowrap; }
       .et-col-table td { padding: 0.15rem 0.45rem; border-bottom: 1px solid var(--rule); vertical-align: middle; }
-      .et-cell-title { display: flex; align-items: center; gap: 0.3rem; min-width: 12rem; }
+      /* The name column carries the most information, so it gets the room. */
+      .et-cell-title { display: flex; align-items: center; gap: 0.3rem; min-width: 17rem; }
       .et-cell-input { background: none; border: 1px solid transparent; border-radius: 4px; font: inherit; color: inherit; padding: 0.25rem 0.35rem; width: 100%; min-width: 4rem; }
       .et-cell-input:hover { border-color: var(--rule); }
       .et-cell-input:focus { outline: none; border-color: var(--color-iris); background: var(--surface); }
