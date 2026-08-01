@@ -521,6 +521,99 @@ export function BlockEditor({ pageId }: { pageId: string }) {
     }).catch(onWriteError);
   }, [pageId, text, onWriteError, recordTextUndo]);
 
+  // Wrap the current textarea selection in markers. Bold/italic/code are stored
+  // as markdown in the block text, which is how they were already rendered — so
+  // the toolbar and typing "**" produce exactly the same thing.
+  const [toolbar, setToolbar] = useState<{ id: string; top: number; left: number } | null>(null);
+
+  // Multi-block selection. Shift-click extends a range from the last clicked
+  // block; Cmd/Ctrl-click toggles one. Selected blocks can be deleted or
+  // indented together, which is the point — otherwise reorganising a list means
+  // one block at a time.
+  const [selected, setSelected] = useState<string[]>([]);
+  const lastClicked = useRef<string | null>(null);
+
+  const selectBlock = useCallback((b: Block, e: React.MouseEvent) => {
+    if (!blocks) return false;
+    if (e.shiftKey && lastClicked.current) {
+      e.preventDefault();
+      const ids = blocks.map((x) => x.id);
+      const from = ids.indexOf(lastClicked.current);
+      const to = ids.indexOf(b.id);
+      if (from >= 0 && to >= 0) {
+        const [lo, hi] = from < to ? [from, to] : [to, from];
+        setSelected(ids.slice(lo, hi + 1));
+        return true;
+      }
+    }
+    if (e.metaKey || e.ctrlKey) {
+      e.preventDefault();
+      setSelected((s) => s.includes(b.id) ? s.filter((x) => x !== b.id) : [...s, b.id]);
+      lastClicked.current = b.id;
+      return true;
+    }
+    lastClicked.current = b.id;
+    setSelected([]);
+    return false;
+  }, [blocks]);
+
+  // Bulk actions on the selection, and Escape to clear it.
+  useEffect(() => {
+    if (!selected.length) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setSelected([]); return; }
+      const editing = document.activeElement?.tagName === "TEXTAREA" || document.activeElement?.tagName === "INPUT";
+      if (editing) return;
+      if (e.key === "Backspace" || e.key === "Delete") {
+        e.preventDefault();
+        void applyOps(selected.map((id) => ({ op: "delete", id })));
+        setSelected([]);
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        const list = (blocks ?? []).filter((b) => selected.includes(b.id));
+        // Outermost first, so a parent moves before the children that follow it.
+        for (const b of list) { if (e.shiftKey) outdent(b); else indent(b); }
+        setSelected([]);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected, applyOps, blocks]);
+
+  const wrapSelection = useCallback((b: Block, before: string, after = before) => {
+    const el = document.getElementById(`blk-${b.id}`) as HTMLTextAreaElement | null;
+    if (!el) return;
+    const { selectionStart: a, selectionEnd: z } = el;
+    const value = text[b.id] ?? "";
+    if (a === z) return;
+    const selected = value.slice(a, z);
+    // Toggle: if the selection is already wrapped, unwrap it rather than nesting
+    // another pair, which is what makes Cmd+B feel like a switch.
+    const already = selected.startsWith(before) && selected.endsWith(after) && selected.length > before.length + after.length;
+    const next = already
+      ? value.slice(0, a) + selected.slice(before.length, selected.length - after.length) + value.slice(z)
+      : value.slice(0, a) + before + selected + after + value.slice(z);
+    setText((s) => ({ ...s, [b.id]: next }));
+    saveText(b, next);
+    requestAnimationFrame(() => { el.focus(); el.setSelectionRange(a, a + next.length - value.length + (z - a)); });
+    setToolbar(null);
+  }, [text, saveText]);
+
+  const linkSelection = useCallback((b: Block) => {
+    const el = document.getElementById(`blk-${b.id}`) as HTMLTextAreaElement | null;
+    if (!el) return;
+    const { selectionStart: a, selectionEnd: z } = el;
+    if (a === z) return;
+    const url = prompt("Link URL");
+    if (!url) return;
+    const value = text[b.id] ?? "";
+    const next = `${value.slice(0, a)}[${value.slice(a, z)}](${url})${value.slice(z)}`;
+    setText((s) => ({ ...s, [b.id]: next }));
+    saveText(b, next);
+    setToolbar(null);
+  }, [text, saveText]);
+
   // Siblings of a block, in order — the basis for indent/outdent.
   const siblingsOf = (b: Block): Block[] =>
     (blocks ?? []).filter((x) => x.parent_block_id === b.parent_block_id);
@@ -548,6 +641,13 @@ export function BlockEditor({ pageId }: { pageId: string }) {
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>, b: Block) => {
     const value = text[b.id] ?? "";
+    if (e.metaKey || e.ctrlKey) {
+      const k = e.key.toLowerCase();
+      if (k === "b") { e.preventDefault(); wrapSelection(b, "**"); return; }
+      if (k === "i") { e.preventDefault(); wrapSelection(b, "*"); return; }
+      if (k === "e") { e.preventDefault(); wrapSelection(b, "`"); return; }
+      if (k === "k") { e.preventDefault(); linkSelection(b); return; }
+    }
     if (e.key === "Tab") {
       e.preventDefault();
       if (e.shiftKey) outdent(b); else indent(b);
@@ -701,6 +801,8 @@ export function BlockEditor({ pageId }: { pageId: string }) {
       {blocks?.map((b) => (
         <div key={b.id} className="et-block" data-type={b.type} data-ai={!!b.is_ai}
           data-level={b.type === "heading" ? Math.min(Number(blockContent(b).level) || 1, 3) : undefined}
+          data-selected={selected.includes(b.id) || undefined}
+          onClick={(e) => { if (selectBlock(b, e)) return; }}
           style={depthOf(b, blocks) ? { marginLeft: `${depthOf(b, blocks) * 1.6}rem` } : undefined}
           data-dragging={dnd.dragId === b.id || undefined}
           {...dnd.dropProps(b.id, (dragId) => moveBefore(dragId, b.id))}>
@@ -804,8 +906,24 @@ export function BlockEditor({ pageId }: { pageId: string }) {
                   }
                   onKeyDown(e, b);
                 }}
-                onBlur={() => { flush(b); delete recorded.current[b.id]; setEditingId(null); setSlash(null); setMention(null); }}
+                onSelect={(e) => {
+                  const el = e.currentTarget;
+                  if (el.selectionStart === el.selectionEnd) { setToolbar(null); return; }
+                  const box = el.getBoundingClientRect();
+                  setToolbar({ id: b.id, top: box.top + window.scrollY - 38, left: box.left + 8 });
+                }}
+                // The toolbar is dismissed on blur, but not before its own
+                // buttons can fire — they use onMouseDown with preventDefault.
+                onBlur={() => { flush(b); delete recorded.current[b.id]; setEditingId(null); setSlash(null); setMention(null); setToolbar(null); }}
               />
+              {toolbar?.id === b.id && (
+                <div className="et-fmtbar" style={{ top: toolbar.top, left: toolbar.left }}>
+                  <button onMouseDown={(e) => { e.preventDefault(); wrapSelection(b, "**"); }} title="Bold (Cmd+B)"><strong>B</strong></button>
+                  <button onMouseDown={(e) => { e.preventDefault(); wrapSelection(b, "*"); }} title="Italic (Cmd+I)"><em>i</em></button>
+                  <button onMouseDown={(e) => { e.preventDefault(); wrapSelection(b, "`"); }} title="Code (Cmd+E)"><code>{"<>"}</code></button>
+                  <button onMouseDown={(e) => { e.preventDefault(); linkSelection(b); }} title="Link (Cmd+K)">link</button>
+                </div>
+              )}
               {slash?.id === b.id && slashOptions(slash.query).length > 0 && (
                 <div className="et-slash-menu">
                   {slashOptions(slash.query).map((t) => (
@@ -1047,6 +1165,10 @@ function EditorStyles() {
       .et-block[data-type="todo"] { position: relative; }
       .et-block[data-ai="true"] .et-block-input { border-left: 2px solid color-mix(in srgb, var(--color-iris) 45%, transparent); padding-left: 0.7rem; }
       .et-hr { border: none; border-top: 1px solid var(--line-strong); margin: 0.8rem 0; }
+      .et-block[data-selected] { background: var(--color-iris-soft); border-radius: 4px; }
+      .et-fmtbar { position: fixed; z-index: 40; display: flex; gap: 0.1rem; background: var(--paper-raised); border: 1px solid var(--line-strong); border-radius: 7px; padding: 0.2rem; box-shadow: 0 6px 18px rgba(0,0,0,0.18); }
+      .et-fmtbar button { background: none; border: none; font: inherit; font-size: 0.82rem; color: var(--ink-soft); padding: 0.2rem 0.45rem; border-radius: 5px; cursor: pointer; }
+      .et-fmtbar button:hover { background: var(--color-iris-soft); color: var(--ink); }
       .et-page-link { display: flex; align-items: center; gap: 0.45rem; padding: 0.3rem 0; color: inherit; text-decoration: none; width: 100%; }
       .et-page-link-title { border-bottom: 1px solid var(--line-strong); font-weight: 500; }
       .et-page-link:hover .et-page-link-title { border-bottom-color: var(--ink); }
