@@ -1,7 +1,7 @@
 "use client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, type PointerEvent as ReactPointerEvent } from "react";
-import { api, type Workspace, type Task, type Health, type Objective, type Document, type Relationship } from "@/lib/api";
+import { api, props, type Page, type RoleRow, type Health, type Relationship } from "@/lib/api";
 import { EditableText, DeleteButton } from "./Editable";
 import { pct, fmtDate, isOverdue } from "@/lib/util";
 import { useDragReorder } from "@/lib/dnd";
@@ -140,12 +140,12 @@ function Cell({ type, value, readOnly, onSave }: { type: ColType; value: string;
 
 // ── Child progress: a bar per sub-workspace ──────────────────────────────────
 function ChildProgressWidget({ workspaceId, type, config, onChange }: { workspaceId: string; type: string; config?: Config; onChange?: (c: Config) => void }) {
-  const { data: workspaces } = useQuery({ queryKey: ["workspaces"], queryFn: () => api.get<Workspace[]>("/workspaces") });
+  const { data: workspaces } = useQuery({ queryKey: ["workspaces"], queryFn: () => api.get<Page[]>("/pages") });
   const { data: health } = useQuery({ queryKey: ["health-scores"], queryFn: () => api.get<Health[]>("/health-scores") });
-  const byId = new Map((health ?? []).map((h) => [h.workspace_id, h]));
+  const byId = new Map((health ?? []).map((h) => [h.page_id, h]));
   const pctOf = (id: string) => { const h = byId.get(id); return pct(h?.done_tasks ?? 0, (h?.open_tasks ?? 0) + (h?.done_tasks ?? 0)); };
   const sort = String(config?.sort ?? "name");
-  const children = (workspaces ?? []).filter((w) => w.parent_id === workspaceId).sort((a, b) =>
+  const children = (workspaces ?? []).filter((w) => w.parent_page_id === workspaceId).sort((a, b) =>
     sort === "least" ? pctOf(a.id) - pctOf(b.id) : sort === "most" ? pctOf(b.id) - pctOf(a.id) : a.title.localeCompare(b.title));
   if (children.length === 0) return <div className="et-empty">Nothing inside this {type} yet.</div>;
   return (
@@ -164,8 +164,8 @@ function ChildProgressWidget({ workspaceId, type, config, onChange }: { workspac
         return (
           <a key={w.id} href={`/workspace/?id=${w.id}`} className="et-childprog-row">
             <span className="et-childprog-name">{w.title}</span>
-            <span className="et-childprog-bar"><span style={{ width: `${w.status === "completed" ? 100 : p}%` }} data-done={w.status === "completed" || undefined} /></span>
-            <span className="eyebrow et-childprog-pct">{w.status === "completed" ? "✓" : total ? `${p}%` : "—"}</span>
+            <span className="et-childprog-bar"><span style={{ width: `${props(w).status === "completed" ? 100 : p}%` }} data-done={props(w).status === "completed" || undefined} /></span>
+            <span className="eyebrow et-childprog-pct">{props(w).status === "completed" ? "✓" : total ? `${p}%` : "—"}</span>
           </a>
         );
       })}
@@ -174,13 +174,12 @@ function ChildProgressWidget({ workspaceId, type, config, onChange }: { workspac
 }
 
 function TasksWidget({ workspaceId, setTab, config, onChange }: { workspaceId: string; setTab: (t: string) => void; config?: Config; onChange?: (c: Config) => void }) {
-  const { data: tasks } = useQuery({ queryKey: ["tasks", workspaceId], queryFn: () => api.get<Task[]>(`/workspaces/${workspaceId}/tasks`) });
-  const { data: objectives } = useQuery({ queryKey: ["objectives", workspaceId], queryFn: () => api.get<Objective[]>(`/workspaces/${workspaceId}/objectives`) });
+  const { data: tasks } = useQuery({ queryKey: ["tasks", workspaceId], queryFn: () => api.get<RoleRow[]>(`/pages/${workspaceId}/tasks`) });
   const filter = String(config?.status_filter ?? "open");
   const objFilter = String(config?.objective_id ?? "");
   const shown = (tasks ?? [])
-    .filter((t) => filter === "all" ? true : filter === "done" ? t.status === "done" : t.status !== "done")
-    .filter((t) => !objFilter || (objFilter === "none" ? !t.objective_id : t.objective_id === objFilter));
+    .filter((t) => filter === "all" ? true : filter === "done" ? t.props.status === "done" : t.props.status !== "done")
+    .filter((t) => !objFilter || (objFilter === "none" ? !t.props.objective : t.props.objective === objFilter));
   const opts = onChange && (
     <div className="et-w-opts">
       <select value={filter} onChange={(e) => onChange({ ...config, status_filter: e.target.value })} aria-label="Filter">
@@ -189,7 +188,7 @@ function TasksWidget({ workspaceId, setTab, config, onChange }: { workspaceId: s
       <select value={objFilter} onChange={(e) => onChange({ ...config, objective_id: e.target.value })} aria-label="Objective">
         <option value="">Any objective</option>
         <option value="none">No objective</option>
-        {(objectives ?? []).map((o) => <option key={o.id} value={o.id}>{o.title}</option>)}
+        {objectiveNames(tasks ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
       </select>
     </div>
   );
@@ -197,18 +196,18 @@ function TasksWidget({ workspaceId, setTab, config, onChange }: { workspaceId: s
   return (
     <div className="et-taskswidget">
       {opts}
-      {shown.slice(0, 6).map((t) => <div key={t.id} className="et-tw-row" data-done={t.status === "done" || undefined}><span className="et-prio" data-p={t.priority} />{t.title}</div>)}
+      {shown.slice(0, 6).map((t) => <div key={t.id} className="et-tw-row" data-done={t.props.status === "done" || undefined}><span className="et-prio" data-p={Number(t.props.priority) || 0} />{t.title}</div>)}
       {shown.length > 6 && <button className="et-link" onClick={() => setTab("Tasks")}>+{shown.length - 6} more →</button>}
     </div>
   );
 }
 
-function ProgressWidget({ workspaceId, workspace }: { workspaceId: string; workspace: Workspace }) {
-  const { data: tasks } = useQuery({ queryKey: ["tasks", workspaceId], queryFn: () => api.get<Task[]>(`/workspaces/${workspaceId}/tasks`) });
+function ProgressWidget({ workspaceId, workspace }: { workspaceId: string; workspace: Page }) {
+  const { data: tasks } = useQuery({ queryKey: ["tasks", workspaceId], queryFn: () => api.get<RoleRow[]>(`/pages/${workspaceId}/tasks`) });
   const all = tasks ?? [];
-  const done = all.filter((t) => t.status === "done").length;
+  const done = all.filter((t) => t.props.status === "done").length;
   const p = pct(done, all.length);
-  if (workspace.status === "completed") return <div className="et-complete-note"><span className="serif et-complete-check">✓</span> Complete.</div>;
+  if (props(workspace).status === "completed") return <div className="et-complete-note"><span className="serif et-complete-check">✓</span> Complete.</div>;
   return (
     <div>
       <div className="et-progress-head"><span className="eyebrow">Toward done</span><span className="et-progress-frac">{done} / {all.length} tasks</span></div>
@@ -219,20 +218,20 @@ function ProgressWidget({ workspaceId, workspace }: { workspaceId: string; works
 
 // A progress bar per objective, from its tasks' completion.
 function ObjectiveProgressWidget({ workspaceId }: { workspaceId: string }) {
-  const { data: objectives } = useQuery({ queryKey: ["objectives", workspaceId], queryFn: () => api.get<Objective[]>(`/workspaces/${workspaceId}/objectives`) });
-  const { data: tasks } = useQuery({ queryKey: ["tasks", workspaceId], queryFn: () => api.get<Task[]>(`/workspaces/${workspaceId}/tasks`) });
-  if ((objectives ?? []).length === 0) return <div className="et-empty">No objectives yet.</div>;
+  const { data: tasks } = useQuery({ queryKey: ["tasks", workspaceId], queryFn: () => api.get<RoleRow[]>(`/pages/${workspaceId}/tasks`) });
+  const names = objectiveNames(tasks ?? []);
+  if (names.length === 0) return <div className="et-empty">No objectives yet.</div>;
   return (
-    <div className="et-childprog">
-      {(objectives ?? []).map((o) => {
-        const ts = (tasks ?? []).filter((t) => t.objective_id === o.id);
-        const done = ts.filter((t) => t.status === "done").length;
-        const p = pct(done, ts.length);
+    <div className="et-objprog">
+      {names.map((name) => {
+        const ts = (tasks ?? []).filter((t) => t.props.objective === name);
+        const done = ts.filter((t) => t.props.status === "done").length;
+        const pct = ts.length ? Math.round((done / ts.length) * 100) : 0;
         return (
-          <div key={o.id} className="et-childprog-row" style={{ cursor: "default" }}>
-            <span className="et-childprog-name">{o.title}</span>
-            <span className="et-childprog-bar"><span style={{ width: `${p}%`, background: p === 100 ? "var(--color-sage)" : "var(--color-iris)" }} /></span>
-            <span className="eyebrow et-childprog-pct">{ts.length ? `${p}%` : "—"}</span>
+          <div key={name} className="et-objprog-row">
+            <span className="et-objprog-title">{name}</span>
+            <span className="et-childprog-bar"><span style={{ width: `${pct}%` }} data-done={pct === 100 || undefined} /></span>
+            <span className="eyebrow et-childprog-pct">{ts.length ? `${pct}%` : "—"}</span>
           </div>
         );
       })}
@@ -240,16 +239,23 @@ function ObjectiveProgressWidget({ workspaceId }: { workspaceId: string }) {
   );
 }
 
+/** The distinct objective values in use. An objective stopped being a row in v8,
+ *  so the option list is whatever the tasks themselves say — which is also how
+ *  it worked in the Notion pages this model came from. */
+function objectiveNames(tasks: RoleRow[]): string[] {
+  return [...new Set(tasks.map((t) => t.props.objective).filter((v): v is string => typeof v === "string" && !!v))];
+}
+
 // Upcoming task due dates across the workspace.
 function DeadlinesWidget({ workspaceId, setTab }: { workspaceId: string; setTab: (t: string) => void }) {
-  const { data: tasks } = useQuery({ queryKey: ["tasks", workspaceId], queryFn: () => api.get<Task[]>(`/workspaces/${workspaceId}/tasks`) });
-  const due = (tasks ?? []).filter((t) => t.due_date && t.status !== "done").sort((a, b) => (a.due_date ?? 0) - (b.due_date ?? 0));
+  const { data: tasks } = useQuery({ queryKey: ["tasks", workspaceId], queryFn: () => api.get<RoleRow[]>(`/pages/${workspaceId}/tasks`) });
+  const due = (tasks ?? []).filter((t) => t.props.due_date && t.props.status !== "done").sort((a, b) => (Number(a.props.due_date) || 0) - (Number(b.props.due_date) || 0));
   if (due.length === 0) return <div className="et-empty">No upcoming deadlines. <button className="et-link" onClick={() => setTab("Tasks")}>Set due dates →</button></div>;
   return (
     <div className="et-deadlines">
       {due.slice(0, 8).map((t) => (
-        <div key={t.id} className="et-dl-row" data-overdue={isOverdue(t.due_date) || undefined}>
-          <span className="et-dl-date">{fmtDate(t.due_date!)}</span>
+        <div key={t.id} className="et-dl-row" data-overdue={isOverdue(Number(t.props.due_date)) || undefined}>
+          <span className="et-dl-date">{fmtDate(Number(t.props.due_date))}</span>
           <span className="et-dl-title">{t.title}</span>
         </div>
       ))}
@@ -309,17 +315,17 @@ function BacklinkRow({ rel }: { rel: Relationship }) {
   // Note this renders the edge's *source* — what points here. Sources (the
   // captured kind) can be a mention target, so they show up as targets rather
   // than here; the branch below still guards against an unexpected type.
-  const { data: doc } = useQuery({ queryKey: ["document", rel.source_id], queryFn: () => api.get<Document>(`/documents/${rel.source_id}`), enabled: isDoc });
-  const { data: workspaces } = useQuery({ queryKey: ["workspaces"], queryFn: () => api.get<Workspace[]>("/workspaces"), enabled: !isDoc });
+  const { data: doc } = useQuery({ queryKey: ["document", rel.source_id], queryFn: () => api.get<Page>(`/pages/${rel.source_id}`), enabled: isDoc });
+  const { data: workspaces } = useQuery({ queryKey: ["workspaces"], queryFn: () => api.get<Page[]>("/pages"), enabled: !isDoc });
   if (isDoc) {
     if (!doc) return <div className="et-backlink-row et-empty">…</div>;
-    return <a className="et-backlink-row" href={`/workspace/?id=${doc.workspace_id}&tab=Documents&doc=${doc.id}`}><span className="et-doc-icon serif">¶</span>{doc.title}</a>;
+    return <a className="et-backlink-row" href={`/page/?id=${doc.id}`}><span className="et-doc-icon serif">¶</span>{doc.title}</a>;
   }
   const w = (workspaces ?? []).find((x) => x.id === rel.source_id);
   return <a className="et-backlink-row" href={`/workspace/?id=${rel.source_id}`}>{w?.icon ?? "↗"} {w?.title ?? rel.source_id}</a>;
 }
 
-interface CareerItem { id: string; document_id: string; type: string; content_json: string; workspace_id: string; doc_title: string }
+interface CareerItem { id: string; page_id: string; type: string; content_json: string; page_title: string }
 // Aggregates every career block across all workspaces — the resume raw material.
 function CareerSummaryWidget() {
   const { data } = useQuery({ queryKey: ["career"], queryFn: () => api.get<CareerItem[]>("/career") });
@@ -339,10 +345,10 @@ function CareerSummaryWidget() {
   return (
     <div className="et-career-sum">
       {items.map((it) => (
-        <a key={it.id} className="et-career-row" href={`/workspace/?id=${it.workspace_id}`}>
+        <a key={it.id} className="et-career-row" href={`/page/?id=${it.page_id}`}>
           <span className="et-career-icon">{icon(it.type)}</span>
           <span className="et-career-line">{line(it)}</span>
-          <span className="eyebrow et-career-src">{it.doc_title}</span>
+          <span className="eyebrow et-career-src">{it.page_title}</span>
         </a>
       ))}
     </div>
@@ -352,12 +358,12 @@ function CareerSummaryWidget() {
 // Renders any live widget block inside the document editor. Self-contained
 // (carries its styles) so it works anywhere a block is rendered.
 export function WidgetBlock({ type, workspaceId, config, onChange }: { type: string; workspaceId: string; config: Config; onChange?: (c: Config) => void }) {
-  const { data: workspace } = useQuery({ queryKey: ["workspace", workspaceId], queryFn: () => api.get<Workspace>(`/workspaces/${workspaceId}`) });
+  const { data: workspace } = useQuery({ queryKey: ["workspace", workspaceId], queryFn: () => api.get<Page>(`/pages/${workspaceId}`) });
   const goTasks = () => { window.location.href = `/workspace/?id=${workspaceId}&tab=Tasks`; };
   let inner: React.ReactNode = null;
   if (type === "tasks") inner = <TasksWidget workspaceId={workspaceId} setTab={goTasks} config={config} onChange={onChange} />;
   else if (type === "deadlines") inner = <DeadlinesWidget workspaceId={workspaceId} setTab={goTasks} />;
-  else if (type === "child_progress") inner = <ChildProgressWidget workspaceId={workspaceId} type={workspace?.type ?? "area"} config={config} onChange={onChange} />;
+  else if (type === "child_progress") inner = <ChildProgressWidget workspaceId={workspaceId} type={String(workspace ? props(workspace).type ?? "area" : "area")} config={config} onChange={onChange} />;
   else if (type === "objective_progress") inner = <ObjectiveProgressWidget workspaceId={workspaceId} />;
   else if (type === "progress") inner = workspace ? <ProgressWidget workspaceId={workspaceId} workspace={workspace} /> : null;
   else if (type === "backlinks") inner = <BacklinksWidget workspaceId={workspaceId} />;

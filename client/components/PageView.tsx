@@ -1,0 +1,143 @@
+"use client";
+// One page: cover, icon, title, then the body. Nothing else.
+//
+// This is the whole point of v8. v7 put a project behind six tabs — Overview,
+// Tasks, Documents, Sources, Decisions, Timeline — so reading a project meant
+// walking it. Here a project is a thing you scroll, and its tasks and sources
+// are collections sitting inline in the body wherever you put them.
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, type Collection, type Page, type PagePatch } from "@/lib/api";
+import { BlockEditor } from "./BlockEditor";
+import { EmojiPicker } from "./EmojiPicker";
+
+export function PageView({ id }: { id: string }) {
+  const qc = useQueryClient();
+  const { data: page } = useQuery({ queryKey: ["page", id], queryFn: () => api.get<Page>(`/pages/${id}`) });
+  const { data: ancestors } = useQuery({ queryKey: ["ancestors", id], queryFn: () => api.get<Page[]>(`/pages/${id}/ancestors`) });
+  const { data: collections } = useQuery({ queryKey: ["collections", id], queryFn: () => api.get<Collection[]>(`/pages/${id}/collections`) });
+
+  if (!page) return <div className="et-page-loading">Loading…</div>;
+
+  const save = async (patch: Record<string, unknown>) => {
+    await api.patch(`/pages/${id}`, patch);
+    qc.invalidateQueries({ queryKey: ["page", id] });
+    qc.invalidateQueries({ queryKey: ["tree"] });
+  };
+
+  const addCollection = async (role: string | null) => {
+    await api.post("/collections", {
+      parent_page_id: id,
+      title: role ? role[0].toUpperCase() + role.slice(1) : "Untitled",
+      role,
+    });
+    qc.invalidateQueries({ queryKey: ["collections", id] });
+    qc.invalidateQueries({ queryKey: ["blocks", id] });
+  };
+
+  const hasRole = (role: string) => (collections ?? []).some((c) => c.role === role);
+
+  return (
+    <div className="et-page">
+      {page.cover && <div className="et-page-cover" style={{ backgroundImage: `url(${page.cover})` }} />}
+
+      <div className="et-page-inner">
+        <div className="et-crumbs">
+          {(ancestors ?? []).map((a) => (
+            <span key={a.id}><a href={`/page/?id=${a.id}`}>{a.icon ?? "📄"} {a.title || "Untitled"}</a> / </span>
+          ))}
+        </div>
+
+        <div className="et-page-icon-row">
+          <EmojiPicker className="et-page-icon" value={page.icon ?? "📄"} onPick={(e) => save({ icon: e })} />
+          {!page.cover && (
+            <button className="et-page-cover-btn" onClick={() => {
+              const url = prompt("Cover image URL");
+              if (url) save({ cover: url });
+            }}>Add cover</button>
+          )}
+        </div>
+
+        <input className="et-page-title" defaultValue={page.title} placeholder="Untitled"
+          onBlur={(e) => { if (e.target.value !== page.title) save({ title: e.target.value }); }} />
+
+        <PatchQueue pageId={id} />
+
+        <BlockEditor pageId={id} />
+
+        {/* Collections are created here and then live in the body, positioned by
+            their block — so this is a creation affordance, not a container. */}
+        <div className="et-page-adds">
+          {(["tasks", "sources", "insights", "decisions"] as const)
+            .filter((r) => !hasRole(r))
+            .map((r) => <button key={r} onClick={() => addCollection(r)}>+ {r[0].toUpperCase() + r.slice(1)} database</button>)}
+          <button onClick={() => addCollection(null)}>+ Blank database</button>
+        </div>
+      </div>
+      <PageStyles />
+    </div>
+  );
+}
+
+/** Agent-proposed body changes, awaiting Accept/Reject. Deliberately at the top
+ *  of the page rather than in a side panel: a pending patch is a decision the
+ *  page is waiting on, and burying it would quietly turn the gate into a
+ *  rubber stamp. */
+function PatchQueue({ pageId }: { pageId: string }) {
+  const qc = useQueryClient();
+  const { data: patches } = useQuery({
+    queryKey: ["patches", pageId],
+    queryFn: () => api.get<PagePatch[]>(`/pages/${pageId}/patches?status=pending`),
+    refetchInterval: 8000,
+  });
+  if (!patches?.length) return null;
+
+  const resolve = async (pid: string, accept: boolean) => {
+    await api.post(`/patches/${pid}/resolve`, { accept });
+    qc.invalidateQueries({ queryKey: ["patches", pageId] });
+    qc.invalidateQueries({ queryKey: ["blocks", pageId] });
+  };
+
+  return (
+    <div className="et-patches">
+      {patches.map((p) => (
+        <div key={p.id} className="et-patch">
+          <span className="et-patch-actor">{p.actor}</span>
+          <span className="et-patch-summary">{p.summary}</span>
+          <button className="et-patch-accept" onClick={() => resolve(p.id, true)}>Accept</button>
+          <button className="et-patch-reject" onClick={() => resolve(p.id, false)}>Reject</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PageStyles() {
+  return (
+    <style jsx global>{`
+      .et-page { flex: 1; min-width: 0; }
+      .et-page-loading { padding: 3rem; color: var(--ink-faint); }
+      .et-page-cover { height: 11rem; background-size: cover; background-position: center; }
+      /* One column, one measure. A page is meant to be read top to bottom. */
+      .et-page-inner { max-width: 46rem; margin: 0 auto; padding: 2rem 3rem 6rem; }
+      .et-crumbs { font-size: 0.78rem; color: var(--ink-faint); margin-bottom: 0.8rem; }
+      .et-crumbs a { color: inherit; text-decoration: none; }
+      .et-crumbs a:hover { color: var(--ink); }
+      .et-page-icon-row { display: flex; align-items: center; gap: 0.6rem; position: relative; }
+      .et-page-icon { font-size: 3rem; background: none; border: none; cursor: pointer; padding: 0; line-height: 1; }
+      .et-page-cover-btn { opacity: 0; background: none; border: none; color: var(--ink-faint); font-size: 0.8rem; cursor: pointer; }
+      .et-page-inner:hover .et-page-cover-btn { opacity: 1; }
+      .et-page-title { font-size: 2.4rem; font-weight: 700; background: none; border: none; width: 100%; color: inherit; font-family: inherit; padding: 0.4rem 0 1rem; letter-spacing: -0.02em; }
+      .et-page-title:focus { outline: none; }
+      .et-patches { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1rem; }
+      .et-patch { display: flex; align-items: center; gap: 0.6rem; border: 1px solid var(--color-iris); border-radius: 7px; padding: 0.5rem 0.7rem; font-size: 0.85rem; }
+      .et-patch-actor { font-size: 0.75rem; color: var(--color-iris); font-weight: 600; }
+      .et-patch-summary { flex: 1; min-width: 0; }
+      .et-patch-accept, .et-patch-reject { background: none; border: 1px solid var(--rule); border-radius: 5px; font: inherit; font-size: 0.78rem; padding: 0.2rem 0.5rem; cursor: pointer; color: inherit; }
+      .et-patch-accept:hover { border-color: var(--color-iris); color: var(--color-iris); }
+      .et-page-adds { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 2.5rem; opacity: 0; transition: opacity 0.15s; }
+      .et-page-inner:hover .et-page-adds { opacity: 1; }
+      .et-page-adds button { background: none; border: 1px dashed var(--rule); border-radius: 6px; font: inherit; font-size: 0.8rem; color: var(--ink-faint); padding: 0.3rem 0.6rem; cursor: pointer; }
+      .et-page-adds button:hover { color: var(--ink); border-color: var(--ink-faint); }
+    `}</style>
+  );
+}

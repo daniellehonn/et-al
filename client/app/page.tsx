@@ -85,13 +85,13 @@ export default function HomePage() {
       <div className="et-two-col">
         {/* Workspace health */}
         <section>
-          <div className="et-section-label"><span className="eyebrow">Workspace Health</span></div>
+          <div className="et-section-label"><span className="eyebrow">Page Health</span></div>
           <div className="et-health">
             {healthByScore.map((h) => {
-              const w = data?.active_workspaces.find((x) => x.id === h.workspace_id);
+              const w = data?.root_pages.find((x: { id: string }) => x.id === h.page_id);
               if (!w) return null;
               return (
-                <div key={h.workspace_id} className="et-health-row">
+                <div key={h.page_id} className="et-health-row">
                   <span className="et-health-name">{w.title}</span>
                   <span className="et-health-bar"><span style={{ width: `${h.score}%`, background: h.score >= 60 ? "var(--color-sage)" : h.score >= 30 ? "var(--color-amber)" : "var(--color-line-strong)" }} /></span>
                   <span className="et-health-num eyebrow">{h.score}</span>

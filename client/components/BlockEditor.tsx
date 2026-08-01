@@ -1,9 +1,10 @@
 "use client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, blockText, linkMeta, type Block, type BlockOp, type DocumentPatch, type Workspace, type Document, type Source } from "@/lib/api";
+import { api, blockContent, blockText, linkMeta, type Block, type BlockOp, type Collection, type Page, type PagePatch } from "@/lib/api";
 import { EditableText, DeleteButton } from "./Editable";
 import { WidgetBlock, TableWidget, WidgetStyles } from "./Overview";
+import { CollectionBlock } from "./CollectionBlock";
 import { useDragReorder } from "@/lib/dnd";
 
 const WIDGET_TYPES = new Set(["tasks", "deadlines", "child_progress", "objective_progress", "progress", "backlinks", "metric", "links", "career_summary"]);
@@ -265,20 +266,34 @@ function TocBlock({ blocks }: { blocks: Block[] }) {
   );
 }
 
-export function BlockEditor({ documentId }: { documentId: string }) {
+/** How deep a block sits, by walking parent_block_id. Blocks arrive flat but in
+ *  document order, so depth is purely a rendering concern. */
+function depthOf(b: Block, all: Block[]): number {
+  let d = 0;
+  let cur = b.parent_block_id;
+  const seen = new Set<string>();
+  while (cur && !seen.has(cur)) {
+    seen.add(cur);
+    d++;
+    cur = all.find((x) => x.id === cur)?.parent_block_id ?? null;
+  }
+  return d;
+}
+
+export function BlockEditor({ pageId }: { pageId: string }) {
   const qc = useQueryClient();
   const { data: blocks } = useQuery({
-    queryKey: ["blocks", documentId],
-    queryFn: () => api.get<Block[]>(`/documents/${documentId}/blocks`),
+    queryKey: ["blocks", pageId],
+    queryFn: () => api.get<Block[]>(`/pages/${pageId}/blocks`),
   });
   const { data: patches } = useQuery({
-    queryKey: ["patches", documentId],
-    queryFn: () => api.get<DocumentPatch[]>(`/documents/${documentId}/patches?status=pending`),
+    queryKey: ["patches", pageId],
+    queryFn: () => api.get<PagePatch[]>(`/pages/${pageId}/patches?status=pending`),
     refetchInterval: 8000, // agents may propose while you work
   });
-  // The document's workspace — widget blocks compute against it.
-  const { data: doc } = useQuery({ queryKey: ["document", documentId], queryFn: () => api.get<Document>(`/documents/${documentId}`) });
-  const workspaceId = doc?.workspace_id;
+  // Widget blocks compute against the page they are on. In v7 they needed the
+  // owning workspace; now the page IS that thing, so it is just the page id.
+  const workspaceId = pageId;
 
   // Local text mirror so typing is instant; server save is debounced.
   const [text, setText] = useState<Record<string, string>>({});
@@ -321,10 +336,10 @@ export function BlockEditor({ documentId }: { documentId: string }) {
   }, [qc]);
 
   const applyOps = useCallback(async (ops: BlockOp[]) => {
-    try { await api.post(`/documents/${documentId}/blocks`, { ops }); }
+    try { await api.post(`/pages/${pageId}/blocks`, { ops }); }
     catch (e) { onWriteError(e); }
-    finally { qc.invalidateQueries({ queryKey: ["blocks", documentId] }); }
-  }, [documentId, qc, onWriteError]);
+    finally { qc.invalidateQueries({ queryKey: ["blocks", pageId] }); }
+  }, [pageId, qc, onWriteError]);
 
   // Drag a block by its ⣿ handle to drop it before another block.
   const dnd = useDragReorder();
@@ -340,29 +355,29 @@ export function BlockEditor({ documentId }: { documentId: string }) {
   // Delete a block reliably: remove it from the cache immediately (optimistic),
   // then persist. The block vanishes on click regardless of any re-render.
   const deleteBlock = useCallback((id: string) => {
-    qc.setQueryData<Block[]>(["blocks", documentId], (old) => (old ?? []).filter((b) => b.id !== id));
-    api.post(`/documents/${documentId}/blocks`, { ops: [{ op: "delete", id }] })
+    qc.setQueryData<Block[]>(["blocks", pageId], (old) => (old ?? []).filter((b) => b.id !== id));
+    api.post(`/pages/${pageId}/blocks`, { ops: [{ op: "delete", id }] })
       .catch(onWriteError)
-      .finally(() => qc.invalidateQueries({ queryKey: ["blocks", documentId] }));
-  }, [documentId, qc, onWriteError]);
+      .finally(() => qc.invalidateQueries({ queryKey: ["blocks", pageId] }));
+  }, [pageId, qc, onWriteError]);
 
   const saveText = useCallback((b: Block, value: string) => {
     clearTimeout(debounce.current[b.id]);
     debounce.current[b.id] = setTimeout(() => {
       // Per-keystroke: don't alert, but refresh auth so the read-only banner shows.
-      api.post(`/documents/${documentId}/blocks`, {
+      api.post(`/pages/${pageId}/blocks`, {
         ops: [{ op: "update", id: b.id, type: b.type, content: { text: value } }],
       }).catch(() => qc.invalidateQueries({ queryKey: ["session"] }));
     }, 500);
-  }, [documentId, qc]);
+  }, [pageId, qc]);
 
   // Persist a block immediately (on blur), cancelling any pending debounce.
   const flush = useCallback((b: Block) => {
     clearTimeout(debounce.current[b.id]);
-    api.post(`/documents/${documentId}/blocks`, {
+    api.post(`/pages/${pageId}/blocks`, {
       ops: [{ op: "update", id: b.id, type: b.type, content: { text: text[b.id] ?? "" } }],
     }).catch(onWriteError);
-  }, [documentId, text, onWriteError]);
+  }, [pageId, text, onWriteError]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>, b: Block) => {
     const value = text[b.id] ?? "";
@@ -394,14 +409,14 @@ export function BlockEditor({ documentId }: { documentId: string }) {
   // @-mention: typing "@" links another object and records a backlink edge.
   // Workspaces and saved sources both appear; each mention is a markdown link in
   // the block text plus a `references` edge, so the graph and the prose agree.
-  const { data: allWorkspaces } = useQuery({ queryKey: ["workspaces"], queryFn: () => api.get<Workspace[]>("/workspaces") });
+  const { data: allPages } = useQuery({ queryKey: ["all-pages"], queryFn: () => api.get<Page[]>("/pages") });
   const [mention, setMention] = useState<{ id: string; query: string } | null>(null);
   // Sources are queried server-side rather than filtered client-side: there can
   // be arbitrarily many of them, and unlike workspaces they aren't already
   // loaded for the sidebar.
   const { data: mentionSources } = useQuery({
     queryKey: ["mention-sources", mention?.query ?? ""],
-    queryFn: () => api.get<Source[]>(`/sources?q=${encodeURIComponent(mention?.query ?? "")}`),
+    queryFn: () => api.get<Page[]>(`/sources?q=${encodeURIComponent(mention?.query ?? "")}`),
     enabled: mention !== null,
   });
 
@@ -410,10 +425,10 @@ export function BlockEditor({ documentId }: { documentId: string }) {
     | { kind: "source"; id: string; label: string; hint: string; href: string };
 
   const mentionOptions = (q: string): MentionOption[] => {
-    const ws: MentionOption[] = (allWorkspaces ?? [])
+    const ws: MentionOption[] = (allPages ?? [])
       .filter((w) => w.title.toLowerCase().includes(q.toLowerCase()))
       .slice(0, 5)
-      .map((w) => ({ kind: "workspace", id: w.id, label: w.title, hint: w.type, href: `/workspace/?id=${w.id}` }));
+      .map((w) => ({ kind: "workspace", id: w.id, label: w.title, hint: "page", href: `/page/?id=${w.id}` }));
     const srcs: MentionOption[] = (mentionSources ?? [])
       .slice(0, 6)
       .map((s) => ({
@@ -421,8 +436,8 @@ export function BlockEditor({ documentId }: { documentId: string }) {
         id: s.id,
         // A capture with no title falls back to its URL, which is still a
         // recognisable handle — better than an unlabelled row.
-        label: s.title ?? s.url ?? "(untitled)",
-        hint: linkMeta(s)?.site ?? s.kind,
+        label: s.title || "(untitled)",
+        hint: linkMeta(s)?.site ?? "source",
         // Always the detail page: it resolves whatever happens to the filing.
         href: `/source/?id=${s.id}`,
       }));
@@ -436,8 +451,8 @@ export function BlockEditor({ documentId }: { documentId: string }) {
     const label = o.label.replace(/[[\]|]/g, " ").replace(/\s+/g, " ").trim() || o.id;
     const next = cur.replace(/@[^\s@]*$/, `[${label}](${o.href}) `);
     setText((s) => ({ ...s, [b.id]: next }));
-    void api.post(`/documents/${documentId}/blocks`, { ops: [{ op: "update", id: b.id, type: b.type, content: { text: next } }] });
-    void api.post("/relate", { source_type: "document", source_id: documentId, target_type: o.kind, target_id: o.id, type: "references" });
+    void api.post(`/pages/${pageId}/blocks`, { ops: [{ op: "update", id: b.id, type: b.type, content: { text: next } }] });
+    void api.post("/relate", { source_type: "page", source_id: pageId, target_type: "page", target_id: o.id, type: "references" });
     setMention(null);
   };
   const pickType = (b: Block, type: string) => {
@@ -447,10 +462,10 @@ export function BlockEditor({ documentId }: { documentId: string }) {
     if (["divider", "table", "embed"].includes(type)) setEditingId(null);
   };
 
-  const resolvePatch = async (p: DocumentPatch, accept: boolean) => {
+  const resolvePatch = async (p: PagePatch, accept: boolean) => {
     await api.post(`/patches/${p.id}/resolve`, { accept });
-    qc.invalidateQueries({ queryKey: ["patches", documentId] });
-    qc.invalidateQueries({ queryKey: ["blocks", documentId] });
+    qc.invalidateQueries({ queryKey: ["patches", pageId] });
+    qc.invalidateQueries({ queryKey: ["blocks", pageId] });
   };
 
   const addFirst = () => { focusAfter.current = { afterId: null }; applyOps([{ op: "insert", after: null, type: "paragraph", content: { text: "" } }]); };
@@ -481,6 +496,7 @@ export function BlockEditor({ documentId }: { documentId: string }) {
 
       {blocks?.map((b) => (
         <div key={b.id} className="et-block" data-type={b.type} data-ai={!!b.is_ai}
+          style={depthOf(b, blocks) ? { marginLeft: `${depthOf(b, blocks) * 1.6}rem` } : undefined}
           data-dragging={dnd.dragId === b.id || undefined}
           {...dnd.dropProps(b.id, (dragId) => moveBefore(dragId, b.id))}>
           <div className="et-block-gutter">
@@ -494,7 +510,9 @@ export function BlockEditor({ documentId }: { documentId: string }) {
               </div>
             </details>
           </div>
-          {b.type === "divider" ? (
+          {b.type === "collection" ? (
+            <CollectionBlock collectionId={String(blockContent(b).collection_id ?? "")} />
+          ) : b.type === "divider" ? (
             <hr className="et-hr" />
           ) : b.type === "table" ? (
             <><TableWidget config={parseContent(b.content_json)} onChange={(content) => applyOps([{ op: "update", id: b.id, type: "table", content }])} /><WidgetStyles /></>

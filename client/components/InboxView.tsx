@@ -1,7 +1,7 @@
 "use client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { api, awaitingEnrichment, linkMeta, type Source, type Workspace } from "@/lib/api";
+import { api, awaitingEnrichment, linkMeta, props, type Page, type RoleRow } from "@/lib/api";
 
 // The inbox: captured material not yet processed. Humans can file a capture to a
 // workspace or clear it; the deeper move — turning it into Insights — is an
@@ -10,13 +10,13 @@ export function InboxView() {
   const qc = useQueryClient();
   const { data: inbox, isLoading } = useQuery({
     queryKey: ["inbox"],
-    queryFn: () => api.get<Source[]>("/inbox"),
+    queryFn: () => api.get<RoleRow[]>("/inbox"),
     // Enrichment happens on the queue, so a freshly pasted link arrives bare and
     // fills in a moment later. Poll only while something is actually pending —
     // once every link has its metadata the interval switches off.
     refetchInterval: (q) => (q.state.data?.some(awaitingEnrichment) ? 2000 : false),
   });
-  const { data: workspaces } = useQuery({ queryKey: ["workspaces"], queryFn: () => api.get<Workspace[]>("/workspaces") });
+  const { data: workspaces } = useQuery({ queryKey: ["all-pages"], queryFn: () => api.get<Page[]>("/pages") });
   const [capture, setCapture] = useState("");
 
   const captureMut = useMutation({
@@ -26,7 +26,7 @@ export function InboxView() {
     onSuccess: () => { setCapture(""); qc.invalidateQueries({ queryKey: ["inbox"] }); },
   });
   const fileMut = useMutation({
-    mutationFn: ({ id, workspace_id }: { id: string; workspace_id: string }) => api.patch(`/sources/${id}`, { workspace_id, status: "processed" }),
+    mutationFn: ({ id, workspace_id }: { id: string; workspace_id: string }) => api.patch(`/sources/${id}`, { page_id: workspace_id, status: "processed" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["inbox"] }),
   });
   const clearMut = useMutation({
@@ -58,22 +58,20 @@ export function InboxView() {
           // The raw paste is only worth showing when it says something the title
           // doesn't: for a bare link it repeats the URL, and for a short note
           // /share seeds the title from the text itself.
-          const showRaw = s.raw && s.raw !== s.url && s.raw !== s.title;
-          return (
+            return (
           <div key={s.id} className="et-inbox-item">
             <div className="et-inbox-main">
-              <span className="et-kind" data-kind={s.kind}>{s.kind}</span>
+              <span className="et-kind" data-kind={String(s.props.kind)}>{String(s.props.kind)}</span>
               {meta?.image && <img className="et-inbox-thumb" src={meta.image} alt="" loading="lazy" />}
               <div className="et-inbox-body">
-                <div className="et-inbox-title">{s.title ?? s.url ?? "(untitled)"}</div>
+                <div className="et-inbox-title">{s.title || String(s.props.url ?? "(untitled)")}</div>
                 {meta?.description && <div className="et-inbox-desc">{meta.description}</div>}
-                {s.url && (
-                  <a className="et-inbox-link" href={s.url} target="_blank" rel="noopener noreferrer">
-                    {meta?.site ?? s.url}
+                {!!s.props.url && (
+                  <a className="et-inbox-link" href={String(s.props.url)} target="_blank" rel="noopener noreferrer">
+                    {meta?.site ?? String(s.props.url)}
                   </a>
                 )}
                 {pending && <div className="et-inbox-pending">Fetching link details…</div>}
-                {showRaw && <div className="et-inbox-raw">{s.raw}</div>}
               </div>
             </div>
             <div className="et-inbox-actions">

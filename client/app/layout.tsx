@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, Instrument_Serif, JetBrains_Mono } from "next/font/google";
 import { Providers } from "./providers";
-import { Spine } from "@/components/Spine";
+import { PageTree } from "@/components/PageTree";
 import { AuthGate } from "@/components/AuthGate";
 import "./globals.css";
 
@@ -54,7 +54,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           {/* Two columns on desktop; globals.css collapses this to one block-flow
               column under the mobile breakpoint, where the Spine goes off-canvas. */}
           <div className="et-shell">
-            <Spine />
+            <PageTree />
             <main style={{ minWidth: 0 }}>
               <AuthGate />
               {children}
