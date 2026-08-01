@@ -6,7 +6,8 @@
 // walking it. Here a project is a thing you scroll, and its tasks and sources
 // are collections sitting inline in the body wherever you put them.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type Collection, type Page, type PagePatch } from "@/lib/api";
+import { useEffect, useRef } from "react";
+import { api, props, type Collection, type Page, type PagePatch } from "@/lib/api";
 import { BlockEditor } from "./BlockEditor";
 import { EmojiPicker } from "./EmojiPicker";
 
@@ -38,12 +39,13 @@ export function PageView({ id }: { id: string }) {
   };
 
   const hasRole = (role: string) => (collections ?? []).some((c) => c.role === role);
+  const fullWidth = !!props(page).full_width;
 
   return (
     <div className="et-page">
       {page.cover && <div className="et-page-cover" style={{ backgroundImage: `url(${page.cover})` }} />}
 
-      <div className="et-page-inner">
+      <div className="et-page-inner" data-full={fullWidth || undefined}>
         <div className="et-crumbs">
           {(ancestors ?? []).map((a) => (
             <span key={a.id}><a href={`/page/?id=${a.id}`}>{a.icon ?? "📄"} {a.title || "Untitled"}</a> / </span>
@@ -58,10 +60,12 @@ export function PageView({ id }: { id: string }) {
               if (url) save({ cover: url });
             }}>Add cover</button>
           )}
+          <button className="et-page-cover-btn" onClick={() => save({ properties: { full_width: !fullWidth } })}>
+            {fullWidth ? "Narrow width" : "Full width"}
+          </button>
         </div>
 
-        <input className="et-page-title" defaultValue={page.title} placeholder="Untitled"
-          onBlur={(e) => { if (e.target.value !== page.title) save({ title: e.target.value }); }} />
+        <TitleInput title={page.title} onSave={(t) => save({ title: t })} />
 
         <PatchQueue pageId={id} />
 
@@ -78,6 +82,25 @@ export function PageView({ id }: { id: string }) {
       </div>
       <PageStyles />
     </div>
+  );
+}
+
+/** The page title. A textarea rather than an input so long titles wrap instead
+ *  of scrolling out of sight, auto-growing to fit — Enter commits rather than
+ *  inserting a newline, since a title is one line of text however many rows it
+ *  takes to show. */
+function TitleInput({ title, onSave }: { title: string; onSave: (t: string) => void }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const grow = () => {
+    const el = ref.current;
+    if (el) { el.style.height = "auto"; el.style.height = `${el.scrollHeight}px`; }
+  };
+  useEffect(grow, [title]);
+  return (
+    <textarea ref={ref} className="et-page-title" defaultValue={title} placeholder="Untitled" rows={1}
+      onInput={grow}
+      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.currentTarget as HTMLTextAreaElement).blur(); } }}
+      onBlur={(e) => { if (e.target.value !== title) onSave(e.target.value); }} />
   );
 }
 
@@ -122,6 +145,9 @@ function PageStyles() {
       .et-page-cover { height: 11rem; background-size: cover; background-position: center; }
       /* One column, one measure. A page is meant to be read top to bottom. */
       .et-page-inner { max-width: 46rem; margin: 0 auto; padding: 2rem 3rem 6rem; }
+      /* Full width: the measure gives way but the gutters stay, so text never
+         runs into the window edge. */
+      .et-page-inner[data-full] { max-width: none; margin: 0; padding-left: 4rem; padding-right: 4rem; }
       .et-crumbs { font-size: 0.78rem; color: var(--ink-faint); margin-bottom: 0.8rem; }
       .et-crumbs a { color: inherit; text-decoration: none; }
       .et-crumbs a:hover { color: var(--ink); }
@@ -129,7 +155,7 @@ function PageStyles() {
       .et-page-icon { font-size: 3rem; background: none; border: none; cursor: pointer; padding: 0; line-height: 1; }
       .et-page-cover-btn { opacity: 0; background: none; border: none; color: var(--ink-faint); font-size: 0.8rem; cursor: pointer; }
       .et-page-inner:hover .et-page-cover-btn { opacity: 1; }
-      .et-page-title { font-size: 2.4rem; font-weight: 700; background: none; border: none; width: 100%; color: inherit; font-family: inherit; padding: 0.4rem 0 1rem; letter-spacing: -0.02em; }
+      .et-page-title { font-size: 2.4rem; font-weight: 700; background: none; border: none; width: 100%; color: inherit; font-family: inherit; padding: 0.4rem 0 1rem; letter-spacing: -0.02em; line-height: 1.15; resize: none; overflow: hidden; display: block; }
       .et-page-title:focus { outline: none; }
       .et-patches { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1rem; }
       .et-patch { display: flex; align-items: center; gap: 0.6rem; border: 1px solid var(--color-iris); border-radius: 7px; padding: 0.5rem 0.7rem; font-size: 0.85rem; }

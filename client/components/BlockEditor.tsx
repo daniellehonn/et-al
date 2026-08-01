@@ -496,6 +496,7 @@ export function BlockEditor({ pageId }: { pageId: string }) {
 
       {blocks?.map((b) => (
         <div key={b.id} className="et-block" data-type={b.type} data-ai={!!b.is_ai}
+          data-level={b.type === "heading" ? Math.min(Number(blockContent(b).level) || 1, 3) : undefined}
           style={depthOf(b, blocks) ? { marginLeft: `${depthOf(b, blocks) * 1.6}rem` } : undefined}
           data-dragging={dnd.dragId === b.id || undefined}
           {...dnd.dropProps(b.id, (dragId) => moveBefore(dragId, b.id))}>
@@ -797,7 +798,19 @@ function EditorStyles() {
       }
       .et-mention-chip:hover { text-decoration: underline; }
       @media (prefers-color-scheme: dark) { .et-mention-chip { background: color-mix(in srgb, var(--color-iris) 20%, transparent); } }
-      .et-block[data-type="heading"] .et-block-render { font-family: var(--font-display); font-size: 1.7rem; line-height: 1.2; padding-top: 0.6rem; }
+      /* Notion sets headings in the body sans, distinguished by weight and size
+         rather than by a different typeface, and gives each level its own size.
+         A single serif size for every heading flattened the document's structure. */
+      .et-block[data-type="heading"] .et-block-render,
+      .et-block[data-type="heading"] .et-block-input {
+        font-family: var(--font-sans); font-weight: 600; letter-spacing: -0.01em; line-height: 1.3;
+      }
+      .et-block[data-type="heading"][data-level="1"] .et-block-render,
+      .et-block[data-type="heading"][data-level="1"] .et-block-input { font-size: 1.75rem; padding-top: 1.1rem; }
+      .et-block[data-type="heading"][data-level="2"] .et-block-render,
+      .et-block[data-type="heading"][data-level="2"] .et-block-input { font-size: 1.35rem; padding-top: 0.9rem; }
+      .et-block[data-type="heading"][data-level="3"] .et-block-render,
+      .et-block[data-type="heading"][data-level="3"] .et-block-input { font-size: 1.1rem; padding-top: 0.7rem; }
       .et-block[data-type="quote"] .et-block-render { border-left: 2px solid var(--color-iris); padding-left: 0.9rem; color: var(--ink-soft); font-style: italic; }
       .et-block[data-type="bullet"] .et-block-render, .et-block[data-type="todo"] .et-block-render, .et-block[data-type="numbered"] .et-block-render { padding-left: 1.1rem; }
       .et-render-code { font-family: var(--font-mono); font-size: 0.85rem; background: var(--paper-raised); border-radius: 7px; padding: 0.6rem 0.8rem; margin: 0.28rem 0; white-space: pre-wrap; cursor: text; }
@@ -807,7 +820,6 @@ function EditorStyles() {
       }
       .et-block-input:focus { outline: none; }
       .et-block-input::placeholder { color: var(--line-strong); }
-      .et-block[data-type="heading"] .et-block-input { font-family: var(--font-display); font-size: 1.7rem; line-height: 1.2; padding-top: 0.6rem; }
       .et-block[data-type="quote"] .et-block-input { border-left: 2px solid var(--color-iris); padding-left: 0.9rem; color: var(--ink-soft); font-style: italic; }
       .et-block[data-type="code"] .et-block-input { font-family: var(--font-mono); font-size: 0.85rem; background: var(--paper-raised); border-radius: 7px; padding: 0.6rem 0.8rem; }
       .et-block[data-type="bullet"] .et-block-input { padding-left: 1.1rem; }
@@ -828,7 +840,8 @@ function EditorStyles() {
         .et-block[data-type="todo"]::before { left: 1rem; }
         .et-slash-menu { left: 1rem; right: 0; min-width: 0; }
         .et-block[data-type="heading"] .et-block-render,
-        .et-block[data-type="heading"] .et-block-input { font-size: 1.35rem; }
+        .et-block[data-type="heading"][data-level="1"] .et-block-render,
+        .et-block[data-type="heading"][data-level="1"] .et-block-input { font-size: 1.45rem; }
         .et-embed-iframe { height: 14rem; }
         /* Drag handles are hover-revealed and unusable on touch — the type
            menu they double as still opens on tap, so keep them visible. */
