@@ -1,52 +1,55 @@
 // The Context Engine. The runtime assembles the right context deterministically;
-// the agent interprets it. Layer 1 (explicit workspace + inherited ancestors) and
-// Layer 2 (graph expansion + vector matches) are built; Layer 3 (global
-// cross-workspace recall) is deferred.
-import { Ctx, all } from "./db";
-import { ancestors, getWorkspace, type Workspace } from "./workspaces";
-import { listObjectives, type Objective } from "./objectives";
-import { listTasks, type Task } from "./tasks";
-import { listDocuments, type Document } from "./documents";
-import { listDecisions, type Decision } from "./decisions";
-import { search } from "./search";
-import type { SearchHit } from "./search";
+// the agent interprets it. Layer 1 (the page + its inherited ancestors) and
+// Layer 2 (search expansion + vector matches) are built; Layer 3 (global
+// cross-page recall) is deferred.
+//
+// v8 note: a context package is now built for a *page*, and "child pages" has
+// replaced "documents" — under the new model a document is not a separate kind
+// of thing, it is just a page you nested.
+import { Ctx } from "./db";
+import { getAncestors, getPage, listChildren, type Page } from "./pages";
+import { listCollections, type Collection } from "./collections";
+import { listDecisions, listTasks, type RoleRow } from "./roles";
+import { getBlocks, type Block } from "./blocks";
+import { search, type SearchHit } from "./search";
 
 export interface ContextPackage {
-  workspace: Workspace;
-  inherited: Workspace[]; // ancestors, root last
-  objectives: Objective[];
-  open_tasks: Task[];
-  documents: Document[];
-  recent_decisions: Decision[];
-  related: SearchHit[]; // Layer 2: query matches across the graph
+  page: Page;
+  inherited: Page[];       // ancestors, root first
+  body: Block[];           // the page's own content — in v7 this was never in context
+  children: Page[];
+  collections: Collection[];
+  open_tasks: RoleRow[];
+  recent_decisions: RoleRow[];
+  related: SearchHit[];    // Layer 2: query matches across the graph
 }
 
-export async function buildContext(
-  c: Ctx,
-  workspaceId: string,
-  query?: string,
-): Promise<ContextPackage | null> {
-  const workspace = await getWorkspace(c, workspaceId);
-  if (!workspace) return null;
+export async function buildContext(c: Ctx, pageId: string, query?: string): Promise<ContextPackage | null> {
+  const page = await getPage(c, pageId);
+  if (!page) return null;
 
-  const [inherited, objectives, openTasks, documents, decisions] = await Promise.all([
-    ancestors(c, workspaceId),
-    listObjectives(c, workspaceId),
-    listTasks(c, workspaceId, {}).then((ts) => ts.filter((t) => t.status !== "done")),
-    listDocuments(c, workspaceId),
-    all<Decision>(c, `SELECT * FROM decision WHERE workspace_id = ? ORDER BY decided_on DESC LIMIT 10`, workspaceId),
+  const [inherited, body, children, collections, tasks, decisions] = await Promise.all([
+    getAncestors(c, pageId),
+    getBlocks(c, pageId),
+    listChildren(c, pageId),
+    listCollections(c, pageId),
+    listTasks(c, { pageId }),
+    listDecisions(c, pageId),
   ]);
 
-  // Layer 2: pull related material by the query (or the workspace title).
-  const related = await search(c, query ?? workspace.title, { limit: 12 });
+  // Layer 2: pull related material by the query (or the page title).
+  const related = await search(c, query ?? page.title, { limit: 12 });
 
   return {
-    workspace,
+    page,
     inherited,
-    objectives,
-    open_tasks: openTasks,
-    documents,
-    recent_decisions: decisions,
+    body,
+    children,
+    collections,
+    open_tasks: tasks.filter((t) => t.props.status !== "done"),
+    recent_decisions: decisions
+      .sort((a, b) => Number(b.props.decided_on ?? 0) - Number(a.props.decided_on ?? 0))
+      .slice(0, 10),
     related,
   };
 }

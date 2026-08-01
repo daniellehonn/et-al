@@ -4,7 +4,7 @@
 import { z } from "zod";
 import { setDaily3Input } from "../schema";
 import { Ctx, RuleError, all, first, id, logEvent, now } from "./db";
-import type { Task } from "./tasks";
+import { getPage, properties, type Page } from "./pages";
 
 export interface DailyFocusDay {
   date: string;
@@ -17,7 +17,7 @@ export interface DailyFocusSlot {
   id: string;
   date: string;
   slot: number;
-  task_id: string;
+  page_id: string;
   status: string;
 }
 
@@ -25,7 +25,7 @@ export interface Daily3 {
   date: string;
   confirmed: boolean;
   reflection: string | null;
-  slots: Array<{ slot: number; status: string; task: Task | null }>;
+  slots: Array<{ slot: number; status: string; task: (Page & { props: Record<string, unknown> }) | null }>;
   streak: number;
 }
 
@@ -51,7 +51,10 @@ export async function getDaily3(c: Ctx, date = today()): Promise<Daily3> {
   const day = await first<DailyFocusDay>(c, `SELECT * FROM daily_focus_day WHERE date = ?`, date);
   const slots = await all<DailyFocusSlot>(c, `SELECT * FROM daily_focus_slot WHERE date = ? ORDER BY slot`, date);
   const enriched = await Promise.all(
-    slots.map(async (s) => ({ slot: s.slot, status: s.status, task: await first<Task>(c, `SELECT * FROM task WHERE id = ?`, s.task_id) })),
+    slots.map(async (s) => {
+      const page = await getPage(c, s.page_id);
+      return { slot: s.slot, status: s.status, task: page ? { ...page, props: properties(page) } : null };
+    }),
   );
   return {
     date,
@@ -75,7 +78,7 @@ export async function setDaily3(c: Ctx, input: z.infer<typeof setDaily3Input>): 
   let slot = 1;
   for (const taskId of data.task_ids.slice(0, 3)) {
     await c.db
-      .prepare(`INSERT INTO daily_focus_slot (id, date, slot, task_id, status) VALUES (?, ?, ?, ?, 'planned')`)
+      .prepare(`INSERT INTO daily_focus_slot (id, date, slot, page_id, status) VALUES (?, ?, ?, ?, 'planned')`)
       .bind(id("dfs"), date, slot++, taskId)
       .run();
   }

@@ -1,17 +1,14 @@
-// The store: one module per entity, rules living next to the data. Every function
-// takes a Ctx carrying the actor, so writes are attributed automatically.
+// The store: pages and collections are the primitives; roles.ts keeps the typed
+// surface (tasks, sources, insights, decisions) addressable on top of them.
+// Every function takes a Ctx carrying the actor, so writes are attributed.
 export * from "./db";
-export * from "./workspaces";
-export * from "./objectives";
-export * from "./tasks";
-export * from "./documents";
-export * from "./sources";
-export * from "./insights";
-export * from "./decisions";
+export * from "./pages";
+export * from "./collections";
+export * from "./blocks";
+export * from "./roles";
 export * from "./relations";
 export * from "./daily";
 export * from "./search";
 export * from "./health";
 export * from "./context";
 export * from "./home";
-export * from "./overview";

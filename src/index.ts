@@ -78,14 +78,14 @@ app.get("/health", (c) => {
   });
 });
 
-// Seed the default Life Areas. Idempotent-ish: only seeds when empty.
+// Seed the default Life Areas as root pages. Idempotent-ish: only seeds when empty.
 app.post("/api/bootstrap", async (c) => {
   const c2 = ctx(c.env, "human");
-  const existing = await store.listWorkspaces(c2);
+  const existing = await store.listChildren(c2, null);
   if (existing.length > 0) return c.json({ seeded: false, count: existing.length });
-  const life = await store.createWorkspace(c2, { type: "area", title: "Life" });
+  const life = await store.createPage(c2, { title: "Life", icon: "\u{1F31F}" });
   for (const title of ["Build", "School", "Career", "Health", "Personal"]) {
-    await store.createWorkspace(c2, { parent_id: life.id, type: "area", title });
+    await store.createPage(c2, { parent_page_id: life.id, title });
   }
   return c.json({ seeded: true });
 });
@@ -134,11 +134,14 @@ export default {
 // instead of a bare URL. Best-effort throughout: a link that won't fetch or
 // won't parse is still a perfectly good capture.
 async function enrichSource(c: store.Ctx, env: Env, sourceId: string): Promise<void> {
-  const src = await store.getSource(c, sourceId);
-  if (!src?.url) return;
+  const src = await store.getPage(c, sourceId);
+  if (!src) return;
+  const props = store.properties(src);
+  const url = typeof props.url === "string" ? props.url : null;
+  if (!url) return;
 
   let target: URL;
-  try { target = new URL(src.url); } catch { return; }
+  try { target = new URL(url); } catch { return; }
   if (target.protocol !== "http:" && target.protocol !== "https:") return;
 
   const meta = await fetchLinkMeta(target);
@@ -148,14 +151,11 @@ async function enrichSource(c: store.Ctx, env: Env, sourceId: string): Promise<v
 
   // Only claim the title if the human never wrote one. `/api/share` seeds title
   // from the URL when a bare link is pasted, so that counts as unwritten too.
-  const keepTitle = src.title && src.title !== src.url;
+  const keepTitle = src.title && src.title !== url;
   const title = keepTitle ? src.title : (usefulTitle(meta.title, merged.site) ?? src.title);
 
-  await env.DB
-    .prepare(`UPDATE source SET title = ?, metadata_json = ?, updated_at = ? WHERE id = ?`)
-    .bind(title, JSON.stringify(merged), Date.now(), sourceId)
-    .run();
-  await store.ftsUpsert(c, "source", sourceId, title ?? src.url, [src.raw, meta.description].filter(Boolean).join("\n"));
+  await store.updatePage(c, sourceId, { title: title ?? src.title, properties: { metadata: JSON.stringify(merged) } });
+  await store.ftsUpsert(c, "page", sourceId, title ?? url, [await store.bodyText(c, sourceId), meta.description].filter(Boolean).join("\n"));
 }
 
 // Reject a fetched title that only names the platform. Login-walled feeds serve
@@ -225,29 +225,30 @@ async function fetchLinkMeta(target: URL): Promise<{ title?: string; description
 }
 
 async function ingestSource(c: store.Ctx, env: Env, sourceId: string): Promise<void> {
-  const src = await store.getSource(c, sourceId);
-  if (!src || !src.url) return;
-  await env.DB.prepare(`UPDATE source SET status = 'processing', updated_at = ? WHERE id = ?`).bind(Date.now(), sourceId).run();
+  const src = await store.getPage(c, sourceId);
+  if (!src) return;
+  const url = store.properties(src).url;
+  if (typeof url !== "string") return;
+  await store.updatePage(c, sourceId, { properties: { status: "processing" } });
   // Deterministic fetch only — no interpretation. The agent turns this into insights.
   let text = "";
   try {
-    const res = await fetch(src.url);
+    const res = await fetch(url);
     text = (await res.text()).slice(0, 100_000);
   } catch { /* leave text empty; still mark processed so it exits the inbox */ }
-  await env.DB
-    .prepare(`UPDATE source SET status = 'processed', metadata_json = ?, updated_at = ? WHERE id = ?`)
-    .bind(JSON.stringify({ fetched_len: text.length }), Date.now(), sourceId)
-    .run();
-  await store.ftsUpsert(c, "source", sourceId, src.title ?? src.url, text);
+  await store.updatePage(c, sourceId, { properties: { status: "processed", fetched_len: text.length } });
+  await store.ftsUpsert(c, "page", sourceId, src.title || url, text);
 }
 
 async function embedInsight(c: store.Ctx, env: Env, insightId: string): Promise<void> {
   if (!env.AI || !env.VECTORIZE) return;
-  const ins = await store.getInsight(c, insightId);
+  const ins = await store.getPage(c, insightId);
   if (!ins) return;
-  const out = (await env.AI.run("@cf/baai/bge-base-en-v1.5" as never, { text: [`${ins.title}\n\n${ins.body}`] } as never)) as unknown as { data: number[][] };
+  // The note's prose lives in its blocks now, not a body column.
+  const body = await store.bodyText(c, insightId);
+  const out = (await env.AI.run("@cf/baai/bge-base-en-v1.5" as never, { text: [`${ins.title}\n\n${body}`] } as never)) as unknown as { data: number[][] };
   const vector = out?.data?.[0];
   if (!vector) return;
-  await env.VECTORIZE.upsert([{ id: insightId, values: vector, metadata: { workspace_id: ins.workspace_id ?? "" } }]);
-  await env.DB.prepare(`UPDATE insight SET embedding_id = ? WHERE id = ?`).bind(insightId, insightId).run();
+  await env.VECTORIZE.upsert([{ id: insightId, values: vector, metadata: { page_id: ins.collection_id ?? "" } }]);
+  await store.updatePage(c, insightId, { properties: { embedding_id: insightId } });
 }
