@@ -8,6 +8,8 @@ import { api, type PageNode } from "@/lib/api";
 
 export function PageTree() {
   const qc = useQueryClient();
+  // Drag state lives at the tree root so a drag can cross between branches.
+  const [dragId, setDragId] = useState<string | null>(null);
   // The tree lives in the layout, so it cannot be handed the current page as a
   // prop. Read it from the URL instead — these routes are statically exported,
   // and useSearchParams would force a Suspense boundary around the whole shell.
@@ -29,8 +31,18 @@ export function PageTree() {
   return (
     <nav className="et-tree">
       <a className="et-tree-home" href="/">et al.</a>
-      <div className="et-tree-body">
-        {(tree ?? []).map((n) => <TreeNode key={n.id} node={n} depth={0} activeId={activeId} />)}
+      <div className="et-tree-body"
+        // Dropping on the empty space below the tree promotes a page to a root.
+        onDragOver={(e) => { if (dragId) e.preventDefault(); }}
+        onDrop={async (e) => {
+          if (!dragId || e.defaultPrevented) return;
+          await api.post(`/pages/${dragId}/move`, { new_parent_page_id: null });
+          setDragId(null);
+          qc.invalidateQueries({ queryKey: ["tree"] });
+        }}>
+        {(tree ?? []).map((n) => (
+          <TreeNode key={n.id} node={n} depth={0} activeId={activeId} dragId={dragId} setDragId={setDragId} />
+        ))}
       </div>
       <button className="et-tree-new" onClick={addRoot}>+ New page</button>
       <a className="et-tree-link" href="/search/">Search</a>
@@ -39,8 +51,13 @@ export function PageTree() {
   );
 }
 
-function TreeNode({ node, depth, activeId }: { node: PageNode; depth: number; activeId?: string }) {
+function TreeNode({ node, depth, activeId, dragId, setDragId }: {
+  node: PageNode; depth: number; activeId?: string;
+  dragId: string | null; setDragId: (id: string | null) => void;
+}) {
   const qc = useQueryClient();
+  // "inside" nests under this page; "before"/"after" reorder among its siblings.
+  const [dropAt, setDropAt] = useState<"inside" | "before" | "after" | null>(null);
   // Ancestors of the active page start open, so deep-linking to a nested page
   // does not land you in a sidebar that looks collapsed and empty.
   const [open, setOpen] = useState(() => depth === 0 || contains(node, activeId));
@@ -80,7 +97,42 @@ function TreeNode({ node, depth, activeId }: { node: PageNode; depth: number; ac
 
   return (
     <div className="et-tree-node">
-      <div className="et-tree-row" data-active={node.id === activeId} style={{ paddingLeft: `${0.4 + depth * 0.85}rem` }}>
+      <div className="et-tree-row" data-active={node.id === activeId} data-drop={dropAt ?? undefined}
+        draggable
+        onDragStart={(e) => { e.stopPropagation(); setDragId(node.id); }}
+        onDragEnd={() => { setDragId(null); setDropAt(null); }}
+        onDragOver={(e) => {
+          if (!dragId || dragId === node.id) return;
+          e.preventDefault();
+          e.stopPropagation();
+          // The top and bottom quarters reorder; the middle nests. Without the
+          // bands there is no way to express "put it next to" versus "put it in".
+          const box = e.currentTarget.getBoundingClientRect();
+          const y = (e.clientY - box.top) / box.height;
+          setDropAt(y < 0.25 ? "before" : y > 0.75 ? "after" : "inside");
+        }}
+        onDragLeave={() => setDropAt(null)}
+        onDrop={async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const where = dropAt;
+          setDropAt(null);
+          if (!dragId || dragId === node.id || !where) return;
+          const body = where === "inside"
+            ? { new_parent_page_id: node.id }
+            // Sitting beside this node means sharing its parent; the position is
+            // nudged off this node's own so the order is unambiguous.
+            : { new_parent_page_id: node.parent_page_id, position: node.position + (where === "before" ? -0.5 : 0.5) };
+          try {
+            await api.post(`/pages/${dragId}/move`, body);
+          } catch (err) {
+            // The server refuses a move that would make a page its own ancestor.
+            alert(err instanceof Error ? err.message : "Could not move that page");
+          }
+          setDragId(null);
+          qc.invalidateQueries({ queryKey: ["tree"] });
+        }}
+        style={{ paddingLeft: `${0.4 + depth * 0.85}rem` }}>
         <button className="et-tree-caret" data-has={hasKids} aria-label={open ? "Collapse" : "Expand"}
           onClick={() => setOpen((v) => !v)}>{hasKids ? (open ? "▾" : "▸") : "·"}</button>
         <a className="et-tree-name" href={`/page/?id=${node.id}`}>
@@ -96,7 +148,9 @@ function TreeNode({ node, depth, activeId }: { node: PageNode; depth: number; ac
           </div>
         </details>
       </div>
-      {open && node.children.map((k) => <TreeNode key={k.id} node={k} depth={depth + 1} activeId={activeId} />)}
+      {open && node.children.map((k) => (
+        <TreeNode key={k.id} node={k} depth={depth + 1} activeId={activeId} dragId={dragId} setDragId={setDragId} />
+      ))}
     </div>
   );
 }
@@ -119,6 +173,9 @@ function TreeStyles() {
       .et-tree-row { display: flex; align-items: center; gap: 0.15rem; border-radius: 5px; padding-right: 0.25rem; }
       .et-tree-row:hover { background: var(--surface-3, rgba(128,128,128,0.12)); }
       .et-tree-row[data-active="true"] { background: var(--surface-3, rgba(128,128,128,0.18)); font-weight: 500; }
+      .et-tree-row[data-drop="inside"] { background: var(--color-iris-soft); box-shadow: inset 0 0 0 1px var(--color-iris); }
+      .et-tree-row[data-drop="before"] { box-shadow: inset 0 2px 0 0 var(--color-iris); }
+      .et-tree-row[data-drop="after"] { box-shadow: inset 0 -2px 0 0 var(--color-iris); }
       .et-tree-caret { background: none; border: none; color: var(--ink-faint); cursor: pointer; width: 1.1rem; font-size: 0.7rem; padding: 0; }
       .et-tree-caret[data-has="false"] { opacity: 0.25; cursor: default; }
       .et-tree-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 0.35rem; padding: 0.3rem 0; color: inherit; text-decoration: none; font-size: 0.88rem; }
