@@ -34,7 +34,12 @@ app.use("/api/*", async (c, next) => {
   const path = new URL(c.req.url).pathname;
   if (path === "/api/login" || path === "/api/logout" || path === "/api/session") return next();
   const method = c.req.method;
-  if (method !== "GET" && method !== "HEAD") {
+  // Querying a collection is a read that happens to be a POST — its filters and
+  // sorts are structured, and encoding them into a query string would mean a
+  // second parser to keep in step. Treating it as a mutation would make every
+  // inline database fail to load in read-only mode.
+  const isReadPost = method === "POST" && /^\/api\/collections\/[^/]+\/query$/.test(path);
+  if (method !== "GET" && method !== "HEAD" && !isReadPost) {
     if (!validKey(c.env, credential(c.req.raw))) {
       return c.json({ error: "unauthorized" }, 401);
     }
