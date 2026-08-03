@@ -5,11 +5,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api, type PageNode } from "@/lib/api";
+import { TrashPanel } from "./PageMenu";
 
 export function PageTree() {
   const qc = useQueryClient();
   // Drag state lives at the tree root so a drag can cross between branches.
   const [dragId, setDragId] = useState<string | null>(null);
+  const [showTrash, setShowTrash] = useState(false);
   // The tree lives in the layout, so it cannot be handed the current page as a
   // prop. Read it from the URL instead — these routes are statically exported,
   // and useSearchParams would force a Suspense boundary around the whole shell.
@@ -46,6 +48,8 @@ export function PageTree() {
       </div>
       <button className="et-tree-new" onClick={addRoot}>+ New page</button>
       <a className="et-tree-link" href="/search/">Search</a>
+      <button className="et-tree-new" onClick={() => setShowTrash((v) => !v)}>Trash</button>
+      {showTrash && <TrashPanel onDone={() => setShowTrash(false)} />}
       <TreeStyles />
     </nav>
   );

@@ -39,6 +39,7 @@ export interface Page {
   id: string; parent_page_id: string | null; collection_id: string | null;
   title: string; icon: string | null; cover: string | null;
   properties_json: string; position: number; status: string;
+  trashed_at: number | null; favorite: number;
   is_ai: number; actor: string; created_at: number; updated_at: number;
 }
 export interface PageNode extends Page { children: PageNode[] }

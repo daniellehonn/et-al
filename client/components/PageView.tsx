@@ -10,6 +10,7 @@ import { useEffect, useRef } from "react";
 import { api, props, type Collection, type Page, type PagePatch } from "@/lib/api";
 import { BlockEditor } from "./BlockEditor";
 import { EmojiPicker } from "./EmojiPicker";
+import { PageMenu } from "./PageMenu";
 
 export function PageView({ id }: { id: string }) {
   const qc = useQueryClient();
@@ -63,6 +64,7 @@ export function PageView({ id }: { id: string }) {
           <button className="et-page-cover-btn" onClick={() => save({ properties: { full_width: !fullWidth } })}>
             {fullWidth ? "Narrow width" : "Full width"}
           </button>
+          <PageMenu page={page} onChanged={() => qc.invalidateQueries({ queryKey: ["page", id] })} />
         </div>
 
         <TitleInput title={page.title} onSave={(t) => save({ title: t })} />
@@ -154,7 +156,9 @@ function PageStyles() {
       .et-page-icon-row { display: flex; align-items: center; gap: 0.6rem; position: relative; }
       .et-page-icon { font-size: 3rem; background: none; border: none; cursor: pointer; padding: 0; line-height: 1; }
       .et-page-cover-btn { opacity: 0; background: none; border: none; color: var(--ink-faint); font-size: 0.8rem; cursor: pointer; }
-      .et-page-inner:hover .et-page-cover-btn { opacity: 1; }
+      .et-page-inner:hover .et-page-cover-btn, .et-page-inner:hover .et-pagemenu-row { opacity: 1; }
+      .et-pagemenu-row { opacity: 0; transition: opacity 0.12s; }
+      .et-pagemenu[open] { opacity: 1; }
       .et-page-title { font-size: 2.4rem; font-weight: 700; background: none; border: none; width: 100%; color: inherit; font-family: inherit; padding: 0.4rem 0 1rem; letter-spacing: -0.02em; line-height: 1.15; resize: none; overflow: hidden; display: block; }
       .et-page-title:focus { outline: none; }
       .et-patches { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1rem; }
