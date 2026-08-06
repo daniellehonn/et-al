@@ -70,6 +70,53 @@ def md_to_blocks(md):
     return out
 
 
+def emit_collection(col, page_id, position, sql):
+    """A Notion database becomes a collection: schema, a table view, the rows as
+    pages, and a placement block so it sits in the page body like any other."""
+    cid = nid('col')
+    sql.append(
+        "INSERT INTO collection (id, parent_page_id, title, icon, role, schema_json, inline, position, created_at, updated_at) VALUES ("
+        f"{esc(cid)}, {esc(page_id)}, {esc(col['title'])}, "
+        f"{esc(col.get('icon')) if col.get('icon') else 'NULL'}, "
+        f"{esc(col['role']) if col.get('role') else 'NULL'}, "
+        f"{esc(json.dumps(col['schema']))}, 1, {position}, {NOW}, {NOW});"
+    )
+    sql.append(
+        "INSERT INTO collection_view (id, collection_id, name, type, filter_json, sort_json, group_by, position, created_at) VALUES ("
+        f"{nid_sql('cvw')}, {esc(cid)}, 'Table', 'table', '[]', '[]', NULL, 0, {NOW});"
+    )
+    # A board too when something looks like a status — the reason to have one.
+    status_key = next((p['key'] for p in col['schema'] if p['type'] == 'select'), None)
+    if status_key:
+        sql.append(
+            "INSERT INTO collection_view (id, collection_id, name, type, filter_json, sort_json, group_by, position, created_at) VALUES ("
+            f"{nid_sql('cvw')}, {esc(cid)}, 'Board', 'board', '[]', '[]', {esc(status_key)}, 1, {NOW});"
+        )
+    sql.append(
+        "INSERT INTO block (id, page_id, parent_block_id, type, content_json, position, version, is_ai, created_at, updated_at) VALUES ("
+        f"{nid_sql('blk')}, {esc(page_id)}, NULL, 'collection', "
+        f"{esc(json.dumps({'collection_id': cid}))}, {100 + position}, 1, 0, {NOW}, {NOW});"
+    )
+    for i, row in enumerate(col.get('rows', [])):
+        rid = nid('pg')
+        title = row.pop('__title__', '') or ''
+        sql.append(
+            "INSERT INTO page (id, parent_page_id, collection_id, title, icon, cover, properties_json, "
+            "position, status, trashed_at, favorite, is_ai, actor, created_at, updated_at) VALUES ("
+            f"{esc(rid)}, NULL, {esc(cid)}, {esc(title)}, NULL, NULL, {esc(json.dumps(row))}, "
+            f"{i}, 'active', NULL, 0, 0, 'human', {NOW}, {NOW});"
+        )
+        sql.append(
+            "INSERT INTO search_fts (entity_type, entity_id, title, body) VALUES "
+            f"('page', {esc(rid)}, {esc(title)}, '');"
+        )
+    return cid
+
+
+def nid_sql(prefix):
+    return esc(nid(prefix))
+
+
 def emit_page(node, parent_id, position, sql):
     pid = nid('pg')
     sql.append(
@@ -98,6 +145,9 @@ def emit_page(node, parent_id, position, sql):
         )
         pos += 1
         stack = stack[:d] + [bid]
+
+    for i, col in enumerate(node.get('collections', [])):
+        emit_collection(col, pid, i, sql)
 
     for i, child in enumerate(node.get('children', [])):
         emit_page(child, pid, i, sql)
