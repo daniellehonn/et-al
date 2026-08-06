@@ -52,5 +52,7 @@ APP_NAME = "et al."
 # with no CORS. `client/out` is Next's static export; `npm run deploy` builds it.
 [assets]
 directory = "client/out"
-run_worker_first = ["/api/*", "/mcp", "/mcp/*", "/health"]
+# /files/* must reach the Worker: otherwise not_found_handling below serves
+# the SPA shell for every image URL and nothing in R2 is ever reachable.
+run_worker_first = ["/api/*", "/mcp", "/mcp/*", "/health", "/files/*"]
 not_found_handling = "single-page-application"
