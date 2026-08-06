@@ -95,6 +95,35 @@ app.post("/api/bootstrap", async (c) => {
   return c.json({ seeded: true });
 });
 
+// ---- Files (R2) -------------------------------------------------------------
+// Imported Notion images have to live somewhere permanent: Notion serves them
+// from S3 with X-Amz-Expires measured in minutes, so a copied URL is a dead link
+// almost immediately. Uploading them into VAULT and serving from here is what
+// makes an imported note survive leaving Notion.
+
+// Served outside /api so an <img src> is a plain, cacheable URL. Reads are open,
+// which matches the rest of the app — the guard is on writing, not viewing.
+app.get("/files/*", async (c) => {
+  const key = new URL(c.req.url).pathname.replace(/^\/files\//, "");
+  if (!key) return c.text("not found", 404);
+  const obj = await c.env.VAULT.get(key);
+  if (!obj) return c.text("not found", 404);
+  const headers = new Headers();
+  obj.writeHttpMetadata(headers);
+  headers.set("etag", obj.httpEtag);
+  // Keys are content-addressed by the importer, so a hit can be cached hard.
+  headers.set("cache-control", "public, max-age=31536000, immutable");
+  return new Response(obj.body, { headers });
+});
+
+// Upload sits under /api so the existing mutation gate protects it.
+app.put("/api/files/:key{.+}", async (c) => {
+  const key = c.req.param("key");
+  const contentType = c.req.header("content-type") ?? "application/octet-stream";
+  await c.env.VAULT.put(key, c.req.raw.body, { httpMetadata: { contentType } });
+  return c.json({ ok: true, key, url: `/files/${key}` });
+});
+
 app.route("/api", api);
 
 // MCP: Bearer/x-api-key required for every call. The client name becomes the actor.
