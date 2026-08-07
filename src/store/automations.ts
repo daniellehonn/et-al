@@ -71,12 +71,26 @@ export function parseCron(expr: string): Fields | null {
   return f;
 }
 
+// Formatters are cached per zone: constructing one is expensive, and the naive
+// version built a fresh formatter for every candidate minute — 211,920 of them
+// for a yearly schedule, which exceeded the Worker CPU limit and killed the
+// isolate mid-way through recording a run.
+const FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+function formatterFor(timeZone: string): Intl.DateTimeFormat {
+  let f = FORMATTERS.get(timeZone);
+  if (!f) {
+    f = new Intl.DateTimeFormat("en-US", {
+      timeZone, year: "numeric", month: "numeric", day: "numeric",
+      hour: "numeric", minute: "numeric", weekday: "short", hour12: false,
+    });
+    FORMATTERS.set(timeZone, f);
+  }
+  return f;
+}
+
 /** The wall-clock fields of an instant, in a given zone. */
 function partsIn(ts: number, timeZone: string) {
-  const fmt = new Intl.DateTimeFormat("en-US", {
-    timeZone, year: "numeric", month: "numeric", day: "numeric",
-    hour: "numeric", minute: "numeric", weekday: "short", hour12: false,
-  });
+  const fmt = formatterFor(timeZone);
   const p: Record<string, string> = {};
   for (const { type, value } of fmt.formatToParts(new Date(ts))) p[type] = value;
   const dowMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
@@ -88,15 +102,19 @@ function partsIn(ts: number, timeZone: string) {
 
 /** Standard cron semantics: when both day-of-month and day-of-week are
  *  restricted, either matching is enough. */
-function matches(f: Fields, ts: number, tz: string): boolean {
-  const p = partsIn(ts, tz);
-  if (!f.min.has(p.minute) || !f.hour.has(p.hour) || !f.mon.has(p.month)) return false;
+function dayMatches(f: Fields, p: { day: number; month: number; dow: number }): boolean {
+  if (!f.mon.has(p.month)) return false;
   const domAll = f.dom.size === 31;
   const dowAll = f.dow.size === 7;
   if (domAll && dowAll) return true;
   if (domAll) return f.dow.has(p.dow);
   if (dowAll) return f.dom.has(p.day);
   return f.dom.has(p.day) || f.dow.has(p.dow);
+}
+
+function matches(f: Fields, ts: number, tz: string): boolean {
+  const p = partsIn(ts, tz);
+  return f.min.has(p.minute) && f.hour.has(p.hour) && dayMatches(f, p);
 }
 
 const MINUTE = 60_000;
@@ -110,11 +128,28 @@ const MINUTE = 60_000;
 export function nextRun(expr: string, tz: string, from = Date.now()): number | null {
   const f = parseCron(expr);
   if (!f) return null;
-  let ts = Math.floor(from / MINUTE) * MINUTE + MINUTE;
-  const limit = from + 366 * 24 * 60 * MINUTE;
-  while (ts < limit) {
-    if (matches(f, ts, tz)) return ts;
-    ts += MINUTE;
+  const start = Math.floor(from / MINUTE) * MINUTE + MINUTE;
+  const DAY = 1440 * MINUTE;
+
+  // Two passes instead of one. A coarse pass finds days the date fields allow
+  // — at most 367 checks — and only those days are scanned minute by minute.
+  // A yearly schedule went from 211,920 formatter calls to under two thousand.
+  for (let d = 0; d <= 366; d++) {
+    const probe = start + d * DAY;
+    if (!dayMatches(f, partsIn(probe, tz))) continue;
+
+    // Scan that local day from its own midnight. Anchoring on the probe was
+    // wrong: the probe sits at whatever time of day `from` did, so a window
+    // around it missed later hours — a Friday 17:30 schedule found nothing
+    // because the probe was at 01:00 and the window ended before evening.
+    const pp = partsIn(probe, tz);
+    const midnight = probe - (pp.hour * 60 + pp.minute) * MINUTE;
+    const from0 = Math.max(start, midnight);
+    // 25 hours covers the whole day plus the extra hour a fall-back adds.
+    const to0 = midnight + 25 * 60 * MINUTE;
+    for (let ts = from0; ts <= to0; ts += MINUTE) {
+      if (matches(f, ts, tz)) return ts;
+    }
   }
   return null;
 }

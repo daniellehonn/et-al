@@ -38,18 +38,32 @@ function planningPrompt(open: Array<{ title: string }>): string {
   return `What are your three for tomorrow?${list}\n\nReply with three lines, or numbers from the list.`;
 }
 
-export async function send(env: Env, text: string): Promise<void> {
+/** Send, and say whether it worked.
+ *
+ *  The first version swallowed every failure, so an automation could report
+ *  "ok" having sent nothing at all — which is exactly the state that made the
+ *  outbound path impossible to verify. */
+export async function send(env: Env, text: string): Promise<{ ok: boolean; detail: string }> {
   const to = env.SENDBLUE_OWNER_NUMBER;
-  if (!to || !env.SENDBLUE_API_KEY_ID || !env.SENDBLUE_API_SECRET) return;
-  await fetch("https://api.sendblue.co/api/send-message", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "sb-api-key-id": env.SENDBLUE_API_KEY_ID,
-      "sb-api-secret-key": env.SENDBLUE_API_SECRET,
-    },
-    body: JSON.stringify({ number: to, content: text.slice(0, 1400) }),
-  }).catch(() => { /* best-effort */ });
+  if (!to) return { ok: false, detail: "SENDBLUE_OWNER_NUMBER not set" };
+  if (!env.SENDBLUE_API_KEY_ID || !env.SENDBLUE_API_SECRET) {
+    return { ok: false, detail: "Sendblue API credentials not set" };
+  }
+  try {
+    const res = await fetch("https://api.sendblue.co/api/send-message", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "sb-api-key-id": env.SENDBLUE_API_KEY_ID,
+        "sb-api-secret-key": env.SENDBLUE_API_SECRET,
+      },
+      body: JSON.stringify({ number: to, content: text.slice(0, 1400) }),
+    });
+    const body = await res.text();
+    return { ok: res.ok, detail: `${res.status} ${body.slice(0, 200)}` };
+  } catch (e) {
+    return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 /** Nudges are logged so an hourly cron cannot send the same one twice — a
@@ -115,8 +129,11 @@ async function runAutomations(c: store.Ctx, env: Env): Promise<void> {
   for (const a of due) {
     try {
       const body = await renderAutomation(c, a);
-      if (body) await send(env, body);
-      await store.recordRun(c, a, "ok", body ?? "(nothing to say)");
+      if (!body) { await store.recordRun(c, a, "ok", "(nothing to say)"); continue; }
+      const sent = await send(env, body);
+      // The send result decides the status: a run that reported ok while the
+      // message never left is worse than no automation at all.
+      await store.recordRun(c, a, sent.ok ? "ok" : "error", sent.ok ? body : `send failed: ${sent.detail}`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       await store.recordRun(c, a, "error", msg);
