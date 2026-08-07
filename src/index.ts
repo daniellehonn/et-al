@@ -47,7 +47,11 @@ app.use("/api/*", async (c, next) => {
   // checks the sender is the owner, so it is exempt from this gate but not
   // unguarded.
   const isWebhook = path === "/api/imessage";
-  if (method !== "GET" && method !== "HEAD" && !isReadPost && !isWebhook) {
+  // Sendblue account setup carries its own token; the app's API key is not the
+  // credential here. Same reasoning as the webhook above — exempt from this
+  // gate, but not unguarded.
+  const isAdmin = path.startsWith("/api/admin/");
+  if (method !== "GET" && method !== "HEAD" && !isReadPost && !isWebhook && !isAdmin) {
     if (!validKey(c.env, credential(c.req.raw))) {
       return c.json({ error: "unauthorized" }, 401);
     }
