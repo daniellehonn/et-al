@@ -9,6 +9,7 @@
 // here and exposes a REST endpoint to reply.
 import type { Env } from "./schema";
 import * as store from "./store";
+import { trySetDailyThree } from "./nudge";
 
 interface Inbound {
   content?: string;
@@ -143,6 +144,13 @@ async function process(
   try {
     const handle = body.message_handle;
     if (handle && await alreadyCaptured(c, handle)) return;
+    // A reply to the evening nudge sets tomorrow's three. Checked before both
+    // search and capture, since "1, 2, 3" is neither a question nor a note.
+    if (text && await trySetDailyThree(c, env, text)) {
+      await reply(env, from, "Set. I'll send them to you in the morning.");
+      return;
+    }
+
     if (text && isQuestion(text)) {
       const hits = await store.search(c, text, { limit: 5 });
       if (!hits.length) {

@@ -40,10 +40,11 @@ max_batch_size = 10
 max_batch_timeout = 5
 max_retries = 2
 
-# No cron triggers: the scheduled() handler went away with the v6 implementation
-# and these were left behind, so production threw "Handler does not export a
-# scheduled() function" every five minutes. They come back with a handler that
-# needs them, not before.
+# Hourly, because Cloudflare crons are UTC only: a fixed UTC hour drifts by one
+# across a DST boundary, so the handler asks what time it is where the user is
+# and acts on the right local hour instead.
+[triggers]
+crons = ["0 * * * *"]
 
 [vars]
 APP_NAME = "et al."

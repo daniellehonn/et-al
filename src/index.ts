@@ -7,6 +7,7 @@ import { RuleError, ctx } from "./store";
 import * as store from "./store";
 import { api } from "./api";
 import { handleInbound } from "./imessage";
+import { runNudges } from "./nudge";
 import { handleMcp } from "./mcp";
 
 const app = new Hono<{ Bindings: Env; Variables: { actor: string } }>();
@@ -145,6 +146,12 @@ app.all("/mcp", async (c) => {
 
 export default {
   fetch: app.fetch,
+
+  // Runs hourly; runNudges decides whether this is the right local hour to say
+  // anything. Nothing else is scheduled, so a quiet hour costs one cheap check.
+  async scheduled(_event: ScheduledController, env: Env, ctxIn: ExecutionContext): Promise<void> {
+    ctxIn.waitUntil(runNudges(env));
+  },
 
   // Deterministic ingest. Best-effort: failures leave the source in the inbox.
   async queue(batch: MessageBatch, env: Env): Promise<void> {
