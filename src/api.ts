@@ -89,6 +89,18 @@ api.delete("/views/:id", async (c) => { await store.deleteView(ctx(c), c.req.par
 api.get("/tasks", async (c) => c.json(await store.listTasks(ctx(c), { pageId: c.req.query("page_id"), status: c.req.query("status"), section: c.req.query("section") })));
 // Everything open, grouped by section — what the Tasks screen renders.
 api.get("/tasks/by-section", async (c) => c.json(await store.tasksBySection(ctx(c))));
+// The whole task system: goals with their tasks and subtasks, grouped by section.
+api.get("/tasks/tree", async (c) => c.json(await store.taskTree(ctx(c))));
+api.get("/tasks/pressing", async (c) => c.json(await store.pressingDeadlines(ctx(c))));
+api.post("/tasks/sections", async (c) => {
+  const { name } = await c.req.json();
+  const { collectionId } = await store.tasksHome(ctx(c));
+  return c.json(await store.addSelectOption(ctx(c), collectionId, "section", name));
+});
+api.delete("/tasks/sections/:name", async (c) => {
+  const { collectionId } = await store.tasksHome(ctx(c));
+  return c.json(await store.removeSelectOption(ctx(c), collectionId, "section", c.req.param("name")));
+});
 api.get("/tasks/home", async (c) => c.json(await store.tasksHome(ctx(c))));
 api.get("/pages/:id/tasks", async (c) => c.json(await store.listTasks(ctx(c), { pageId: c.req.param("id"), status: c.req.query("status") })));
 api.post("/tasks", async (c) => c.json(await store.createTask(ctx(c), await c.req.json())));

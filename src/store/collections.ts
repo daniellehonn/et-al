@@ -202,6 +202,48 @@ export async function setProperties(c: Ctx, cid: string, next: PropertyDef[]): P
   return (await getCollection(c, cid))!;
 }
 
+/** Add an option to a select property — how a new section gets created.
+ *
+ *  Options live on the property definition, so adding one is a schema edit
+ *  rather than a migration, and it is idempotent: the same section name added
+ *  twice is one section. */
+export async function addSelectOption(c: Ctx, cid: string, key: string, option: string): Promise<Collection> {
+  const col = await getCollection(c, cid);
+  if (!col) throw new RuleError(`collection ${cid} not found`, 404);
+  const value = option.trim();
+  if (!value) throw new RuleError("a section needs a name", 400);
+  const schema = collectionSchema(col);
+  const next = schema.map((p) => {
+    if (p.key !== key) return p;
+    const options = p.options ?? [];
+    return options.includes(value) ? p : { ...p, options: [...options, value] };
+  });
+  await c.db
+    .prepare(`UPDATE collection SET schema_json = ?, updated_at = ? WHERE id = ?`)
+    .bind(JSON.stringify(next), now(), cid)
+    .run();
+  return (await getCollection(c, cid))!;
+}
+
+/** Remove a select option, and clear it from any row still using it, so a
+ *  deleted section cannot leave rows pointing at something that is gone. */
+export async function removeSelectOption(c: Ctx, cid: string, key: string, option: string): Promise<Collection> {
+  const col = await getCollection(c, cid);
+  if (!col) throw new RuleError(`collection ${cid} not found`, 404);
+  const next = collectionSchema(col).map((p) =>
+    p.key === key ? { ...p, options: (p.options ?? []).filter((o) => o !== option) } : p,
+  );
+  await c.db
+    .prepare(`UPDATE page SET properties_json = json_set(properties_json, '$.' || ?, NULL), updated_at = ? WHERE collection_id = ? AND json_extract(properties_json, '$.' || ?) = ?`)
+    .bind(key, now(), cid, key, option)
+    .run();
+  await c.db
+    .prepare(`UPDATE collection SET schema_json = ?, updated_at = ? WHERE id = ?`)
+    .bind(JSON.stringify(next), now(), cid)
+    .run();
+  return (await getCollection(c, cid))!;
+}
+
 export async function createView(c: Ctx, input: z.input<typeof createViewInput>): Promise<CollectionView> {
   const data = createViewInput.parse(input);
   const vid = id("cvw");

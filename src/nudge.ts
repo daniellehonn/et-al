@@ -31,11 +31,25 @@ function localDate(env: Env): string {
 /** The planning ask. Offered with candidates rather than as a blank prompt:
  *  choosing from what is already open is a smaller ask than remembering what
  *  matters at 8pm. */
-function planningPrompt(open: Array<{ title: string }>): string {
+function planningPrompt(open: Array<{ title: string }>, pressing: string[] = []): string {
+  // Deadlines lead. A goal going overdue is the thing most likely to change
+  // what you pick, so burying it under the candidate list would defeat the
+  // point of asking at all.
+  const deadlines = pressing.length ? `⚠︎ ${pressing.join("\n⚠︎ ")}\n\n` : "";
   const list = open.length
     ? `\n\nOpen right now:\n${open.map((t, i) => `${i + 1}. ${t.title}`).join("\n")}`
     : "";
-  return `What are your three for tomorrow?${list}\n\nReply with three lines, or numbers from the list.`;
+  return `${deadlines}What are your three for tomorrow?${list}\n\nReply with three lines, or numbers from the list.`;
+}
+
+/** Deadline lines for the evening message: what is late, and what is close. */
+async function pressingLines(c: store.Ctx): Promise<string[]> {
+  const rows = await store.pressingDeadlines(c);
+  return rows.slice(0, 4).map((t) => {
+    const days = Math.floor((Number(t.props.due_date) - Date.now()) / 86_400_000);
+    const when = days < 0 ? `${-days}d overdue` : days === 0 ? "due today" : days === 1 ? "due tomorrow" : `due in ${days}d`;
+    return `${t.title} — ${when}`;
+  });
 }
 
 /** Send, and say whether it worked.
@@ -101,7 +115,7 @@ export async function runNudges(env: Env): Promise<void> {
       return;
     }
     // Nothing to reflect on, so go straight to planning.
-    await send(env, planningPrompt(await store.openTasks(c, 5)));
+    await send(env, planningPrompt(await store.openTasks(c, 5), await pressingLines(c)));
     await markSent(c, "evening", date);
     return;
   }
@@ -200,7 +214,7 @@ export async function tryRecordReflection(c: store.Ctx, env: Env, text: string):
       ? "Noted — none closed out."
       : `${done.length} of ${live.length} done.`;
   const carry = carried.length ? `\n\nStill open: ${carried.join(", ")}` : "";
-  await send(env, `${note}${carry}\n\n${planningPrompt(await store.openTasks(c, 5))}`);
+  await send(env, `${note}${carry}\n\n${planningPrompt(await store.openTasks(c, 5), await pressingLines(c))}`);
   return true;
 }
 

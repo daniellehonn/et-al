@@ -70,6 +70,103 @@ export async function listTasks(
   return rows;
 }
 
+export interface TaskNode extends RoleRow {
+  children: TaskNode[];
+  /** done / total across the whole subtree, so a goal shows real progress. */
+  progress: { done: number; total: number };
+  /** Overdue, or due within three days — what the evening nudge surfaces. */
+  pressing: "overdue" | "soon" | null;
+}
+
+function pressure(due: unknown): "overdue" | "soon" | null {
+  const n = Number(due);
+  if (!n) return null;
+  const days = (n - Date.now()) / 86_400_000;
+  if (days < 0) return "overdue";
+  if (days <= 3) return "soon";
+  return null;
+}
+
+/** Build the goal -> task -> subtask tree from the flat rows. */
+function buildTree(rows: RoleRow[]): TaskNode[] {
+  const byId = new Map<string, TaskNode>(
+    rows.map((r) => [r.id, { ...r, children: [], progress: { done: 0, total: 0 }, pressing: pressure(r.props.due_date) }]),
+  );
+  const roots: TaskNode[] = [];
+  for (const node of byId.values()) {
+    const parent = node.parent_page_id ? byId.get(node.parent_page_id) : undefined;
+    if (parent) parent.children.push(node);
+    // A subtask whose parent is done or gone still has to appear, or work
+    // silently disappears from the list.
+    else roots.push(node);
+  }
+  const roll = (n: TaskNode): { done: number; total: number } => {
+    let done = n.props.status === "done" ? 1 : 0;
+    let total = 1;
+    for (const kid of n.children) {
+      const sub = roll(kid);
+      done += sub.done;
+      total += sub.total;
+    }
+    n.progress = { done, total };
+    return n.progress;
+  };
+  roots.forEach(roll);
+  return roots;
+}
+
+/** Everything not finished, as a tree, grouped by section.
+ *
+ *  A parent is kept when any descendant is open, so a goal does not vanish from
+ *  the list the moment its own row is ticked but its work is not done. */
+export async function taskTree(c: Ctx): Promise<Array<{ section: string; tasks: TaskNode[] }>> {
+  const { collectionId } = await tasksHome(c);
+  const col = await getCollection(c, collectionId);
+  const defined = col ? (collectionSchema(col).find((p) => p.key === "section")?.options ?? []) : [];
+
+  const all = decorate(await pagesWithRole(c, "tasks"));
+  const tree = buildTree(all);
+
+  const prune = (nodes: TaskNode[]): TaskNode[] =>
+    nodes
+      .map((n) => ({ ...n, children: prune(n.children) }))
+      .filter((n) => n.props.status !== "done" || n.children.length > 0);
+
+  const open = prune(tree);
+  const used = [...new Set(open.map((t) => String(t.props.section ?? "")).filter(Boolean))];
+  const order = [...defined, ...used.filter((u) => !defined.includes(u))];
+
+  const sortNodes = (nodes: TaskNode[]): TaskNode[] =>
+    [...nodes]
+      .sort((a, b) => {
+        // Pressure first, then the usual ordering.
+        const rank = (n: TaskNode) => (n.pressing === "overdue" ? 0 : n.pressing === "soon" ? 1 : 2);
+        if (rank(a) !== rank(b)) return rank(a) - rank(b);
+        const ad = Number(a.props.due_date) || 0, bd = Number(b.props.due_date) || 0;
+        if (ad && bd && ad !== bd) return ad - bd;
+        if (ad !== bd) return ad ? -1 : 1;
+        return (Number(b.props.priority) || 0) - (Number(a.props.priority) || 0);
+      })
+      .map((n) => ({ ...n, children: sortNodes(n.children) }));
+
+  const groups = order.map((section) => ({
+    section,
+    tasks: sortNodes(open.filter((t) => t.props.section === section)),
+  }));
+  const none = sortNodes(open.filter((t) => !t.props.section));
+  if (none.length) groups.push({ section: "", tasks: none });
+  return groups;
+}
+
+/** Deadlines that need saying out loud tonight. Flattened across the tree,
+ *  because an overdue subtask matters as much as an overdue goal. */
+export async function pressingDeadlines(c: Ctx): Promise<RoleRow[]> {
+  const all = (await listTasks(c)).filter((t) => t.props.status !== "done");
+  return all
+    .filter((t) => pressure(t.props.due_date) !== null)
+    .sort((a, b) => (Number(a.props.due_date) || 0) - (Number(b.props.due_date) || 0));
+}
+
 /** Every open task, grouped by section — what the Tasks screen renders.
  *
  *  Sections come from the collection's own select options, so an empty section
@@ -120,9 +217,30 @@ export async function getTask(c: Ctx, tid: string): Promise<RoleRow | null> {
   return { ...page, owner_page_id: null, props: properties(page) };
 }
 
+// Three levels, no more: goal -> task -> subtask. Arbitrary depth is easy to
+// build and easy to get lost in; three is the depth at which a plan is still
+// something you can hold in your head.
+export const MAX_TASK_DEPTH = 3;
+
+/** How deep a task sits, by walking its parents. */
+export async function taskDepth(c: Ctx, taskId: string | null): Promise<number> {
+  let depth = 0;
+  let cur = taskId;
+  const seen = new Set<string>();
+  while (cur && !seen.has(cur)) {
+    seen.add(cur);
+    const row = await first<{ parent_page_id: string | null }>(c, `SELECT parent_page_id FROM page WHERE id = ?`, cur);
+    depth++;
+    cur = row?.parent_page_id ?? null;
+  }
+  return depth;
+}
+
 export async function createTask(
   c: Ctx,
-  input: z.input<typeof createTaskInput> & { page_id?: string; section?: string },
+  input: z.input<typeof createTaskInput> & {
+    page_id?: string; section?: string; parent_id?: string;
+  },
 ): Promise<Page> {
   // Every task goes to the one collection. `page_id` is now what the task came
   // FROM rather than where it lives — a task derived from the CS 180 page keeps
@@ -130,12 +248,27 @@ export async function createTask(
   const source = input.page_id ?? input.workspace_id ?? null;
   if (source && !(await getPage(c, source))) throw new RuleError(`page ${source} not found`, 404);
   const { collectionId } = await tasksHome(c);
-  return createPage(c, {
+
+  let section = input.section ?? null;
+  const parentId = input.parent_id ?? null;
+  if (parentId) {
+    const parent = await getPage(c, parentId);
+    if (!parent) throw new RuleError(`task ${parentId} not found`, 404);
+    if ((await taskDepth(c, parentId)) >= MAX_TASK_DEPTH) {
+      throw new RuleError(`tasks nest three deep — break this into its own goal instead`, 400);
+    }
+    // Section is inherited rather than set per level: a subtask of a school
+    // goal is school work, and asking again at every level is friction that
+    // produces inconsistency.
+    section = section ?? (properties(parent).section as string | null) ?? null;
+  }
+
+  const task = await createPage(c, {
     collection_id: collectionId,
     title: input.title,
     properties: {
       status: "todo",
-      section: input.section ?? null,
+      section,
       priority: input.priority ?? 1,
       due_date: input.due_date ?? null,
       notes: input.notes ?? null,
@@ -143,6 +276,10 @@ export async function createTask(
       source_page: source,
     },
   });
+  if (parentId) {
+    await c.db.prepare(`UPDATE page SET parent_page_id = ? WHERE id = ?`).bind(parentId, task.id).run();
+  }
+  return (await getPage(c, task.id))!;
 }
 
 export async function updateTask(c: Ctx, tid: string, patch: z.input<typeof updateTaskInput>): Promise<Page> {
