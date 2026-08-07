@@ -42,6 +42,9 @@ export function TasksView() {
   const qc = useQueryClient();
   const [adding, setAdding] = useState<{ section: string; parent: string | null } | null>(null);
   const [newSection, setNewSection] = useState(false);
+  // Two-step rather than a confirm(): a modal for something this reversible is
+  // heavy, and the second click is where the consequence gets spelled out.
+  const [confirmDel, setConfirmDel] = useState<string | null>(null);
 
   const { data: groups, isLoading } = useQuery({
     queryKey: ["task-tree"],
@@ -65,6 +68,15 @@ export function TasksView() {
     refresh();
   };
 
+  // The section goes; its tasks do not. The server clears `section` on every
+  // row that used it, and taskTree gathers those into the trailing unsectioned
+  // group — so nothing disappears, it just loses its label.
+  const removeSection = async (name: string) => {
+    await api.del(`/tasks/sections/${encodeURIComponent(name)}`);
+    setConfirmDel(null);
+    refresh();
+  };
+
   if (isLoading) return <div className="et-tv-empty">Loading…</div>;
   const total = (groups ?? []).reduce((n, g) => n + g.tasks.reduce((m, t) => m + t.progress.total, 0), 0);
 
@@ -80,6 +92,20 @@ export function TasksView() {
           <div className="et-tv-section-head">
             <span className="et-tv-section-name">{g.section || "unsectioned"}</span>
             <span className="et-tv-section-count">{g.tasks.length}</span>
+            {/* The unsectioned group is not a section — it is where deleted
+                sections' tasks land, so it has nothing to delete. */}
+            {g.section && (confirmDel === g.section ? (
+              <span className="et-tv-confirm">
+                {g.tasks.length
+                  ? `Delete? ${g.tasks.length} task${g.tasks.length > 1 ? "s" : ""} move to unsectioned`
+                  : "Delete?"}
+                <button className="et-tv-yes" onClick={() => removeSection(g.section)}>Yes</button>
+                <button className="et-tv-no" onClick={() => setConfirmDel(null)}>Cancel</button>
+              </span>
+            ) : (
+              <button className="et-tv-section-del" title="Delete section"
+                onClick={() => setConfirmDel(g.section)}>×</button>
+            ))}
           </div>
 
           {g.tasks.map((t) => (
@@ -225,6 +251,22 @@ function TasksStyles() {
       .et-tv-section-name { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
         letter-spacing: 0.07em; color: var(--ink-faint); }
       .et-tv-section-count { font-size: 0.7rem; color: var(--line-strong); }
+      /* Hidden until the row is hovered: deleting a section is rare, and a
+         permanent × next to every heading reads as clutter. */
+      .et-tv-section-del { margin-left: auto; background: none; border: 0; cursor: pointer;
+        font: inherit; font-size: 0.95rem; line-height: 1; padding: 0 0.25rem;
+        color: var(--line-strong); opacity: 0; transition: opacity 0.12s, color 0.12s; }
+      .et-tv-section-head:hover .et-tv-section-del { opacity: 1; }
+      .et-tv-section-del:hover { color: var(--ink); }
+      /* Keyboard users never hover, so focus has to reveal it too. */
+      .et-tv-section-del:focus-visible { opacity: 1; color: var(--ink); }
+      .et-tv-confirm { margin-left: auto; display: flex; align-items: center; gap: 0.5rem;
+        font-size: 0.7rem; text-transform: none; letter-spacing: 0; color: var(--ink-faint); }
+      .et-tv-yes, .et-tv-no { background: none; border: 0; cursor: pointer; font: inherit;
+        font-size: 0.7rem; padding: 0; }
+      .et-tv-yes { color: #c0392b; }
+      .et-tv-no { color: var(--line-strong); }
+      .et-tv-yes:hover, .et-tv-no:hover { text-decoration: underline; }
       .et-tv-row { display: flex; align-items: center; gap: 0.55rem; padding: 0.34rem 0; min-width: 0; }
       .et-tv-row:hover .et-tv-sub, .et-tv-row:hover .et-tv-date { opacity: 1; }
       .et-tv-check { flex: none; width: 15px; height: 15px; border: 1.5px solid var(--line-strong);
