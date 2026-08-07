@@ -71,7 +71,47 @@ function isQuestion(text: string): boolean {
 
 const APP_URL = "https://et-al.daniellehonnn.workers.dev";
 
-export async function handleInbound(req: Request, env: Env): Promise<Response> {
+/** Copy an attachment into R2 and return a stable path.
+ *
+ *  Sendblue serves attachments from its own inbound-file-store. Those still
+ *  resolve, but they are Sendblue's infrastructure rather than ours, and a
+ *  capture that depends on a third party to stay readable is not really kept.
+ *  Content-addressed, so the same photo sent twice occupies one object. */
+async function rehost(env: Env, url: string): Promise<string | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const buf = await res.arrayBuffer();
+    const digest = await crypto.subtle.digest("SHA-256", buf);
+    const hash = [...new Uint8Array(digest)].slice(0, 16).map((b) => b.toString(16).padStart(2, "0")).join("");
+    // Sendblue sends application/octet-stream, so the extension comes from the
+    // URL rather than the content type.
+    const ext = (url.split("?")[0].match(/\.([a-z0-9]{3,4})$/i)?.[1] ?? "bin").toLowerCase();
+    const key = `im/${hash}.${ext}`;
+    await env.VAULT.put(key, buf, { httpMetadata: { contentType: res.headers.get("content-type") ?? "application/octet-stream" } });
+    return `/files/${key}`;
+  } catch {
+    return null;
+  }
+}
+
+/** Has this exact Sendblue message already been captured?
+ *
+ *  Sendblue retries a webhook it considers failed, and the first version of this
+ *  handler awaited the reply before responding — which took long enough to be
+ *  treated as a failure, so a single shared reel was captured three times. The
+ *  handler now answers immediately, and this is the belt to that braces: a
+ *  retry finds the message already stored and stops. */
+async function alreadyCaptured(c: store.Ctx, handle: string): Promise<boolean> {
+  const row = await store.first<{ id: string }>(
+    c, `SELECT id FROM page WHERE json_extract(properties_json, '$.message_handle') = ? LIMIT 1`, handle,
+  );
+  return !!row;
+}
+
+export async function handleInbound(
+  req: Request, env: Env, waitUntil: (p: Promise<unknown>) => void,
+): Promise<Response> {
   if (!authorized(req, env)) return new Response("unauthorized", { status: 401 });
 
   const body = (await req.json().catch(() => ({}))) as Inbound;
@@ -90,7 +130,19 @@ export async function handleInbound(req: Request, env: Env): Promise<Response> {
   // so the event log can tell where a capture came from.
   const c = store.ctx(env, "human");
 
+  // Answer Sendblue before doing any work. Capturing, re-hosting media and
+  // replying all take longer than its webhook timeout, and a slow 200 is read
+  // as a failure and retried.
+  waitUntil(process(c, env, body, from, text, media));
+  return Response.json({ ok: true, queued: true });
+}
+
+async function process(
+  c: store.Ctx, env: Env, body: Inbound, from: string, text: string, media: string | undefined,
+): Promise<void> {
   try {
+    const handle = body.message_handle;
+    if (handle && await alreadyCaptured(c, handle)) return;
     if (text && isQuestion(text)) {
       const hits = await store.search(c, text, { limit: 5 });
       if (!hits.length) {
@@ -99,25 +151,41 @@ export async function handleInbound(req: Request, env: Env): Promise<Response> {
         const lines = hits.map((h) => `• ${h.title}\n  ${APP_URL}/page/?id=${h.entity_id}`);
         await reply(env, from, `${hits.length} result${hits.length === 1 ? "" : "s"}:\n\n${lines.join("\n")}`);
       }
-      return Response.json({ ok: true, action: "search" });
+      return;
     }
 
-    // Capture. A bare link keeps its URL so enrichment can title it; media
-    // arrives as a URL too, which is enough to find it again.
-    const url = text.match(/https?:\/\/\S+/)?.[0] ?? media ?? null;
-    const note = text && text !== url ? text : null;
+    // Capture. A link in the text is the subject; an attachment is evidence
+    // attached to it, not a second capture — sharing a reel sends both, and
+    // filing them separately produced two unrelated-looking inbox rows.
+    const link = text.match(/https?:\/\/\S+/)?.[0] ?? null;
+    const stored = media ? await rehost(env, media) : null;
+    const url = link ?? (stored ? `${APP_URL}${stored}` : media ?? null);
+    const note = text && text !== link ? text : null;
+
     const page = await store.capture(c, {
       kind: "note",
-      title: note?.slice(0, 60) || url || "From iMessage",
+      title: note?.slice(0, 60) || link || "From iMessage",
       url,
       raw: note,
     });
+    // Recorded so a Sendblue retry is recognised, and so the attachment stays
+    // attached even when the link is what titles the capture.
+    await store.updatePage(c, page.id, {
+      properties: {
+        message_handle: body.message_handle ?? null,
+        media: stored ?? media ?? null,
+        via: "imessage",
+      },
+    });
+    if (stored) {
+      await store.writeBlocks(c, page.id, [
+        { op: "insert", after: null, type: "image", content: { url: stored, caption: "" } },
+      ]);
+    }
     await reply(env, from, `Captured → ${APP_URL}/page/?id=${page.id}`);
-    return Response.json({ ok: true, action: "capture", page_id: page.id });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     // Tell the sender it failed. Silence would look like it worked.
     await reply(env, from, `Couldn't do that: ${msg}`);
-    return Response.json({ ok: false, error: msg });
   }
 }

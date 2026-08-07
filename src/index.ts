@@ -130,7 +130,7 @@ app.put("/api/files/:key{.+}", async (c) => {
   return c.json({ ok: true, key, url: `/files/${key}` });
 });
 
-app.post("/api/imessage", (c) => handleInbound(c.req.raw, c.env));
+app.post("/api/imessage", (c) => handleInbound(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
 
 app.route("/api", api);
 
