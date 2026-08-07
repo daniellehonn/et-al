@@ -6,6 +6,7 @@ import type { Env } from "./schema";
 import { RuleError, ctx } from "./store";
 import * as store from "./store";
 import { api } from "./api";
+import { handleInbound } from "./imessage";
 import { handleMcp } from "./mcp";
 
 const app = new Hono<{ Bindings: Env; Variables: { actor: string } }>();
@@ -39,7 +40,12 @@ app.use("/api/*", async (c, next) => {
   // second parser to keep in step. Treating it as a mutation would make every
   // inline database fail to load in read-only mode.
   const isReadPost = method === "POST" && /^\/api\/collections\/[^/]+\/query$/.test(path);
-  if (method !== "GET" && method !== "HEAD" && !isReadPost) {
+  // The iMessage webhook cannot carry the API key — Sendblue is the caller, not
+  // the browser. It authenticates itself against SENDBLUE_WEBHOOK_TOKEN and
+  // checks the sender is the owner, so it is exempt from this gate but not
+  // unguarded.
+  const isWebhook = path === "/api/imessage";
+  if (method !== "GET" && method !== "HEAD" && !isReadPost && !isWebhook) {
     if (!validKey(c.env, credential(c.req.raw))) {
       return c.json({ error: "unauthorized" }, 401);
     }
@@ -123,6 +129,8 @@ app.put("/api/files/:key{.+}", async (c) => {
   await c.env.VAULT.put(key, c.req.raw.body, { httpMetadata: { contentType } });
   return c.json({ ok: true, key, url: `/files/${key}` });
 });
+
+app.post("/api/imessage", (c) => handleInbound(c.req.raw, c.env));
 
 app.route("/api", api);
 

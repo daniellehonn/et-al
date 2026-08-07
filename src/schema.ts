@@ -19,6 +19,11 @@ export interface Env {
   KV?: KVNamespace;
   ET_AL_API_KEY?: string;
   APP_NAME?: string;
+  // Sendblue relays iMessage: Apple ships no API of its own.
+  SENDBLUE_API_KEY_ID?: string;
+  SENDBLUE_API_SECRET?: string;
+  SENDBLUE_WEBHOOK_TOKEN?: string;
+  SENDBLUE_OWNER_NUMBER?: string;
 }
 
 // ---- Entity types & vocabularies --------------------------------------------
