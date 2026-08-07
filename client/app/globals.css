@@ -75,6 +75,23 @@ body {
 
 ::selection { background: var(--color-iris); color: #fff; }
 
+/* Clicking out of an embedded block (a collection, a widget) selects it as a
+   whole node rather than selecting text. ProseMirror marks it
+   .ProseMirror-selectednode and draws a ring — but the rule above then paints
+   every string inside it white, and white on this cream surface reads as the
+   table having gone blank. The ring already says "selected"; the text
+   highlight is meaningless here because no text is selected. */
+.ProseMirror-selectednode ::selection { background: transparent; color: inherit; }
+
+/* BlockNote's default selection ring is a 4px bright blue that belongs to no
+   palette in this app. Same signal, in the app's own colour. */
+.ProseMirror-selectednode > .bn-block-content > *,
+.bn-block-content.ProseMirror-selectednode > * {
+  outline: 2px solid var(--color-iris) !important;
+  outline-offset: 1px;
+  border-radius: 6px;
+}
+
 *:focus-visible { outline: 2px solid var(--color-iris); outline-offset: 2px; border-radius: 3px; }
 
 @media (prefers-reduced-motion: reduce) {
