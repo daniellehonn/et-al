@@ -71,7 +71,15 @@ export async function send(env: Env, text: string): Promise<{ ok: boolean; detai
         "sb-api-key-id": env.SENDBLUE_API_KEY_ID,
         "sb-api-secret-key": env.SENDBLUE_API_SECRET,
       },
-      body: JSON.stringify({ number: to, content: text.slice(0, 1400) }),
+      // from_number is required on shared-line plans, which is what every
+      // outbound 400 was: "missing required parameter: from_number". The
+      // account's line is not derivable from the credentials, so it is
+      // configured — GET /api/lines lists what is available.
+      body: JSON.stringify({
+        number: to,
+        content: text.slice(0, 1400),
+        ...(env.SENDBLUE_FROM_NUMBER ? { from_number: env.SENDBLUE_FROM_NUMBER } : {}),
+      }),
     });
     const body = await res.text();
     return { ok: res.ok, detail: `${res.status} ${body.slice(0, 900)}` };

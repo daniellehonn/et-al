@@ -57,7 +57,11 @@ async function reply(env: Env, to: string, text: string): Promise<void> {
     },
     // Long replies are truncated rather than split: a wall of texts is worse
     // than a short answer plus a link.
-    body: JSON.stringify({ number: to, content: text.slice(0, 1400) }),
+    body: JSON.stringify({
+      number: to,
+      content: text.slice(0, 1400),
+      ...(env.SENDBLUE_FROM_NUMBER ? { from_number: env.SENDBLUE_FROM_NUMBER } : {}),
+    }),
   }).catch(() => { /* best-effort; a failed reply must not retry the capture */ });
 }
 

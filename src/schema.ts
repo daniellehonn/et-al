@@ -24,6 +24,7 @@ export interface Env {
   SENDBLUE_API_SECRET?: string;
   SENDBLUE_WEBHOOK_TOKEN?: string;
   SENDBLUE_OWNER_NUMBER?: string;
+  SENDBLUE_FROM_NUMBER?: string;
   // Nudges are scheduled in the user's own time, not UTC.
   TIMEZONE?: string;
   NUDGE_EVENING_HOUR?: string;
