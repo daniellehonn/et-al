@@ -118,6 +118,12 @@ export function markdownToBlocks(md: string): ParsedBlock[] {
       continue;
     }
 
+    // A standalone image line is an image block, not a paragraph that happens to
+    // contain markdown — otherwise an imported screenshot renders as its own
+    // source text.
+    const img = s.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+    if (img) { out.push({ type: "image", content: { url: img[2], caption: img[1] }, depth: 0 }); continue; }
+
     if (/^#{1,6}\s+/.test(s)) out.push({ type: "heading", content: { text: s.replace(/^#{1,6}\s+/, ""), level: (s.match(/^#+/)?.[0].length ?? 1) }, depth: 0 });
     else if (/^(-|\*|\+)\s+\[[ xX]\]\s+/.test(s)) out.push({ type: "todo", content: { text: s.replace(/^(-|\*|\+)\s+\[[ xX]\]\s+/, ""), checked: /\[[xX]\]/.test(s) }, depth });
     else if (/^(-|\*|\+)\s+/.test(s)) out.push({ type: "bullet", content: { text: s.replace(/^(-|\*|\+)\s+/, "") }, depth });

@@ -48,6 +48,12 @@ def md_to_blocks(md):
                 rows.append(cells(lines[i])); i += 1
             out.append(('table', {'columns': columns, 'rows': rows}, 0)); continue
 
+        img = re.match(r'^!\[([^\]]*)\]\(([^)]+)\)$', s)
+        if img:
+            out.append(('image', {'url': img.group(2), 'caption': img.group(1)}, 0))
+            i += 1
+            continue
+
         if re.match(r'^#{1,6}\s+', s):
             out.append(('heading', {'text': re.sub(r'^#{1,6}\s+', '', s),
                                     'level': len(re.match(r'^#+', s).group(0))}, 0))
@@ -99,11 +105,13 @@ def emit_collection(col, page_id, position, sql):
     )
     for i, row in enumerate(col.get('rows', [])):
         rid = nid('pg')
-        title = row.pop('__title__', '') or ''
+        # Rows arrive as [title, props]: the title is a page's own field, the
+        # rest are property values keyed by the collection's schema.
+        title, props = row
         sql.append(
             "INSERT INTO page (id, parent_page_id, collection_id, title, icon, cover, properties_json, "
             "position, status, trashed_at, favorite, is_ai, actor, created_at, updated_at) VALUES ("
-            f"{esc(rid)}, NULL, {esc(cid)}, {esc(title)}, NULL, NULL, {esc(json.dumps(row))}, "
+            f"{esc(rid)}, NULL, {esc(cid)}, {esc(title)}, NULL, NULL, {esc(json.dumps(props))}, "
             f"{i}, 'active', NULL, 0, 0, 'human', {NOW}, {NOW});"
         )
         sql.append(
