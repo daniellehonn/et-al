@@ -169,10 +169,15 @@ app.post("/api/admin/sendblue-contact", async (c) => {
   // ?action=send tests the outbound path directly, rather than waiting for the
   // hourly cron to prove it.
   if (c.req.query("action") === "send") {
-    return c.json({ send: await call("/api/send-message", {
-      number, content: c.req.query("text") ?? "Test from et al.",
-      ...(c.env.SENDBLUE_FROM_NUMBER ? { from_number: c.env.SENDBLUE_FROM_NUMBER } : {}),
-    }) });
+    // ?from= overrides, so the line can be tested without a redeploy.
+    const from = c.req.query("from") ?? c.env.SENDBLUE_FROM_NUMBER;
+    return c.json({
+      from_seen: from ?? null,
+      send: await call("/api/send-message", {
+        number, content: c.req.query("text") ?? "Test from et al.",
+        ...(from ? { from_number: from } : {}),
+      }),
+    });
   }
   return c.json({
     // Which lines the account actually has — a send fails without one.
