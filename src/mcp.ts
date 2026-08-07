@@ -135,6 +135,11 @@ const TOOLS: Tool[] = [
   { name: "get_page_health", description: "The activity/flow health score for a page (or every page that owns tasks).", inputSchema: obj({ page_id: str }), handler: (c, a) => (a.page_id ? store.pageHealth(c, String(a.page_id)) : store.allHealth(c)) },
   { name: "weekly_review", description: "The raw material for a guided weekly review.", inputSchema: obj({}), handler: (c) => store.getWeeklyReview(c) },
   { name: "get_career_blocks", description: "Every career block (accomplishment/STAR, resume bullet, role) across the user's work — the raw material for generating a resume, LinkedIn post, or STAR story. Optionally scope to one page.", inputSchema: obj({ page_id: str }), handler: (c, a) => store.listCareerBlocks(c, a.page_id as string | undefined) },
+  // ---- proposals ----
+  { name: "list_proposals", description: "Machine-extracted insights awaiting your review. They are excluded from list_insights, search and build_context until accepted — a proposal is a suggestion, not knowledge.", inputSchema: obj({}), handler: (c) => store.listProposals(c) },
+  { name: "accept_proposal", description: "Accept a proposed insight. It becomes ordinary knowledge and is embedded for semantic search.", inputSchema: obj({ id: str }, ["id"]), handler: (c, a) => store.acceptProposal(c, String(a.id)) },
+  { name: "reject_proposal", description: "Reject a proposed insight and delete it. The source it came from is untouched.", inputSchema: obj({ id: str }, ["id"]), handler: async (c, a) => { await store.rejectProposal(c, String(a.id)); return { ok: true }; } },
+
   // ---- automations ----
   { name: "list_automations", description: "Recurring tasks et al. runs on a schedule.", inputSchema: obj({}), handler: (c) => store.listAutomations(c) },
   { name: "create_automation", description: "Schedule recurring work. `schedule` is a 5-field cron expression evaluated in the user's timezone. action 'message' texts the task verbatim; 'digest' appends open tasks and pending reviews.", inputSchema: obj({ name: str, schedule: str, task: str, action: str, timezone: str }, ["name", "schedule", "task"]), handler: (c, a) => store.createAutomation(c, a as never) },

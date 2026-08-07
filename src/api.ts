@@ -171,6 +171,11 @@ api.delete("/insights/:id", async (c) => { await store.deleteInsight(ctx(c), c.r
 
 api.get("/career", async (c) => c.json(await store.listCareerBlocks(ctx(c), c.req.query("page_id"))));
 
+// ---- proposals (machine-extracted knowledge, awaiting review) ---------------
+api.get("/proposals", async (c) => c.json(await store.listProposals(ctx(c))));
+api.post("/proposals/:id/accept", async (c) => c.json(await store.acceptProposal(ctx(c), c.req.param("id"))));
+api.post("/proposals/:id/reject", async (c) => { await store.rejectProposal(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
+
 // ---- automations ------------------------------------------------------------
 api.get("/automations", async (c) => c.json(await store.listAutomations(ctx(c))));
 api.post("/automations", async (c) => c.json(await store.createAutomation(ctx(c), await c.req.json())));

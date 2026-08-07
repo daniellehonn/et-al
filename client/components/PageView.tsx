@@ -72,6 +72,7 @@ export function PageView({ id }: { id: string }) {
         <TitleInput title={page.title} onSave={(t) => save({ title: t })} />
 
         <PatchQueue pageId={id} />
+        <ProposalQueue />
 
         <PageEditor pageId={id} />
 
@@ -85,6 +86,40 @@ export function PageView({ id }: { id: string }) {
         </div>
       </div>
       <PageStyles />
+    </div>
+  );
+}
+
+/** Machine-extracted knowledge awaiting review.
+ *
+ *  Sits beside the patch queue rather than in a separate screen: both are the
+ *  same question — something was written for you, do you want it — and splitting
+ *  them across two places is how a review queue becomes the thing you avoid. */
+function ProposalQueue() {
+  const qc = useQueryClient();
+  const { data: proposals } = useQuery({
+    queryKey: ["proposals"],
+    queryFn: () => api.get<Array<{ id: string; title: string; props: Record<string, unknown> }>>("/proposals"),
+    refetchInterval: 30000,
+  });
+  if (!proposals?.length) return null;
+
+  const resolve = async (pid: string, accept: boolean) => {
+    await api.post(`/proposals/${pid}/${accept ? "accept" : "reject"}`);
+    qc.invalidateQueries({ queryKey: ["proposals"] });
+    qc.invalidateQueries({ queryKey: ["rows"] });
+  };
+
+  return (
+    <div className="et-patches">
+      {proposals.map((p) => (
+        <div key={p.id} className="et-patch" data-kind="proposal">
+          <span className="et-patch-actor">{String(p.props.segment ?? "knowledge")}</span>
+          <span className="et-patch-summary">{p.title}</span>
+          <button className="et-patch-accept" onClick={() => resolve(p.id, true)}>Keep</button>
+          <button className="et-patch-reject" onClick={() => resolve(p.id, false)}>Discard</button>
+        </div>
+      ))}
     </div>
   );
 }
@@ -169,6 +204,9 @@ function PageStyles() {
       .et-patch-summary { flex: 1; min-width: 0; }
       .et-patch-accept, .et-patch-reject { background: none; border: 1px solid var(--rule); border-radius: 5px; font: inherit; font-size: 0.78rem; padding: 0.2rem 0.5rem; cursor: pointer; color: inherit; }
       .et-patch-accept:hover { border-color: var(--color-iris); color: var(--color-iris); }
+      /* Proposals read as suggestions, not pending decisions on your own work. */
+      .et-patch[data-kind="proposal"] { border-color: var(--color-sage); }
+      .et-patch[data-kind="proposal"] .et-patch-actor { color: var(--color-sage); }
       .et-page-adds { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 2.5rem; opacity: 0; transition: opacity 0.15s; }
       .et-page-inner:hover .et-page-adds { opacity: 1; }
       .et-page-adds button { background: none; border: 1px dashed var(--rule); border-radius: 6px; font: inherit; font-size: 0.8rem; color: var(--ink-faint); padding: 0.3rem 0.6rem; cursor: pointer; }

@@ -8,6 +8,7 @@ import * as store from "./store";
 import { api } from "./api";
 import { handleInbound } from "./imessage";
 import { runNudges } from "./nudge";
+import { extractFromSource } from "./extract";
 import { handleMcp } from "./mcp";
 
 const app = new Hono<{ Bindings: Env; Variables: { actor: string } }>();
@@ -282,11 +283,26 @@ async function ingestSource(c: store.Ctx, env: Env, sourceId: string): Promise<v
   // Deterministic fetch only — no interpretation. The agent turns this into insights.
   let text = "";
   try {
-    const res = await fetch(url);
+    // A bare fetch sends no User-Agent, and a great many sites — Wikipedia
+    // among them — answer that with a short error page rather than content.
+    // Every URL capture was storing ~126 bytes of rejection instead of the
+    // article, which also starved extraction of anything to work from.
+    const res = await fetch(url, {
+      headers: {
+        "user-agent": "et-al/8.0 (personal knowledge base; +https://et-al.daniellehonnn.workers.dev)",
+        accept: "text/html,application/xhtml+xml,*/*",
+      },
+      redirect: "follow",
+    });
     text = (await res.text()).slice(0, 100_000);
   } catch { /* leave text empty; still mark processed so it exits the inbox */ }
   await store.updatePage(c, sourceId, { properties: { status: "processed", fetched_len: text.length } });
   await store.ftsUpsert(c, "page", sourceId, src.title || url, text);
+
+  // Propose knowledge from what was just fetched. Best-effort and last: a
+  // failure here must not undo a capture that already succeeded.
+  try { await extractFromSource(c, env, sourceId, text); }
+  catch (e) { console.log("[extract] threw", e instanceof Error ? e.message : String(e)); }
 }
 
 async function embedInsight(c: store.Ctx, env: Env, insightId: string): Promise<void> {

@@ -28,6 +28,7 @@ export interface Env {
   TIMEZONE?: string;
   NUDGE_EVENING_HOUR?: string;
   NUDGE_MORNING_HOUR?: string;
+  EXTRACT_MODEL?: string;
 }
 
 // ---- Entity types & vocabularies --------------------------------------------

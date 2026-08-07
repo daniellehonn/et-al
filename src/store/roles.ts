@@ -169,7 +169,11 @@ export async function deleteSource(c: Ctx, sid: string): Promise<void> {
 // ---- Insights ---------------------------------------------------------------
 
 export function listInsights(c: Ctx, pageId?: string): Promise<RoleRow[]> {
-  return pagesWithRole(c, "insights", { pageId }).then(decorate);
+  // Proposed insights are excluded: until accepted they are a suggestion, not
+  // knowledge, and listing them here would put them in front of agents as fact.
+  return pagesWithRole(c, "insights", { pageId })
+    .then(decorate)
+    .then((rows) => rows.filter((r) => r.props.proposed !== true));
 }
 
 export async function createInsight(c: Ctx, input: z.input<typeof createInsightInput> & { page_id?: string }): Promise<Page> {
@@ -246,4 +250,32 @@ export async function openTasks(c: Ctx, limit = 50): Promise<RoleRow[]> {
 
 export function taskById(c: Ctx, tid: string): Promise<Page | null> {
   return first<Page>(c, `SELECT * FROM page WHERE id = ?`, tid);
+}
+
+// ---- Proposals --------------------------------------------------------------
+// Machine-extracted insights are created with `proposed: true` and stay out of
+// every read path until accepted. The guard belongs in the queries rather than
+// in the callers: a proposal that leaks into search or context assembly would
+// be indistinguishable from knowledge you actually endorsed.
+
+/** Insights awaiting review, newest first. */
+export async function listProposals(c: Ctx): Promise<RoleRow[]> {
+  const rows = decorate(await pagesWithRole(c, "insights"));
+  return rows.filter((r) => r.props.proposed === true).sort((a, b) => b.created_at - a.created_at);
+}
+
+/** Accept a proposal: it becomes ordinary knowledge and joins the read paths. */
+export async function acceptProposal(c: Ctx, iid: string): Promise<Page> {
+  const page = await updatePage(c, iid, { properties: { proposed: null, accepted_at: now() } });
+  if (c.env.JOBS) await c.env.JOBS.send({ type: "embed_insight", insight_id: iid });
+  await logEvent(c, "accept", "page", iid, { title: page.title });
+  return page;
+}
+
+/** Reject a proposal. Deleted rather than archived: an insight you declined is
+ *  not a thing you want surfacing again, and the source it came from is intact. */
+export async function rejectProposal(c: Ctx, iid: string): Promise<void> {
+  const page = await getPage(c, iid);
+  await deletePage(c, iid);
+  await logEvent(c, "reject", "page", iid, { title: page?.title ?? "" });
 }
