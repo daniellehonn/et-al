@@ -60,6 +60,7 @@ export function collectionSchema(c: Collection): PropertyDef[] {
 export interface CollectionView {
   id: string; collection_id: string; name: string; type: string;
   filter_json: string; sort_json: string; group_by: string | null; position: number;
+  widths_json?: string;
 }
 
 /** A page from a role collection, with properties already decoded. */

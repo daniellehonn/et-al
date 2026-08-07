@@ -72,7 +72,15 @@ export function markdownToInline(md: string): InlineContent[] {
     else if (tok.startsWith("`")) out.push({ type: "text", text: tok.slice(1, -1), styles: { code: true } });
     else if (tok.startsWith("[")) {
       const link = /^\[([^\]]*)\]\(([^)]+)\)$/.exec(tok);
-      if (link) out.push({ type: "link", href: link[2], content: [{ type: "text", text: link[1], styles: {} }] });
+      if (link) {
+        // A link at the mention href IS a mention — this is what lets an agent
+        // write one in plain markdown and have it render as a chip.
+        if (link[2].startsWith(MENTION_HREF)) {
+          out.push({ type: "pageMention", props: { pageId: link[2].slice(MENTION_HREF.length), title: link[1] } } as unknown as InlineContent);
+        } else {
+          out.push({ type: "link", href: link[2], content: [{ type: "text", text: link[1], styles: {} }] });
+        }
+      }
     } else out.push({ type: "text", text: tok.slice(1, -1), styles: { italic: true } });
     last = i + tok.length;
   }
@@ -80,10 +88,19 @@ export function markdownToInline(md: string): InlineContent[] {
   return out.length ? out : [{ type: "text", text: md, styles: {} }];
 }
 
+/** A page mention serialises as a normal markdown link to the page. That keeps
+ *  `text` readable to agents and indexable by FTS, and means a mention written
+ *  by an agent as a plain link comes back as a real mention on load. */
+export const MENTION_HREF = "/page/?id=";
+
 export function inlineToMarkdown(content: unknown): string {
   if (!Array.isArray(content)) return "";
   return content.map((n) => {
     const node = n as InlineContent & { styles?: Record<string, unknown> };
+    if ((node as { type: string }).type === "pageMention") {
+      const p = (n as { props?: { pageId?: string; title?: string } }).props ?? {};
+      return `[${p.title || "Untitled"}](${MENTION_HREF}${p.pageId ?? ""})`;
+    }
     if (node.type === "link") {
       const inner = inlineToMarkdown((node as { content: unknown }).content);
       return `[${inner}](${(node as { href: string }).href})`;

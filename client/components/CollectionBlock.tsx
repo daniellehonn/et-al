@@ -6,7 +6,7 @@
 // Rows are pages. Clicking one opens it, because that is the difference this
 // rewrite was for — in v7 a task was a row you could only inspect.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api, collectionSchema, props,
   type Collection, type CollectionView, type Page, type PropertyDef,
@@ -112,7 +112,8 @@ export function CollectionBlock({ collectionId }: { collectionId: string }) {
       ) : view?.type === "calendar" ? (
         <CalendarView rows={rows ?? []} schema={schema} onOpen={openPage} />
       ) : (
-        <TableView rows={rows ?? []} schema={schema} onChange={refresh} />
+        <TableView rows={rows ?? []} schema={schema} onChange={refresh}
+          viewId={view?.id} initialWidths={view ? parseJson<Record<string, number>>(view.widths_json ?? "{}", {}) : {}} />
       )}
 
       {rows?.length === 0 && (
@@ -182,14 +183,69 @@ function TitleCell({ row, onChange }: { row: Page; onChange: () => void }) {
   );
 }
 
-function TableView({ rows, schema, onChange }: { rows: Page[]; schema: PropertyDef[]; onChange: () => void }) {
+const TITLE_KEY = "__title__";
+const DEFAULT_W = 150;
+const TITLE_W = 220;
+
+/** Drag-to-resize column headers, persisted on the view.
+ *
+ *  Widths belong to the view rather than the collection: the same rows can be a
+ *  wide reference table in one view and a narrow checklist in another. */
+function useColumnWidths(viewId: string | undefined, initial: Record<string, number>, onSaved: () => void) {
+  const [widths, setWidths] = useState<Record<string, number>>(initial);
+  const drag = useRef<{ key: string; startX: number; startW: number } | null>(null);
+
+  // Re-sync when the view changes underneath us (switching views, refetch).
+  useEffect(() => { setWidths(initial); }, [viewId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const begin = useCallback((key: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startW = widths[key] ?? (key === TITLE_KEY ? TITLE_W : DEFAULT_W);
+    drag.current = { key, startX: e.clientX, startW };
+
+    const move = (ev: MouseEvent) => {
+      if (!drag.current) return;
+      // A column narrower than this cannot show even a truncated value.
+      const next = Math.max(72, drag.current.startW + (ev.clientX - drag.current.startX));
+      setWidths((w) => ({ ...w, [drag.current!.key]: next }));
+    };
+    const up = async () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      const finished = drag.current;
+      drag.current = null;
+      if (!finished || !viewId) return;
+      // Persisted on release, not on every pixel of the drag.
+      setWidths((w) => { void api.patch(`/views/${viewId}`, { widths: w }).then(onSaved); return w; });
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  }, [widths, viewId, onSaved]);
+
+  const widthOf = (key: string) => widths[key] ?? (key === TITLE_KEY ? TITLE_W : DEFAULT_W);
+  return { widthOf, begin };
+}
+
+function TableView({ rows, schema, onChange, viewId, initialWidths }: {
+  rows: Page[]; schema: PropertyDef[]; onChange: () => void;
+  viewId?: string; initialWidths: Record<string, number>;
+}) {
+  const { widthOf, begin } = useColumnWidths(viewId, initialWidths, onChange);
   return (
     <div className="et-col-scroll">
-      <table className="et-col-table">
+      <table className="et-col-table" style={{ tableLayout: "fixed", width: "max-content", minWidth: "100%" }}>
+        <colgroup>
+          <col style={{ width: widthOf(TITLE_KEY) }} />
+          {schema.map((d) => <col key={d.key} style={{ width: widthOf(d.key) }} />)}
+          <col style={{ width: 34 }} />
+        </colgroup>
         <thead>
           <tr>
-            <th>Name</th>
-            {schema.map((d) => <th key={d.key}>{d.name}</th>)}
+            <th>Name<span className="et-col-resize" onMouseDown={(e) => begin(TITLE_KEY, e)} /></th>
+            {schema.map((d) => (
+              <th key={d.key}>{d.name}<span className="et-col-resize" onMouseDown={(e) => begin(d.key, e)} /></th>
+            ))}
             <th />
           </tr>
         </thead>
@@ -273,7 +329,12 @@ function CollectionStyles() {
       .et-col-table th { text-align: left; font-weight: 500; color: var(--ink-faint); font-size: 0.78rem; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--rule); white-space: nowrap; }
       .et-col-table td { padding: 0.15rem 0.45rem; border-bottom: 1px solid var(--rule); vertical-align: middle; }
       /* The name column carries the most information, so it gets the room. */
-      .et-cell-title { display: flex; align-items: center; gap: 0.3rem; min-width: 17rem; }
+      /* Cells clip rather than force the table wider than its columns. */
+      .et-col-table th, .et-col-table td { overflow: hidden; }
+      .et-cell-title { display: flex; align-items: center; gap: 0.3rem; min-width: 0; }
+      .et-col-table th { position: relative; }
+      .et-col-resize { position: absolute; top: 0; right: -3px; width: 7px; height: 100%; cursor: col-resize; z-index: 2; }
+      .et-col-resize:hover { background: var(--color-iris); opacity: 0.4; }
       .et-cell-input { background: none; border: 1px solid transparent; border-radius: 4px; font: inherit; color: inherit; padding: 0.25rem 0.35rem; width: 100%; min-width: 4rem; }
       .et-cell-input:hover { border-color: var(--rule); }
       .et-cell-input:focus { outline: none; border-color: var(--color-iris); background: var(--surface); }

@@ -37,6 +37,7 @@ export interface CollectionView {
   group_by: string | null;
   position: number;
   created_at: number;
+  widths_json: string;
 }
 
 export function collectionSchema(col: Collection): PropertyDef[] {
@@ -212,7 +213,7 @@ export async function updateView(c: Ctx, vid: string, patch: z.input<typeof upda
   const existing = await first<CollectionView>(c, `SELECT * FROM collection_view WHERE id = ?`, vid);
   if (!existing) throw new RuleError(`view ${vid} not found`, 404);
   await c.db
-    .prepare(`UPDATE collection_view SET name = ?, type = ?, filter_json = ?, sort_json = ?, group_by = ?, position = ? WHERE id = ?`)
+    .prepare(`UPDATE collection_view SET name = ?, type = ?, filter_json = ?, sort_json = ?, group_by = ?, position = ?, widths_json = ? WHERE id = ?`)
     .bind(
       data.name ?? existing.name,
       data.type ?? existing.type,
@@ -220,6 +221,7 @@ export async function updateView(c: Ctx, vid: string, patch: z.input<typeof upda
       data.sort ? JSON.stringify(data.sort) : existing.sort_json,
       data.group_by === undefined ? existing.group_by : data.group_by,
       data.position ?? existing.position,
+      data.widths ? JSON.stringify(data.widths) : existing.widths_json,
       vid,
     )
     .run();

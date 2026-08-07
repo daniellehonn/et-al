@@ -168,6 +168,8 @@ export const createViewInput = z.object({
   sort: z.array(z.object({ key: z.string(), dir: z.enum(["asc", "desc"]).default("asc") })).default([]),
   group_by: z.string().nullish(),
   position: z.number().optional(),
+  // Pixel width per column key; '__title__' is the name column.
+  widths: z.record(z.string(), z.number()).optional(),
 });
 
 export const updateViewInput = createViewInput.partial().omit({ collection_id: true });

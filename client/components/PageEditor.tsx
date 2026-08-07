@@ -15,8 +15,11 @@
 // propose/accept patch gate all survive.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { BlockNoteSchema, defaultBlockSpecs } from "@blocknote/core";
-import { useCreateBlockNote, createReactBlockSpec } from "@blocknote/react";
+import { BlockNoteSchema, defaultBlockSpecs, defaultInlineContentSpecs, filterSuggestionItems } from "@blocknote/core";
+import {
+  useCreateBlockNote, createReactBlockSpec, createReactInlineContentSpec,
+  SuggestionMenuController,
+} from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/ariakit";
 import "@blocknote/core/fonts/inter.css";
 import "@blocknote/ariakit/style.css";
@@ -57,6 +60,32 @@ const etAlBlock = createReactBlockSpec(
   },
 );
 
+/** An inline reference to another page — Notion's @-mention.
+ *
+ *  Stored with the title alongside the id so the text stays readable to agents
+ *  and to FTS even though the id is what actually resolves. The title is a
+ *  cached label: the link below reads the live page, so a rename shows through
+ *  without rewriting every block that mentions it. */
+const pageMention = createReactInlineContentSpec(
+  { type: "pageMention", propSchema: { pageId: { default: "" }, title: { default: "" } }, content: "none" },
+  {
+    render: (props) => <MentionChip pageId={String(props.inlineContent.props.pageId)} fallback={String(props.inlineContent.props.title)} />,
+  },
+);
+
+function MentionChip({ pageId, fallback }: { pageId: string; fallback: string }) {
+  const { data } = useQuery({
+    queryKey: ["page", pageId],
+    queryFn: () => api.get<{ title: string; icon: string | null }>(`/pages/${pageId}`),
+    enabled: !!pageId,
+  });
+  return (
+    <a className="et-mention" href={`/page/?id=${pageId}`} contentEditable={false}>
+      {data?.icon ?? "📄"} {data ? data.title || "Untitled" : fallback || "…"}
+    </a>
+  );
+}
+
 function PageLink({ pageId }: { pageId: string }) {
   const { data } = useQuery({
     queryKey: ["page", pageId],
@@ -87,6 +116,8 @@ function SimpleTable({ columns, rows }: { columns: string[]; rows: string[][] })
 // createReactBlockSpec returns a factory in 0.52; the schema wants the spec.
 const schema = BlockNoteSchema.create({
   blockSpecs: { ...defaultBlockSpecs, etAlBlock: etAlBlock() },
+  // Unlike createReactBlockSpec, the inline variant returns the spec directly.
+  inlineContentSpecs: { ...defaultInlineContentSpecs, pageMention },
 });
 
 export function PageEditor({ pageId }: { pageId: string }) {
@@ -104,6 +135,13 @@ export function PageEditor({ pageId }: { pageId: string }) {
     { schema, initialContent: initial as never },
     [pageId, !!blocks],
   );
+
+  // Every page, for the @-menu. Small enough to hold in memory, and the menu has
+  // to be able to reach anything — not just the current branch.
+  const { data: allPages } = useQuery({
+    queryKey: ["all-pages"],
+    queryFn: () => api.get<Array<{ id: string; title: string; icon: string | null }>>("/pages"),
+  });
 
   const saving = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dirty = useRef(false);
@@ -141,7 +179,48 @@ export function PageEditor({ pageId }: { pageId: string }) {
 
   return (
     <div className="et-bn">
-      <BlockNoteView editor={editor} onChange={onChange} theme="light" />
+      <BlockNoteView editor={editor} onChange={onChange} theme="light">
+        <SuggestionMenuController
+          triggerCharacter="@"
+          getItems={async (query) =>
+            filterSuggestionItems(
+              [
+                // Creating from the menu is the important half: mentioning a page
+                // that does not exist yet is how an outline actually gets written.
+                {
+                  title: query ? `New page "${query}"` : "New page",
+                  group: "Create",
+                  onItemClick: async () => {
+                    const child = await api.post<{ id: string; title: string }>("/pages", {
+                      parent_page_id: pageId, title: query || "Untitled",
+                    });
+                    qc.invalidateQueries({ queryKey: ["tree"] });
+                    qc.invalidateQueries({ queryKey: ["all-pages"] });
+                    editor.insertInlineContent([
+                      { type: "pageMention", props: { pageId: child.id, title: child.title } } as never,
+                      " ",
+                    ]);
+                  },
+                },
+                ...(allPages ?? [])
+                  .filter((p) => p.id !== pageId)
+                  .map((p) => ({
+                    title: p.title || "Untitled",
+                    group: "Link to page",
+                    icon: <span>{p.icon ?? "📄"}</span>,
+                    onItemClick: () => {
+                      editor.insertInlineContent([
+                        { type: "pageMention", props: { pageId: p.id, title: p.title } } as never,
+                        " ",
+                      ]);
+                    },
+                  })),
+              ],
+              query,
+            )
+          }
+        />
+      </BlockNoteView>
       <EditorStyles />
     </div>
   );
@@ -160,6 +239,20 @@ function EditorStyles() {
       .et-bn .bn-editor h2 { font-size: 1.35rem; font-weight: 600; line-height: 1.3; }
       .et-bn .bn-editor h3 { font-size: 1.1rem;  font-weight: 600; line-height: 1.35; }
       .et-bn .bn-block-content { font-size: 1rem; line-height: 1.6; }
+      /* BlockNote hard-codes the side-menu height per block type (30px, and
+         108px/84px for H1/H2) to match ITS heading scale. et al.'s headings are
+         smaller, so the handle was centring on a box far taller than the text.
+         These heights track the real line-heights instead. */
+      .et-bn .bn-side-menu { height: 26px; }
+      .et-bn .bn-side-menu[data-block-type="heading"][data-level="1"] { height: 46px; }
+      .et-bn .bn-side-menu[data-block-type="heading"][data-level="2"] { height: 38px; }
+      .et-bn .bn-side-menu[data-block-type="heading"][data-level="3"] { height: 32px; }
+      /* The controls sit next to the text, not competing with it. */
+      .et-bn .bn-toggle-button { padding: 2px; opacity: 0.55; }
+      .et-bn .bn-toggle-button:hover { opacity: 1; }
+      .et-bn .bn-toggle-button > svg { width: 14px; height: 14px; }
+      .et-bn .bn-toggle-add-block-button { font-size: 13px; opacity: 0.55; margin-left: 18px; }
+      .et-bn .bn-toggle-add-block-button:hover { opacity: 1; }
       .et-bn-loading { padding: 1.5rem 0; color: var(--ink-faint); }
       .et-bn-opaque { display: flex; align-items: center; gap: 0.5rem; border: 1px dashed var(--rule); border-radius: 6px; padding: 0.35rem 0.6rem; margin: 0.2rem 0; }
       .et-bn-opaque-tag { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-iris); }
@@ -167,6 +260,8 @@ function EditorStyles() {
       .et-bn-table-wrap { overflow-x: auto; }
       .et-bn-table { border-collapse: collapse; font-size: 0.88rem; width: 100%; }
       .et-bn-table th, .et-bn-table td { border: 1px solid var(--rule); padding: 0.3rem 0.5rem; text-align: left; }
+      .et-mention { display: inline; color: var(--color-iris); background: var(--color-iris-soft); padding: 0.02em 0.34em; border-radius: 5px; text-decoration: none; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+      .et-mention:hover { text-decoration: underline; }
       .et-page-link { display: inline-flex; align-items: center; gap: 0.4rem; color: inherit; text-decoration: none; }
       .et-page-link-title { border-bottom: 1px solid var(--line-strong); font-weight: 500; }
     `}</style>

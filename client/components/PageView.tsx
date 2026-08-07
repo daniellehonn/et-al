@@ -40,7 +40,9 @@ export function PageView({ id }: { id: string }) {
   };
 
   const hasRole = (role: string) => (collections ?? []).some((c) => c.role === role);
-  const fullWidth = !!props(page).full_width;
+  // Full width by default — a page is for reading your own work, and the
+  // narrow measure is the exception you opt into, not the other way round.
+  const fullWidth = props(page).full_width !== false;
 
   return (
     <div className="et-page">
