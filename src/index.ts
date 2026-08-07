@@ -7,7 +7,7 @@ import { RuleError, ctx } from "./store";
 import * as store from "./store";
 import { api } from "./api";
 import { handleInbound } from "./imessage";
-import { runNudges, send } from "./nudge";
+import { runNudges } from "./nudge";
 import { extractFromSource } from "./extract";
 import { handleMcp } from "./mcp";
 
@@ -133,13 +133,6 @@ app.put("/api/files/:key{.+}", async (c) => {
 });
 
 app.post("/api/imessage", (c) => handleInbound(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
-
-// Temporary: exercises the real send() the nudges use, behind the ordinary API
-// key rather than a credential of its own. Delete once outbound is confirmed.
-api.post("/dev/test-send", async (c) => {
-  const r = await send(c.env, "et al. — testing the nudge send path.");
-  return c.json({ ...r, from_configured: Boolean(c.env.SENDBLUE_FROM_NUMBER) });
-});
 
 app.route("/api", api);
 
