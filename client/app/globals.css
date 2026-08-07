@@ -80,8 +80,12 @@ body {
    .ProseMirror-selectednode and draws a ring — but the rule above then paints
    every string inside it white, and white on this cream surface reads as the
    table having gone blank. The ring already says "selected"; the text
-   highlight is meaningless here because no text is selected. */
-.ProseMirror-selectednode ::selection { background: transparent; color: inherit; }
+   highlight is meaningless here because no text is selected.
+
+   `color: inherit` does NOT work here: inside ::selection, `inherit` resolves
+   against the PARENT's ::selection, which is the white above — so the text
+   stayed washed out. It has to be an explicit colour. */
+.ProseMirror-selectednode ::selection { background: transparent; color: var(--ink); }
 
 /* BlockNote's default selection ring is a 4px bright blue that belongs to no
    palette in this app. Same signal, in the app's own colour. */
