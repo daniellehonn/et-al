@@ -53,6 +53,12 @@ api.post("/pages/:id/blocks", async (c) => {
   const { ops } = await c.req.json();
   return c.json(await store.writeBlocks(ctx(c), c.req.param("id"), ops));
 });
+// The editor owns the document and sends the whole tree; the server reconciles
+// by id so block identity, history and provenance survive an edit.
+api.put("/pages/:id/blocks", async (c) => {
+  const { blocks } = await c.req.json();
+  return c.json(await store.setBlocks(ctx(c), c.req.param("id"), blocks));
+});
 api.get("/pages/:id/patches", async (c) => c.json(await store.listPatches(ctx(c), c.req.param("id"), c.req.query("status"))));
 api.get("/patches", async (c) => c.json(await store.listPendingPatches(ctx(c))));
 api.post("/patches/:id/resolve", async (c) => {

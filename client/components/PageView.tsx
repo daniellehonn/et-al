@@ -8,7 +8,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { api, props, type Collection, type Page, type PagePatch } from "@/lib/api";
-import { BlockEditor } from "./BlockEditor";
+import { PageEditor } from "./PageEditor";
 import { EmojiPicker } from "./EmojiPicker";
 import { PageMenu } from "./PageMenu";
 
@@ -71,7 +71,7 @@ export function PageView({ id }: { id: string }) {
 
         <PatchQueue pageId={id} />
 
-        <BlockEditor pageId={id} />
+        <PageEditor pageId={id} />
 
         {/* Collections are created here and then live in the body, positioned by
             their block — so this is a creation affordance, not a container. */}

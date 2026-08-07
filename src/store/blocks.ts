@@ -305,3 +305,86 @@ export async function resolvePatch(c: Ctx, pid: string, accept: boolean): Promis
   await logEvent(c, accept ? "patch_accepted" : "patch_rejected", "page", patch.page_id, { patch_id: pid });
   return (await getPatch(c, pid))!;
 }
+
+/** Reconcile a page's whole body against a client-owned tree.
+ *
+ *  BlockNote holds the document and hands back the full tree on change, so the
+ *  op engine above is the wrong shape for it: there is no "insert after X", only
+ *  "this is the body now". Reconciling by id rather than replacing wholesale is
+ *  what preserves block identity — and with it block_revision, per-block AI
+ *  provenance, and any relationship edge pointing at a block.
+ *
+ *  Still human-only. Agents keep going through proposePagePatch; this is the
+ *  same trust boundary as writeBlocks, just a different write shape. */
+export async function setBlocks(
+  c: Ctx,
+  pageId: string,
+  tree: Array<{ id: string; parent_block_id: string | null; type: string; content: Record<string, unknown>; position: number }>,
+): Promise<Block[]> {
+  const page = await getPage(c, pageId);
+  if (!page) throw new RuleError(`page ${pageId} not found`, 404);
+
+  const existing = await all<Block>(c, `SELECT * FROM block WHERE page_id = ?`, pageId);
+  const byId = new Map(existing.map((b) => [b.id, b]));
+  const incoming = new Set(tree.map((t) => t.id));
+  const t = now();
+  const isAi = c.actor.startsWith("ai:") ? 1 : 0;
+
+  // Parents before children, so a self-referencing foreign key is never
+  // violated by a child arriving first.
+  const ordered = [...tree].sort((a, b) => (a.parent_block_id ? 1 : 0) - (b.parent_block_id ? 1 : 0));
+
+  for (const node of ordered) {
+    const prev = byId.get(node.id);
+    const json = JSON.stringify(node.content);
+    if (!prev) {
+      await c.db
+        .prepare(`INSERT INTO block (id, page_id, parent_block_id, type, content_json, position, version, is_ai, created_at, updated_at)
+                  VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`)
+        .bind(node.id, pageId, node.parent_block_id, node.type, json, node.position, isAi, t, t)
+        .run();
+      continue;
+    }
+    // Unchanged blocks are skipped entirely: an edit to one paragraph should not
+    // bump the version of every other block on the page, or history becomes noise.
+    if (prev.content_json === json && prev.type === node.type &&
+        prev.parent_block_id === node.parent_block_id && prev.position === node.position) continue;
+
+    if (prev.content_json !== json) {
+      await c.db
+        .prepare(`INSERT INTO block_revision (id, block_id, content_json, version, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
+        .bind(id("brev"), prev.id, prev.content_json, prev.version, c.actor, t)
+        .run();
+    }
+    await c.db
+      .prepare(`UPDATE block SET parent_block_id = ?, type = ?, content_json = ?, position = ?,
+                version = version + ?, is_ai = ?, updated_at = ? WHERE id = ?`)
+      .bind(node.parent_block_id, node.type, json, node.position,
+            prev.content_json !== json ? 1 : 0, isAi, t, node.id)
+      .run();
+  }
+
+  // Children first when removing, for the same foreign-key reason.
+  const gone = existing.filter((b) => !incoming.has(b.id));
+  if (gone.length) {
+    const ids = gone.map((b) => b.id);
+    const marks = ids.map(() => "?").join(",");
+    await c.db.prepare(`DELETE FROM block_revision WHERE block_id IN (${marks})`).bind(...ids).run();
+    for (const b of [...gone].sort((a, b) => (a.parent_block_id ? -1 : 1))) {
+      await c.db.prepare(`DELETE FROM block WHERE id = ?`).bind(b.id).run();
+    }
+  }
+
+  await c.db.prepare(`UPDATE page SET updated_at = ? WHERE id = ?`).bind(t, pageId).run();
+  await ftsUpsert(c, "page", pageId, page.title, await pageText(c, pageId));
+  await logEvent(c, "update", "page", pageId, { blocks: tree.length, removed: gone.length });
+  return getBlocks(c, pageId);
+}
+
+/** Concatenated block text for the FTS body column. */
+async function pageText(c: Ctx, pageId: string): Promise<string> {
+  const rows = await all<{ t: string | null }>(
+    c, `SELECT json_extract(content_json, '$.text') AS t FROM block WHERE page_id = ?`, pageId,
+  );
+  return rows.map((r) => r.t ?? "").filter(Boolean).join("\n");
+}
