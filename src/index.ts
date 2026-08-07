@@ -134,6 +134,41 @@ app.put("/api/files/:key{.+}", async (c) => {
 
 app.post("/api/imessage", (c) => handleInbound(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
 
+// ---- One-off Sendblue maintenance -------------------------------------------
+// Sendblue's free shared-line plan refuses to message a number that is not a
+// verified contact, which is why every outbound send returned 400. Adding the
+// contact needs the API secret, which lives here and nowhere else — hence a
+// route rather than a local CLI call. Guarded by its own token, and intended to
+// be removed once the account is set up.
+app.post("/api/admin/sendblue-contact", async (c) => {
+  const token = c.env.ADMIN_TOKEN;
+  if (!token || c.req.query("token") !== token) return c.json({ error: "unauthorized" }, 401);
+  if (!c.env.SENDBLUE_API_KEY_ID || !c.env.SENDBLUE_API_SECRET) {
+    return c.json({ error: "Sendblue credentials not set" }, 400);
+  }
+  const number = c.req.query("number") ?? c.env.SENDBLUE_OWNER_NUMBER;
+  if (!number) return c.json({ error: "no number" }, 400);
+
+  const call = async (path: string, body?: unknown) => {
+    const res = await fetch(`https://api.sendblue.co${path}`, {
+      method: body ? "POST" : "GET",
+      headers: {
+        "content-type": "application/json",
+        "sb-api-key-id": c.env.SENDBLUE_API_KEY_ID!,
+        "sb-api-secret-key": c.env.SENDBLUE_API_SECRET!,
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    return { status: res.status, body: (await res.text()).slice(0, 700) };
+  };
+
+  return c.json({
+    // Which lines the account actually has — a send fails without one.
+    lines: await call("/api/lines"),
+    contact: await call("/api/v2/contacts", { number, first_name: "Danielle", update_if_exists: true }),
+  });
+});
+
 app.route("/api", api);
 
 // MCP: Bearer/x-api-key required for every call. The client name becomes the actor.
