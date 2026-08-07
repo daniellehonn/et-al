@@ -24,6 +24,16 @@ export function PageTree() {
   }, []);
   const { data: tree } = useQuery({ queryKey: ["tree"], queryFn: () => api.get<PageNode[]>("/tree") });
 
+  // Below 860px the tree is an off-canvas drawer rather than a column. It used
+  // to be one when the sidebar was Spine.tsx; the replacement dropped it, which
+  // left a 240px-wide full-height block sitting on top of every phone screen.
+  const [navOpen, setNavOpen] = useState(false);
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setNavOpen(false); };
+    window.addEventListener("keydown", esc);
+    return () => window.removeEventListener("keydown", esc);
+  }, []);
+
   const addRoot = async () => {
     const page = await api.post<{ id: string }>("/pages", { title: "Untitled" });
     qc.invalidateQueries({ queryKey: ["tree"] });
@@ -31,7 +41,12 @@ export function PageTree() {
   };
 
   return (
-    <nav className="et-tree">
+    <>
+      {/* Hidden above the breakpoint; the drawer's only way open on a phone. */}
+      <button className="et-tree-toggle" aria-label="Menu" aria-expanded={navOpen}
+        onClick={() => setNavOpen((v) => !v)}>{navOpen ? "✕" : "☰"}</button>
+      {navOpen && <div className="et-tree-scrim" onClick={() => setNavOpen(false)} />}
+    <nav className="et-tree" data-open={navOpen ? "" : undefined}>
       <a className="et-tree-home" href="/">et al.</a>
       <div className="et-tree-body"
         // Dropping on the empty space below the tree promotes a page to a root.
@@ -53,6 +68,7 @@ export function PageTree() {
       {showTrash && <TrashPanel onDone={() => setShowTrash(false)} />}
       <TreeStyles />
     </nav>
+    </>
   );
 }
 
@@ -173,6 +189,26 @@ function TreeStyles() {
   return (
     <style jsx global>{`
       .et-tree { width: 15rem; min-width: 15rem; border-right: 1px solid var(--rule); height: 100vh; position: sticky; top: 0; display: flex; flex-direction: column; padding: 0.7rem 0.3rem; gap: 0.2rem; overflow: hidden; background: var(--surface-2); }
+      /* Desktop: no toggle, no scrim. */
+      .et-tree-toggle { display: none; }
+      .et-tree-scrim { display: none; }
+
+      @media (max-width: 860px) {
+        /* Out of flow entirely, so main gets the whole width. */
+        .et-tree { position: fixed; top: 0; left: 0; z-index: 70; height: 100dvh;
+          transform: translateX(-100%); transition: transform 0.22s ease;
+          box-shadow: 0 0 24px rgba(0,0,0,0.18); }
+        .et-tree[data-open] { transform: none; }
+        .et-tree-toggle { display: flex; align-items: center; justify-content: center;
+          position: fixed; top: 0.55rem; left: 0.55rem; z-index: 80;
+          width: 2.1rem; height: 2.1rem; border-radius: 8px; cursor: pointer;
+          border: 1px solid var(--rule); background: var(--surface-2); color: var(--ink);
+          font-size: 0.95rem; line-height: 1; padding: 0; }
+        .et-tree-scrim { display: block; position: fixed; inset: 0; z-index: 65;
+          background: rgba(0,0,0,0.35); }
+      }
+      @media (prefers-reduced-motion: reduce) { .et-tree { transition: none; } }
+
       .et-tree-home { font-weight: 600; padding: 0.2rem 0.6rem 0.6rem; color: var(--ink); text-decoration: none; }
       .et-tree-body { flex: 1; min-height: 0; overflow-y: auto; }
       .et-tree-row { display: flex; align-items: center; gap: 0.15rem; border-radius: 5px; padding-right: 0.25rem; }

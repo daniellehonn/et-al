@@ -47,7 +47,11 @@
 html, body { padding: 0; margin: 0; }
 /* Nothing in this app is meant to pan sideways; individual wide surfaces
    (tables, the kanban board) scroll inside their own container instead. */
-html, body { overflow-x: hidden; }
+/* `clip`, not `hidden`. Both stop sideways scrolling, but `hidden` makes the
+   element a scroll container, which silently kills `position: sticky` on every
+   descendant — the sidebar was declared sticky and tracked the scroll anyway.
+   `clip` does not create a scroll container, so sticky keeps working. */
+html, body { overflow-x: clip; }
 body {
   background: var(--paper);
   color: var(--ink);
@@ -93,10 +97,14 @@ body {
 .et-shell > main { min-width: 0; }
 
 /* ── Mobile ────────────────────────────────────────────────────────────────────
-   Below 860px the Spine leaves the layout (it becomes a fixed drawer — see
-   Spine.tsx), so the shell collapses to ordinary block flow. */
+   Below 860px the page tree leaves the layout (it becomes a fixed drawer — see
+   PageTree.tsx), so the shell collapses to ordinary block flow. */
 @media (max-width: 860px) {
   .et-shell { display: block; }
+
+  /* Clearance for the fixed drawer toggle, which would otherwise sit on top of
+     the first line of every page. */
+  .et-shell > main { padding-top: 2.6rem; }
 
   /* Every page shares the same reading-column padding; reclaim the horizontal
      inches on a phone but keep the generous bottom run-off. */
