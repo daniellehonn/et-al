@@ -93,3 +93,37 @@ export async function confirmDaily3(c: Ctx, date = today()): Promise<Daily3> {
   await logEvent(c, "confirm", "daily_focus", date);
   return getDaily3(c, date);
 }
+
+/** Record how the day went, and mark the chosen slots done.
+ *
+ *  Both the slot and the underlying task are completed: the slot is the record
+ *  of what you committed to, the task is the thing that actually moves. Marking
+ *  only one leaves the other quietly stale.
+ *
+ *  The reflection text is also what the evening conversation uses to know where
+ *  it is — null means the day has not been reflected on yet, so no separate
+ *  conversation state is needed. */
+export async function recordReflection(
+  c: Ctx, date: string, text: string, doneSlots: number[],
+): Promise<Daily3> {
+  const day = await first<DailyFocusDay>(c, `SELECT * FROM daily_focus_day WHERE date = ?`, date);
+  if (!day) {
+    await c.db.prepare(`INSERT INTO daily_focus_day (date, created_at) VALUES (?, ?)`).bind(date, now()).run();
+  }
+  await c.db.prepare(`UPDATE daily_focus_day SET reflection = ? WHERE date = ?`).bind(text.slice(0, 1000), date).run();
+
+  if (doneSlots.length) {
+    const slots = await all<DailyFocusSlot>(c, `SELECT * FROM daily_focus_slot WHERE date = ?`, date);
+    for (const s of slots) {
+      if (!doneSlots.includes(s.slot)) continue;
+      await c.db.prepare(`UPDATE daily_focus_slot SET status = 'done' WHERE id = ?`).bind(s.id).run();
+      await c.db
+        .prepare(`UPDATE page SET properties_json = json_set(json_set(properties_json,'$.status',?),'$.completed_at',?), updated_at = ? WHERE id = ?`)
+        .bind("done", now(), now(), s.page_id)
+        .run();
+      await logEvent(c, "complete", "page", s.page_id, { via: "reflection", date });
+    }
+  }
+  await logEvent(c, "reflect", "daily_focus", date, { done: doneSlots.length });
+  return getDaily3(c, date);
+}

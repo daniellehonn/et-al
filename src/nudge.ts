@@ -28,6 +28,16 @@ function localDate(env: Env): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date());
 }
 
+/** The planning ask. Offered with candidates rather than as a blank prompt:
+ *  choosing from what is already open is a smaller ask than remembering what
+ *  matters at 8pm. */
+function planningPrompt(open: Array<{ title: string }>): string {
+  const list = open.length
+    ? `\n\nOpen right now:\n${open.map((t, i) => `${i + 1}. ${t.title}`).join("\n")}`
+    : "";
+  return `What are your three for tomorrow?${list}\n\nReply with three lines, or numbers from the list.`;
+}
+
 export async function send(env: Env, text: string): Promise<void> {
   const to = env.SENDBLUE_OWNER_NUMBER;
   if (!to || !env.SENDBLUE_API_KEY_ID || !env.SENDBLUE_API_SECRET) return;
@@ -64,13 +74,20 @@ export async function runNudges(env: Env): Promise<void> {
   const morning = Number(env.NUDGE_MORNING_HOUR ?? 7);  // 7am local
 
   if (hour === evening && !(await alreadySent(c, "evening", date))) {
-    // Offered with candidates rather than a blank prompt: choosing from what is
-    // already open is a smaller ask than remembering what matters.
-    const open = await store.openTasks(c, 5);
-    const list = open.length
-      ? `\n\nOpen right now:\n${open.map((t, i) => `${i + 1}. ${t.title}`).join("\n")}`
-      : "";
-    await send(env, `Evening check-in. What are your three for tomorrow?${list}\n\nReply with three lines, or numbers from the list.`);
+    // Close today before opening tomorrow. If a Daily 3 was set, the evening
+    // starts by asking how it went; the planning question follows the answer
+    // rather than arriving alongside it, because two questions in one message
+    // get one answer.
+    const todayD3 = await store.getDaily3(c, date);
+    const live = todayD3.slots.filter((s) => s.task);
+    if (live.length && !todayD3.reflection) {
+      const lines = live.map((s) => `${s.slot}. ${s.task!.title}`).join("\n");
+      await send(env, `Evening check-in. Today you set:\n\n${lines}\n\nWhich did you finish? Reply with numbers, "all", or "none" — and anything you want to note about the day.`);
+      await markSent(c, "evening", date);
+      return;
+    }
+    // Nothing to reflect on, so go straight to planning.
+    await send(env, planningPrompt(await store.openTasks(c, 5)));
     await markSent(c, "evening", date);
     return;
   }
@@ -127,6 +144,49 @@ async function renderAutomation(c: store.Ctx, a: store.Automation): Promise<stri
   return a.task;
 }
 
+/** Parse a reply to the reflection ask.
+ *
+ *  Runs before the planning parser, since "1 and 3" means "I finished those"
+ *  tonight and "make those my three" only after the day is closed. Returns true
+ *  when it handled the message, and sends the planning question itself so the
+ *  conversation moves on in one exchange. */
+export async function tryRecordReflection(c: store.Ctx, env: Env, text: string): Promise<boolean> {
+  const date = localDate(env);
+  if (!(await alreadySent(c, "evening", date))) return false;
+
+  const d3 = await store.getDaily3(c, date);
+  const live = d3.slots.filter((s) => s.task);
+  // Nothing was committed today, or the day is already closed.
+  if (!live.length || d3.reflection) return false;
+  // A link is something you are keeping, not a reflection.
+  if (/https?:\/\//.test(text)) return false;
+
+  const lower = text.toLowerCase();
+  let done: number[] = [];
+  if (/\b(all|everything|all three|all of them|yes)\b/.test(lower)) {
+    done = live.map((s) => s.slot);
+  } else if (/\b(none|nothing|no|zero)\b/.test(lower)) {
+    done = [];
+  } else {
+    // Bare numbers anywhere in the message: "1 and 3", "did 2", "1,2".
+    const nums = [...lower.matchAll(/\b([1-3])\b/g)].map((m) => Number(m[1]));
+    if (!nums.length) return false; // not a reflection — let the other handlers try
+    done = [...new Set(nums)].filter((n) => live.some((s) => s.slot === n));
+  }
+
+  await store.recordReflection(c, date, text, done);
+
+  const carried = live.filter((s) => !done.includes(s.slot)).map((s) => s.task!.title);
+  const note = done.length === live.length
+    ? "All three. Nice."
+    : done.length === 0
+      ? "Noted — none closed out."
+      : `${done.length} of ${live.length} done.`;
+  const carry = carried.length ? `\n\nStill open: ${carried.join(", ")}` : "";
+  await send(env, `${note}${carry}\n\n${planningPrompt(await store.openTasks(c, 5))}`);
+  return true;
+}
+
 /** Parse a reply to the evening nudge into three tasks.
  *
  *  Matches against open tasks first — "1" or a few words of an existing title —
@@ -138,6 +198,10 @@ export async function trySetDailyThree(c: store.Ctx, env: Env, text: string): Pr
   // a task — the parser is permissive precisely because the context is narrow.
   const date = localDate(env);
   if (!(await alreadySent(c, "evening", date))) return false;
+  // Today has to be closed before tomorrow is planned, or a reflection reply
+  // would be read as a plan.
+  const todayD3 = await store.getDaily3(c, date);
+  if (todayD3.slots.some((s) => s.task) && !todayD3.reflection) return false;
   const d0 = new Date(`${date}T12:00:00Z`);
   d0.setUTCDate(d0.getUTCDate() + 1);
   const tomorrow = d0.toISOString().slice(0, 10);

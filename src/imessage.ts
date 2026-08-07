@@ -9,7 +9,7 @@
 // here and exposes a REST endpoint to reply.
 import type { Env } from "./schema";
 import * as store from "./store";
-import { trySetDailyThree } from "./nudge";
+import { trySetDailyThree, tryRecordReflection } from "./nudge";
 
 interface Inbound {
   content?: string;
@@ -144,6 +144,10 @@ async function process(
   try {
     const handle = body.message_handle;
     if (handle && await alreadyCaptured(c, handle)) return;
+    // Closing the day comes first: tonight "1 and 3" means "I finished those",
+    // and only means "make those my three" once the day is closed.
+    if (text && await tryRecordReflection(c, env, text)) return;
+
     // A reply to the evening nudge sets tomorrow's three. Checked before both
     // search and capture, since "1, 2, 3" is neither a question nor a note.
     if (text && await trySetDailyThree(c, env, text)) {
