@@ -41,9 +41,14 @@ export function getPage(c: Ctx, pid: string): Promise<Page | null> {
 /** The children of a page in the tree. Collection rows are excluded on purpose:
  *  they belong to their collection, not to the sidebar tree, or every task would
  *  show up as a nested page in the sidebar. */
+// The task system's home is a page so it can own a collection, but it is not a
+// note page and does not belong in the tree — the sidebar reaches it by its own
+// link. Keeping it out is what makes "the page tree has no tasks" true.
+const HIDDEN_ROOTS = "'pg_tasks_home'";
+
 export function listChildren(c: Ctx, parentId: string | null): Promise<Page[]> {
   return parentId === null
-    ? all<Page>(c, `SELECT * FROM page WHERE parent_page_id IS NULL AND collection_id IS NULL AND trashed_at IS NULL ORDER BY position, created_at`)
+    ? all<Page>(c, `SELECT * FROM page WHERE parent_page_id IS NULL AND collection_id IS NULL AND trashed_at IS NULL AND id NOT IN (${HIDDEN_ROOTS}) ORDER BY position, created_at`)
     : all<Page>(c, `SELECT * FROM page WHERE parent_page_id = ? AND collection_id IS NULL AND trashed_at IS NULL ORDER BY position, created_at`, parentId);
 }
 
@@ -55,7 +60,8 @@ export async function getPageTree(c: Ctx): Promise<PageNode[]> {
   const rows = await all<Page>(
     c,
     `SELECT * FROM page WHERE collection_id IS NULL AND status = 'active' AND trashed_at IS NULL
-      ORDER BY favorite DESC, position, created_at`,
+       AND id NOT IN (${HIDDEN_ROOTS})
+     ORDER BY favorite DESC, position, created_at`,
   );
   const byId = new Map<string, PageNode>(rows.map((r) => [r.id, { ...r, children: [] }]));
   const roots: PageNode[] = [];

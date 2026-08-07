@@ -47,6 +47,7 @@ export function PageTree() {
         ))}
       </div>
       <button className="et-tree-new" onClick={addRoot}>+ New page</button>
+      <a className="et-tree-link" href="/tasks/">Tasks</a>
       <a className="et-tree-link" href="/search/">Search</a>
       <button className="et-tree-new" onClick={() => setShowTrash((v) => !v)}>Trash</button>
       {showTrash && <TrashPanel onDone={() => setShowTrash(false)} />}

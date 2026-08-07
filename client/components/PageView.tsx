@@ -79,7 +79,10 @@ export function PageView({ id }: { id: string }) {
         {/* Collections are created here and then live in the body, positioned by
             their block — so this is a creation affordance, not a container. */}
         <div className="et-page-adds">
-          {(["tasks", "sources", "insights", "decisions"] as const)
+          {/* No "Tasks database" here: a page is for the durable thing — a
+              tracker, a plan, notes — and tasks live in one place so that
+              "what do I do next" is not split across the tree. */}
+          {(["sources", "insights", "decisions"] as const)
             .filter((r) => !hasRole(r))
             .map((r) => <button key={r} onClick={() => addCollection(r)}>+ {r[0].toUpperCase() + r.slice(1)} database</button>)}
           <button onClick={() => addCollection(null)}>+ Blank database</button>

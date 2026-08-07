@@ -56,6 +56,10 @@ export function listViews(c: Ctx, cid: string): Promise<CollectionView[]> {
   return all<CollectionView>(c, `SELECT * FROM collection_view WHERE collection_id = ? ORDER BY position`, cid);
 }
 
+/** Starting sections. Editable per collection like any other select property —
+ *  these are a first guess, not a fixed vocabulary. */
+export const DEFAULT_SECTIONS = ["school", "clubs", "projects", "career", "personal"] as const;
+
 /** The default property schema for a role collection. Created on demand so that
  *  `create_task` against a page with no Tasks collection just works instead of
  *  making the caller set up the collection first. */
@@ -64,6 +68,10 @@ export function defaultSchemaFor(role: CollectionRole): PropertyDef[] {
     case "tasks":
       return [
         { key: "status", name: "Status", type: "select", options: ["todo", "doing", "blocked", "done"] },
+        // Section is a cut across the whole workspace, deliberately independent
+        // of where a task's page sits in the tree: school work can live under a
+        // course page or a club page, and grouping by ancestry would scatter it.
+        { key: "section", name: "Section", type: "select", options: [...DEFAULT_SECTIONS] },
         { key: "priority", name: "Priority", type: "number" },
         { key: "due_date", name: "Due", type: "date" },
         { key: "objective", name: "Objective", type: "select" },

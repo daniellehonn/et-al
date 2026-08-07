@@ -86,7 +86,10 @@ api.patch("/views/:id", async (c) => c.json(await store.updateView(ctx(c), c.req
 api.delete("/views/:id", async (c) => { await store.deleteView(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
 
 // ---- tasks ------------------------------------------------------------------
-api.get("/tasks", async (c) => c.json(await store.listTasks(ctx(c), { pageId: c.req.query("page_id"), status: c.req.query("status") })));
+api.get("/tasks", async (c) => c.json(await store.listTasks(ctx(c), { pageId: c.req.query("page_id"), status: c.req.query("status"), section: c.req.query("section") })));
+// Everything open, grouped by section — what the Tasks screen renders.
+api.get("/tasks/by-section", async (c) => c.json(await store.tasksBySection(ctx(c))));
+api.get("/tasks/home", async (c) => c.json(await store.tasksHome(ctx(c))));
 api.get("/pages/:id/tasks", async (c) => c.json(await store.listTasks(ctx(c), { pageId: c.req.param("id"), status: c.req.query("status") })));
 api.post("/tasks", async (c) => c.json(await store.createTask(ctx(c), await c.req.json())));
 api.patch("/tasks/:id", async (c) => c.json(await store.updateTask(ctx(c), c.req.param("id"), await c.req.json())));

@@ -13,7 +13,7 @@ import { z } from "zod";
 import { captureInput, createInsightInput, createTaskInput, recordDecisionInput, updateTaskInput, INLINE_SOURCE_KINDS } from "../schema";
 import { Ctx, RuleError, all, first, id, logEvent, now } from "./db";
 import { Page, createPage, deletePage, getPage, properties, updatePage } from "./pages";
-import { ensureRoleCollection, pagesWithRole } from "./collections";
+import { collectionSchema, ensureRoleCollection, getCollection, pagesWithRole } from "./collections";
 import { writeBlocks } from "./blocks";
 
 /** A page from a role collection, with its properties already decoded — what
@@ -27,13 +27,91 @@ const decorate = (rows: (Page & { owner_page_id: string | null })[]): RoleRow[] 
   rows.map((r) => ({ ...r, props: properties(r) }));
 
 // ---- Tasks ------------------------------------------------------------------
+//
+// Tasks live in ONE collection, not scattered across the pages they relate to.
+// A page is for the durable thing — a tracker, an implementation plan, notes —
+// and hanging a task list off each one splits "what do I actually do next"
+// across the whole tree. The relationship still exists, but as a link on the
+// task (`source_page`) rather than as ownership, so a task can be derived from
+// a page without living inside it.
+
+const TASKS_HOME_ID = "pg_tasks_home";
+
+/** The single tasks collection, created on first use.
+ *
+ *  Its page is a root so the task system has an obvious front door in the
+ *  sidebar; it is the task system itself rather than a note page that happens
+ *  to carry tasks. */
+export async function tasksHome(c: Ctx): Promise<{ pageId: string; collectionId: string }> {
+  let page = await getPage(c, TASKS_HOME_ID);
+  if (!page) {
+    const t = now();
+    await c.db
+      .prepare(`INSERT INTO page (id, parent_page_id, collection_id, title, icon, cover, properties_json, position, status, trashed_at, favorite, is_ai, actor, created_at, updated_at)
+                VALUES (?, NULL, NULL, 'Tasks', '✅', NULL, '{}', -2, 'active', NULL, 1, 0, 'human', ?, ?)`)
+      .bind(TASKS_HOME_ID, t, t)
+      .run();
+    page = (await getPage(c, TASKS_HOME_ID))!;
+  }
+  const col = await ensureRoleCollection(c, TASKS_HOME_ID, "tasks");
+  return { pageId: TASKS_HOME_ID, collectionId: col.id };
+}
 
 export async function listTasks(
   c: Ctx,
-  opts: { pageId?: string; status?: string } = {},
+  opts: { pageId?: string; status?: string; section?: string } = {},
 ): Promise<RoleRow[]> {
-  const rows = decorate(await pagesWithRole(c, "tasks", { pageId: opts.pageId }));
-  return opts.status ? rows.filter((r) => r.props.status === opts.status) : rows;
+  // Not scoped by owning page any more — tasks all live in one collection, so
+  // "this page's tasks" means the ones derived from it.
+  let rows = decorate(await pagesWithRole(c, "tasks"));
+  if (opts.pageId) rows = rows.filter((r) => r.props.source_page === opts.pageId);
+  if (opts.section) rows = rows.filter((r) => r.props.section === opts.section);
+  if (opts.status) rows = rows.filter((r) => r.props.status === opts.status);
+  return rows;
+}
+
+/** Every open task, grouped by section — what the Tasks screen renders.
+ *
+ *  Sections come from the collection's own select options, so an empty section
+ *  still appears and the order is the one you configured rather than whatever
+ *  happens to have tasks in it today. */
+export async function tasksBySection(c: Ctx): Promise<Array<{ section: string; tasks: RoleRow[] }>> {
+  const { collectionId } = await tasksHome(c);
+  const col = await getCollection(c, collectionId);
+  const defined = col
+    ? (collectionSchema(col).find((p) => p.key === "section")?.options ?? [])
+    : [];
+  const open = (await listTasks(c)).filter((t) => t.props.status !== "done");
+
+  const used = [...new Set(open.map((t) => String(t.props.section ?? "")).filter(Boolean))];
+  const order = [...defined, ...used.filter((u) => !defined.includes(u))];
+
+  const groups = order.map((section) => ({
+    section,
+    tasks: sortSensibly(open.filter((t) => t.props.section === section)),
+  }));
+  const unsectioned = sortSensibly(open.filter((t) => !t.props.section));
+  if (unsectioned.length) groups.push({ section: "", tasks: unsectioned });
+  return groups;
+}
+
+/** Overdue first, then soonest due, then priority, then newest.
+ *
+ *  Deliberately not "balanced across sections": you asked to see everything
+ *  open and choose, so the ordering answers "what is most pressing" rather than
+ *  making the choice for you. */
+function sortSensibly(rows: RoleRow[]): RoleRow[] {
+  return [...rows].sort((a, b) => {
+    const ad = Number(a.props.due_date) || null;
+    const bd = Number(b.props.due_date) || null;
+    if (ad && bd && ad !== bd) return ad - bd;
+    if (ad && !bd) return -1;
+    if (bd && !ad) return 1;
+    const ap = Number(a.props.priority) || 0;
+    const bp = Number(b.props.priority) || 0;
+    if (ap !== bp) return bp - ap;
+    return b.created_at - a.created_at;
+  });
 }
 
 export async function getTask(c: Ctx, tid: string): Promise<RoleRow | null> {
@@ -42,22 +120,27 @@ export async function getTask(c: Ctx, tid: string): Promise<RoleRow | null> {
   return { ...page, owner_page_id: null, props: properties(page) };
 }
 
-export async function createTask(c: Ctx, input: z.input<typeof createTaskInput> & { page_id?: string }): Promise<Page> {
-  // `page_id` is the v8 name; `workspace_id` is accepted so existing callers and
-  // any agent working from an older tool description keep working.
-  const pageId = input.page_id ?? input.workspace_id;
-  if (!pageId) throw new RuleError("page_id is required", 400);
-  if (!(await getPage(c, pageId))) throw new RuleError(`page ${pageId} not found`, 404);
-  const col = await ensureRoleCollection(c, pageId, "tasks");
+export async function createTask(
+  c: Ctx,
+  input: z.input<typeof createTaskInput> & { page_id?: string; section?: string },
+): Promise<Page> {
+  // Every task goes to the one collection. `page_id` is now what the task came
+  // FROM rather than where it lives — a task derived from the CS 180 page keeps
+  // the link without the page owning a task list.
+  const source = input.page_id ?? input.workspace_id ?? null;
+  if (source && !(await getPage(c, source))) throw new RuleError(`page ${source} not found`, 404);
+  const { collectionId } = await tasksHome(c);
   return createPage(c, {
-    collection_id: col.id,
+    collection_id: collectionId,
     title: input.title,
     properties: {
       status: "todo",
+      section: input.section ?? null,
       priority: input.priority ?? 1,
       due_date: input.due_date ?? null,
       notes: input.notes ?? null,
       estimate_min: input.estimate_min ?? null,
+      source_page: source,
     },
   });
 }
