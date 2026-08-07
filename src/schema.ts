@@ -30,7 +30,6 @@ export interface Env {
   NUDGE_EVENING_HOUR?: string;
   NUDGE_MORNING_HOUR?: string;
   EXTRACT_MODEL?: string;
-  ADMIN_TOKEN?: string;
 }
 
 // ---- Entity types & vocabularies --------------------------------------------

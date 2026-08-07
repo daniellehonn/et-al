@@ -47,11 +47,7 @@ app.use("/api/*", async (c, next) => {
   // checks the sender is the owner, so it is exempt from this gate but not
   // unguarded.
   const isWebhook = path === "/api/imessage";
-  // Sendblue account setup carries its own token; the app's API key is not the
-  // credential here. Same reasoning as the webhook above — exempt from this
-  // gate, but not unguarded.
-  const isAdmin = path.startsWith("/api/admin/");
-  if (method !== "GET" && method !== "HEAD" && !isReadPost && !isWebhook && !isAdmin) {
+  if (method !== "GET" && method !== "HEAD" && !isReadPost && !isWebhook) {
     if (!validKey(c.env, credential(c.req.raw))) {
       return c.json({ error: "unauthorized" }, 401);
     }
@@ -137,54 +133,6 @@ app.put("/api/files/:key{.+}", async (c) => {
 });
 
 app.post("/api/imessage", (c) => handleInbound(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
-
-// ---- One-off Sendblue maintenance -------------------------------------------
-// Sendblue's free shared-line plan refuses to message a number that is not a
-// verified contact, which is why every outbound send returned 400. Adding the
-// contact needs the API secret, which lives here and nowhere else — hence a
-// route rather than a local CLI call. Guarded by its own token, and intended to
-// be removed once the account is set up.
-app.post("/api/admin/sendblue-contact", async (c) => {
-  const token = c.env.ADMIN_TOKEN;
-  if (!token || c.req.query("token") !== token) return c.json({ error: "unauthorized" }, 401);
-  if (!c.env.SENDBLUE_API_KEY_ID || !c.env.SENDBLUE_API_SECRET) {
-    return c.json({ error: "Sendblue credentials not set" }, 400);
-  }
-  const number = c.req.query("number") ?? c.env.SENDBLUE_OWNER_NUMBER;
-  if (!number) return c.json({ error: "no number" }, 400);
-
-  const call = async (path: string, body?: unknown) => {
-    const res = await fetch(`https://api.sendblue.co${path}`, {
-      method: body ? "POST" : "GET",
-      headers: {
-        "content-type": "application/json",
-        "sb-api-key-id": c.env.SENDBLUE_API_KEY_ID!,
-        "sb-api-secret-key": c.env.SENDBLUE_API_SECRET!,
-      },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    });
-    return { status: res.status, body: (await res.text()).slice(0, 700) };
-  };
-
-  // ?action=send tests the outbound path directly, rather than waiting for the
-  // hourly cron to prove it.
-  if (c.req.query("action") === "send") {
-    // ?from= overrides, so the line can be tested without a redeploy.
-    const from = c.req.query("from") ?? c.env.SENDBLUE_FROM_NUMBER;
-    return c.json({
-      from_seen: from ?? null,
-      send: await call("/api/send-message", {
-        number, content: c.req.query("text") ?? "Test from et al.",
-        ...(from ? { from_number: from } : {}),
-      }),
-    });
-  }
-  return c.json({
-    // Which lines the account actually has — a send fails without one.
-    lines: await call("/api/lines"),
-    contact: await call("/api/v2/contacts", { number, first_name: "Danielle", update_if_exists: true }),
-  });
-});
 
 app.route("/api", api);
 
