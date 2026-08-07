@@ -74,7 +74,7 @@ export async function send(env: Env, text: string): Promise<{ ok: boolean; detai
       body: JSON.stringify({ number: to, content: text.slice(0, 1400) }),
     });
     const body = await res.text();
-    return { ok: res.ok, detail: `${res.status} ${body.slice(0, 200)}` };
+    return { ok: res.ok, detail: `${res.status} ${body.slice(0, 900)}` };
   } catch (e) {
     return { ok: false, detail: e instanceof Error ? e.message : String(e) };
   }
