@@ -12,3 +12,4 @@ export * from "./search";
 export * from "./health";
 export * from "./context";
 export * from "./home";
+export * from "./automations";

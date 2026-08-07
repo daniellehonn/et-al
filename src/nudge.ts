@@ -57,6 +57,7 @@ async function markSent(c: store.Ctx, kind: string, date: string): Promise<void>
 
 export async function runNudges(env: Env): Promise<void> {
   const c = store.ctx(env, "ai:et-al");
+  await runAutomations(c, env);
   const hour = localHour(env);
   const date = localDate(env);
   const evening = Number(env.NUDGE_EVENING_HOUR ?? 20); // 8pm local
@@ -84,6 +85,46 @@ export async function runNudges(env: Env): Promise<void> {
     await send(env, `Morning. Today's three:\n\n${body}${streak}\n\n${APP_URL}`);
     await markSent(c, "morning", date);
   }
+}
+
+/** Fire any automation whose time has come.
+ *
+ *  Each one is independent, so a failure is recorded against that automation
+ *  and the rest still run — one broken schedule must not silence the others. */
+async function runAutomations(c: store.Ctx, env: Env): Promise<void> {
+  let due: store.Automation[] = [];
+  try { due = await store.dueAutomations(c); } catch { return; }
+
+  for (const a of due) {
+    try {
+      const body = await renderAutomation(c, a);
+      if (body) await send(env, body);
+      await store.recordRun(c, a, "ok", body ?? "(nothing to say)");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await store.recordRun(c, a, "error", msg);
+    }
+  }
+}
+
+/** What an automation actually says.
+ *
+ *  Deliberately deterministic for now: `digest` assembles real state, `message`
+ *  sends the task text verbatim. Neither calls a model — that arrives with the
+ *  agent loop, and until then an automation that reliably says a true thing
+ *  beats one that improvises. */
+async function renderAutomation(c: store.Ctx, a: store.Automation): Promise<string | null> {
+  if (a.action === "digest") {
+    const [open, review] = await Promise.all([
+      store.openTasks(c, 5),
+      store.listPendingPatches(c),
+    ]);
+    const lines: string[] = [a.task];
+    if (open.length) lines.push("", "Open:", ...open.map((t, i) => `${i + 1}. ${t.title}`));
+    if (review.length) lines.push("", `${review.length} awaiting review.`);
+    return lines.join("\n");
+  }
+  return a.task;
 }
 
 /** Parse a reply to the evening nudge into three tasks.

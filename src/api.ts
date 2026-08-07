@@ -171,6 +171,13 @@ api.delete("/insights/:id", async (c) => { await store.deleteInsight(ctx(c), c.r
 
 api.get("/career", async (c) => c.json(await store.listCareerBlocks(ctx(c), c.req.query("page_id"))));
 
+// ---- automations ------------------------------------------------------------
+api.get("/automations", async (c) => c.json(await store.listAutomations(ctx(c))));
+api.post("/automations", async (c) => c.json(await store.createAutomation(ctx(c), await c.req.json())));
+api.patch("/automations/:id", async (c) => c.json(await store.updateAutomation(ctx(c), c.req.param("id"), await c.req.json())));
+api.delete("/automations/:id", async (c) => { await store.deleteAutomation(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
+api.get("/automations/:id/runs", async (c) => c.json(await store.automationRuns(ctx(c), c.req.param("id"))));
+
 // ---- decisions / graph / search / health ------------------------------------
 api.get("/pages/:id/decisions", async (c) => c.json(await store.listDecisions(ctx(c), c.req.param("id"))));
 api.get("/pages/:id/timeline", async (c) => c.json(await store.getPageTimeline(ctx(c), c.req.param("id"))));

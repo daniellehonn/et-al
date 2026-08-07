@@ -135,6 +135,11 @@ const TOOLS: Tool[] = [
   { name: "get_page_health", description: "The activity/flow health score for a page (or every page that owns tasks).", inputSchema: obj({ page_id: str }), handler: (c, a) => (a.page_id ? store.pageHealth(c, String(a.page_id)) : store.allHealth(c)) },
   { name: "weekly_review", description: "The raw material for a guided weekly review.", inputSchema: obj({}), handler: (c) => store.getWeeklyReview(c) },
   { name: "get_career_blocks", description: "Every career block (accomplishment/STAR, resume bullet, role) across the user's work — the raw material for generating a resume, LinkedIn post, or STAR story. Optionally scope to one page.", inputSchema: obj({ page_id: str }), handler: (c, a) => store.listCareerBlocks(c, a.page_id as string | undefined) },
+  // ---- automations ----
+  { name: "list_automations", description: "Recurring tasks et al. runs on a schedule.", inputSchema: obj({}), handler: (c) => store.listAutomations(c) },
+  { name: "create_automation", description: "Schedule recurring work. `schedule` is a 5-field cron expression evaluated in the user's timezone. action 'message' texts the task verbatim; 'digest' appends open tasks and pending reviews.", inputSchema: obj({ name: str, schedule: str, task: str, action: str, timezone: str }, ["name", "schedule", "task"]), handler: (c, a) => store.createAutomation(c, a as never) },
+  { name: "update_automation", description: "Change an automation's schedule, task, or enabled state.", inputSchema: obj({ id: str, name: str, schedule: str, task: str, enabled: { type: "boolean" } }, ["id"]), handler: (c, a) => store.updateAutomation(c, String(a.id), a as never) },
+  { name: "delete_automation", description: "Delete an automation. Destructive — confirm with the user first.", inputSchema: obj({ id: str }, ["id"]), handler: async (c, a) => { await store.deleteAutomation(c, String(a.id)); return { ok: true }; } },
   { name: "get_agent_activity", description: "Everything written by an AI agent.", inputSchema: obj({}), handler: (c) => store.getAgentActivity(c) },
 
 ];
