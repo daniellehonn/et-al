@@ -246,7 +246,9 @@ export async function queryCollection(
   cid: string,
   opts: { filter?: Filter[]; sort?: Sort[]; limit?: number } = {},
 ): Promise<Page[]> {
-  const rows = await all<Page>(c, `SELECT * FROM page WHERE collection_id = ? ORDER BY position, created_at`, cid);
+  const rows = await all<Page>(
+    c, `SELECT * FROM page WHERE collection_id = ? AND trashed_at IS NULL ORDER BY position, created_at`, cid,
+  );
   let out = rows;
   for (const f of opts.filter ?? []) out = out.filter((r) => matches(properties(r)[f.key], f.op, f.value));
   for (const s of [...(opts.sort ?? [])].reverse()) {
@@ -313,7 +315,9 @@ export async function pagesWithRole(
   if (!scoped.length) return [];
   const marks = scoped.map(() => "?").join(",");
   const rows = await all<Page>(
-    c, `SELECT * FROM page WHERE collection_id IN (${marks}) ORDER BY position, created_at`, ...scoped.map((x) => x.id),
+    c,
+    `SELECT * FROM page WHERE collection_id IN (${marks}) AND trashed_at IS NULL ORDER BY position, created_at`,
+    ...scoped.map((x) => x.id),
   );
   const owner = new Map(scoped.map((x) => [x.id, x.parent_page_id]));
   return rows.map((r) => ({ ...r, owner_page_id: owner.get(r.collection_id!) ?? null }));

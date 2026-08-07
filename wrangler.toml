@@ -40,9 +40,10 @@ max_batch_size = 10
 max_batch_timeout = 5
 max_retries = 2
 
-# Safety-net sweep + nightly markdown snapshots (snapshots land in a later phase).
-[triggers]
-crons = ["*/5 * * * *", "0 4 * * *"]
+# No cron triggers: the scheduled() handler went away with the v6 implementation
+# and these were left behind, so production threw "Handler does not export a
+# scheduled() function" every five minutes. They come back with a handler that
+# needs them, not before.
 
 [vars]
 APP_NAME = "et al."
