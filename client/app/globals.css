@@ -124,7 +124,12 @@ body {
      regardless of order. Any future override of a component-owned class from
      this file needs the same treatment. */
   body .et-ws-add, body .et-task-obj, body .et-task-due, body .et-cover-remove,
-  body .et-embed-edit-btn, body .et-col-menu summary, body .et-del { opacity: 1; }
+  body .et-embed-edit-btn, body .et-col-menu summary, body .et-del,
+  /* Task rows: every one of these is opacity:0 until :hover, which on touch
+     means never. Without this, a phone cannot delete a task, set a repeat,
+     add a subtask, or open a task's notes. */
+  body .et-tv-sub, body .et-tv-date, body .et-tv-del, body .et-tv-open,
+  body .et-tv-rep-sel, body .et-tv-section-del { opacity: 1; }
 
   /* iOS zooms the viewport on focus for any control under 16px. */
   input, select, textarea { font-size: 16px; }
