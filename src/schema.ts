@@ -228,6 +228,7 @@ export const createTaskInput = z.object({
   priority: z.number().int().min(0).max(3).default(1),
   due_date: z.number().int().nullish(),
   estimate_min: z.number().int().nullish(),
+  recurrence: z.string().nullish(),
 });
 
 export const updateTaskInput = z.object({
@@ -239,6 +240,7 @@ export const updateTaskInput = z.object({
   estimate_min: z.number().int().nullish(),
   objective_id: z.string().nullish(),
   position: z.number().optional(),
+  recurrence: z.string().nullish(),
 });
 
 export const captureInput = z.object({

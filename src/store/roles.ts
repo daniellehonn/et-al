@@ -273,6 +273,7 @@ export async function createTask(
       due_date: input.due_date ?? null,
       notes: input.notes ?? null,
       estimate_min: input.estimate_min ?? null,
+      recurrence: input.recurrence ?? null,
       source_page: source,
     },
   });
@@ -282,12 +283,79 @@ export async function createTask(
   return (await getPage(c, task.id))!;
 }
 
+// ---- recurrence -------------------------------------------------------------
+
+const DAY_MS = 86_400_000;
+
+/** Add months while clamping the day, so the 31st of a month does not become
+ *  the 3rd of the month after next. JS date arithmetic overflows silently. */
+function addMonths(d: Date, n: number): Date {
+  const day = d.getDate();
+  const out = new Date(d);
+  out.setDate(1);
+  out.setMonth(out.getMonth() + n);
+  const lastDay = new Date(out.getFullYear(), out.getMonth() + 1, 0).getDate();
+  out.setDate(Math.min(day, lastDay));
+  return out;
+}
+
+/** One step forward for a recurrence rule. Also accepts "every N days". */
+function step(rule: string, from: number): number | null {
+  const every = /^every\s+(\d+)\s+days?$/i.exec(rule.trim());
+  if (every) {
+    const n = Number(every[1]);
+    return n > 0 ? from + n * DAY_MS : null;
+  }
+  switch (rule) {
+    case "daily": return from + DAY_MS;
+    case "weekly": return from + 7 * DAY_MS;
+    case "biweekly": return from + 14 * DAY_MS;
+    case "weekdays": {
+      // Advance one day, then off the weekend. Friday lands on Monday.
+      const d = new Date(from + DAY_MS);
+      while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
+      return d.getTime();
+    }
+    case "monthly": return addMonths(new Date(from), 1).getTime();
+    case "yearly": {
+      const d = new Date(from);
+      d.setFullYear(d.getFullYear() + 1);
+      return d.getTime();
+    }
+    default: return null;
+  }
+}
+
+/**
+ * The next due date for a recurring task that was just completed.
+ *
+ * Stepped forward until it is actually in the future, rather than once: a daily
+ * task left alone for a week would otherwise come back still overdue, and you
+ * would tick it off seven times to catch up on a habit you simply missed.
+ */
+export function nextDue(rule: string, current: number | null, from = now()): number | null {
+  let due = current ?? from;
+  // Bounded so a malformed rule cannot spin. 520 covers a decade of weeklies.
+  for (let i = 0; i < 520; i++) {
+    const next = step(rule, due);
+    if (next === null) return null;
+    due = next;
+    if (due > from) return due;
+  }
+  return null;
+}
+
 export async function updateTask(c: Ctx, tid: string, patch: z.input<typeof updateTaskInput>): Promise<Page> {
   const props: Record<string, string | number | boolean | string[] | null> = {};
-  for (const k of ["status", "priority", "due_date", "notes", "estimate_min"] as const) {
+  for (const k of ["status", "priority", "due_date", "notes", "estimate_min", "recurrence"] as const) {
     if (patch[k] !== undefined) props[k] = patch[k];
   }
-  if (patch.status === "done") props.completed_at = now();
+  if (patch.status === "done") {
+    props.completed_at = now();
+    // A recurring task does not stay done; it comes back on its next date.
+    const rolled = await rollRecurring(c, tid);
+    if (rolled) Object.assign(props, rolled);
+  }
   return updatePage(c, tid, {
     ...(patch.title !== undefined ? { title: patch.title } : {}),
     ...(patch.position !== undefined ? { position: patch.position } : {}),
@@ -295,7 +363,45 @@ export async function updateTask(c: Ctx, tid: string, patch: z.input<typeof upda
   });
 }
 
+/**
+ * What completing a recurring task should write instead of a plain "done".
+ *
+ * Returns null for a one-off task, so callers fall through to normal behaviour.
+ *
+ * The task advances in place rather than spawning a fresh copy: a habit you
+ * keep for a year would otherwise leave 365 rows behind, and the thing you
+ * actually want to look at — the streak, and when it is next due — is a
+ * property of the one task, not of a pile of corpses. The completion is still
+ * recorded as an event, so history is not lost to the list staying clean.
+ */
+async function rollRecurring(
+  c: Ctx, tid: string,
+): Promise<Record<string, string | number | null> | null> {
+  const page = await getPage(c, tid);
+  if (!page) return null;
+  const props = properties(page);
+  const rule = props.recurrence;
+  if (!rule || typeof rule !== "string") return null;
+
+  const current = Number(props.due_date) || null;
+  const next = nextDue(rule, current);
+  // An unparseable rule must not swallow the completion — better a task that
+  // stays done than one that silently refuses to close.
+  if (next === null) return null;
+
+  await logEvent(c, "complete", "page", tid, { title: page.title, recurring: rule });
+  return {
+    status: "todo",
+    due_date: next,
+    last_completed_at: now(),
+    completed_at: null,
+    streak: (Number(props.streak) || 0) + 1,
+  };
+}
+
 export async function completeTask(c: Ctx, tid: string): Promise<Page> {
+  const rolled = await rollRecurring(c, tid);
+  if (rolled) return updatePage(c, tid, { properties: rolled });
   const page = await updatePage(c, tid, { properties: { status: "done", completed_at: now() } });
   await logEvent(c, "complete", "page", tid, { title: page.title });
   return page;

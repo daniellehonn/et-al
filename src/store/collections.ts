@@ -58,6 +58,8 @@ export function listViews(c: Ctx, cid: string): Promise<CollectionView[]> {
 
 /** Starting sections. Editable per collection like any other select property —
  *  these are a first guess, not a fixed vocabulary. */
+export const RECURRENCES = ["daily", "weekdays", "weekly", "biweekly", "monthly", "yearly"] as const;
+
 export const DEFAULT_SECTIONS = ["school", "clubs", "projects", "career", "personal"] as const;
 
 /** The default property schema for a role collection. Created on demand so that
@@ -74,6 +76,7 @@ export function defaultSchemaFor(role: CollectionRole): PropertyDef[] {
         { key: "section", name: "Section", type: "select", options: [...DEFAULT_SECTIONS] },
         { key: "priority", name: "Priority", type: "number" },
         { key: "due_date", name: "Due", type: "date" },
+        { key: "recurrence", name: "Repeats", type: "select", options: [...RECURRENCES] },
         { key: "objective", name: "Objective", type: "select" },
         { key: "notes", name: "Notes", type: "text" },
       ];

@@ -20,6 +20,9 @@ interface TaskNode extends RoleRow {
 }
 interface Group { section: string; tasks: TaskNode[] }
 
+// Mirrors RECURRENCES in src/store/collections.ts.
+const RECURRENCES = ["daily", "weekdays", "weekly", "biweekly", "monthly", "yearly"] as const;
+
 const DAY = 86_400_000;
 
 function dueLabel(ts: unknown): { text: string; tone: string } | null {
@@ -158,6 +161,9 @@ function TaskRow({ node, depth, section, adding, setAdding, onAdd, onChanged }: 
   const showProgress = hasKids && node.progress.total > 1;
   // Three levels is the ceiling, so the deepest row cannot add beneath it.
   const canNest = depth < 2;
+  const repeat = typeof node.props.recurrence === "string" ? node.props.recurrence : "";
+  const [editing, setEditing] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
 
   const complete = async () => {
     qc.setQueryData<Group[]>(["task-tree"], (old) => old); // keep the list stable while the write lands
@@ -172,13 +178,48 @@ function TaskRow({ node, depth, section, adding, setAdding, onAdd, onChanged }: 
     onChanged();
   };
 
+  const setRepeat = async (v: string) => {
+    await api.patch(`/tasks/${node.id}`, { recurrence: v || null });
+    onChanged();
+  };
+
+  // Renaming in place. A task is a line of text, so opening a document just to
+  // fix a typo in its title is the wrong amount of ceremony.
+  const rename = async (v: string) => {
+    setEditing(false);
+    const title = v.trim();
+    if (!title || title === node.title) return;
+    await api.patch(`/tasks/${node.id}`, { title });
+    onChanged();
+  };
+
+  const remove = async () => {
+    await api.del(`/tasks/${node.id}`);
+    setConfirmDel(false);
+    onChanged();
+  };
+
   return (
     <>
       <div className="et-tv-row" style={{ paddingLeft: `${depth * 1.35}rem` }} data-depth={depth}>
         <button className="et-tv-check" aria-label="Complete" onClick={complete} />
-        <a className="et-tv-title" href={`/page/?id=${node.id}`} data-goal={depth === 0 && hasKids ? "" : undefined}>
-          {node.title || "Untitled"}
-        </a>
+        {editing ? (
+          <input className="et-tv-title-edit" autoFocus defaultValue={node.title}
+            onBlur={(e) => rename(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              if (e.key === "Escape") setEditing(false);
+            }} />
+        ) : (
+          // A span, not a link: clicking a task edits it. The page behind it is
+          // storage, not a destination, and is reachable via ↗ when there are
+          // actually notes to write.
+          <span className="et-tv-title" onClick={() => setEditing(true)}
+            data-goal={depth === 0 && hasKids ? "" : undefined}>
+            {node.title || "Untitled"}
+          </span>
+        )}
+        {repeat && <span className="et-tv-repeat" title={`Repeats ${repeat}`}>↻</span>}
         {showProgress && (
           <span className="et-tv-prog" title={`${node.progress.done} of ${node.progress.total} done`}>
             {node.progress.done}/{node.progress.total}
@@ -188,9 +229,25 @@ function TaskRow({ node, depth, section, adding, setAdding, onAdd, onChanged }: 
         <input className="et-tv-date" type="date" defaultValue={toInput(node.props.due_date)}
           onChange={(e) => setDue(e.target.value)} aria-label="Due date" />
         {due && <span className="et-tv-due" data-tone={due.tone}>{due.text}</span>}
+        <select className="et-tv-rep-sel" value={repeat} aria-label="Repeat"
+          data-set={repeat ? "" : undefined}
+          onChange={(e) => setRepeat(e.target.value)}>
+          <option value="">Once</option>
+          {RECURRENCES.map((r) => <option key={r} value={r}>{r}</option>)}
+        </select>
         {canNest && (
           <button className="et-tv-sub" title="Break this down"
             onClick={() => setAdding({ section, parent: node.id })}>+</button>
+        )}
+        <a className="et-tv-open" href={`/page/?id=${node.id}`} title="Open notes">↗</a>
+        {confirmDel ? (
+          <span className="et-tv-confirm">
+            {hasKids ? `Delete with ${node.progress.total - 1} subtask${node.progress.total > 2 ? "s" : ""}?` : "Delete?"}
+            <button className="et-tv-yes" onClick={remove}>Yes</button>
+            <button className="et-tv-no" onClick={() => setConfirmDel(false)}>Cancel</button>
+          </span>
+        ) : (
+          <button className="et-tv-del" title="Delete task" onClick={() => setConfirmDel(true)}>×</button>
         )}
       </div>
 
@@ -268,7 +325,31 @@ function TasksStyles() {
       .et-tv-no { color: var(--line-strong); }
       .et-tv-yes:hover, .et-tv-no:hover { text-decoration: underline; }
       .et-tv-row { display: flex; align-items: center; gap: 0.55rem; padding: 0.34rem 0; min-width: 0; }
-      .et-tv-row:hover .et-tv-sub, .et-tv-row:hover .et-tv-date { opacity: 1; }
+      .et-tv-row:hover .et-tv-sub, .et-tv-row:hover .et-tv-date,
+      .et-tv-row:hover .et-tv-del, .et-tv-row:hover .et-tv-open,
+      .et-tv-row:hover .et-tv-rep-sel { opacity: 1; }
+      /* Clicking the title edits it, so it has to read as editable text
+         rather than as a link. */
+      .et-tv-title { cursor: text; }
+      .et-tv-title-edit { flex: 1; min-width: 0; font: inherit; font-size: 0.92rem;
+        color: var(--ink); background: none; border: none; border-bottom: 1px solid var(--color-iris);
+        padding: 0; outline: none; }
+      .et-tv-repeat { flex: none; font-size: 0.72rem; color: var(--color-iris); }
+      /* Kept in the layout when set, so a repeating task shows its rule
+         without needing a hover to discover it. */
+      .et-tv-rep-sel { flex: none; opacity: 0; font: inherit; font-size: 0.7rem;
+        background: none; border: none; color: var(--ink-faint); cursor: pointer;
+        max-width: 5.5rem; transition: opacity 0.12s; }
+      .et-tv-rep-sel[data-set] { opacity: 1; color: var(--color-iris); }
+      .et-tv-rep-sel:focus { opacity: 1; outline: none; }
+      .et-tv-open { flex: none; opacity: 0; text-decoration: none; font-size: 0.75rem;
+        color: var(--ink-faint); transition: opacity 0.12s, color 0.12s; }
+      .et-tv-open:hover { color: var(--color-iris); }
+      .et-tv-del { flex: none; opacity: 0; background: none; border: none; cursor: pointer;
+        font: inherit; font-size: 0.9rem; line-height: 1; padding: 0 0.15rem;
+        color: var(--ink-faint); transition: opacity 0.12s, color 0.12s; }
+      .et-tv-del:hover { color: #c0392b; }
+      .et-tv-del:focus-visible, .et-tv-open:focus-visible, .et-tv-rep-sel:focus-visible { opacity: 1; }
       .et-tv-check { flex: none; width: 15px; height: 15px; border: 1.5px solid var(--line-strong);
         border-radius: 4px; background: none; cursor: pointer; padding: 0; }
       .et-tv-check:hover { border-color: var(--color-sage); background: var(--color-sage); }
