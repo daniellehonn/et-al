@@ -243,16 +243,18 @@ function EditorStyles() {
          108px/84px for H1/H2) to match ITS heading scale. et al.'s headings are
          smaller, so the handle was centring on a box far taller than the text.
          These heights track the real line-heights instead. */
-      .et-bn .bn-side-menu { height: 26px; }
-      .et-bn .bn-side-menu[data-block-type="heading"][data-level="1"] { height: 46px; }
-      .et-bn .bn-side-menu[data-block-type="heading"][data-level="2"] { height: 38px; }
-      .et-bn .bn-side-menu[data-block-type="heading"][data-level="3"] { height: 32px; }
+      /* Unscoped on purpose: BlockNote renders the side menu into a portal on
+         document.body, so anything scoped under .et-bn never matches it. */
+      .bn-side-menu { height: 26px !important; }
+      .bn-side-menu[data-block-type="heading"][data-level="1"] { height: 46px !important; }
+      .bn-side-menu[data-block-type="heading"][data-level="2"] { height: 38px !important; }
+      .bn-side-menu[data-block-type="heading"][data-level="3"] { height: 32px !important; }
       /* The controls sit next to the text, not competing with it. */
-      .et-bn .bn-toggle-button { padding: 2px; opacity: 0.55; }
-      .et-bn .bn-toggle-button:hover { opacity: 1; }
-      .et-bn .bn-toggle-button > svg { width: 14px; height: 14px; }
-      .et-bn .bn-toggle-add-block-button { font-size: 13px; opacity: 0.55; margin-left: 18px; }
-      .et-bn .bn-toggle-add-block-button:hover { opacity: 1; }
+      .bn-toggle-button { padding: 2px; opacity: 0.5; }
+      .bn-toggle-button:hover { opacity: 1; }
+      .bn-toggle-button > svg { width: 13px !important; height: 13px !important; }
+      .bn-toggle-add-block-button { font-size: 13px; opacity: 0.5; margin-left: 16px; }
+      .bn-toggle-add-block-button:hover { opacity: 1; }
       .et-bn-loading { padding: 1.5rem 0; color: var(--ink-faint); }
       .et-bn-opaque { display: flex; align-items: center; gap: 0.5rem; border: 1px dashed var(--rule); border-radius: 6px; padding: 0.35rem 0.6rem; margin: 0.2rem 0; }
       .et-bn-opaque-tag { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-iris); }
