@@ -10,7 +10,7 @@
 // Sections group the top level and are inherited downward, so a goal doubles as
 // the subsection within its section.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, type Page, type RoleRow } from "@/lib/api";
 
 interface TaskNode extends RoleRow {
@@ -22,6 +22,8 @@ interface Group { section: string; tasks: TaskNode[] }
 
 // Mirrors RECURRENCES in src/store/collections.ts.
 const RECURRENCES = ["daily", "weekdays", "weekly", "biweekly", "monthly", "yearly"] as const;
+
+const COLLAPSE_KEY = "et-al:tasks-collapsed";
 
 const DAY = 86_400_000;
 
@@ -48,6 +50,26 @@ export function TasksView() {
   // Two-step rather than a confirm(): a modal for something this reversible is
   // heavy, and the second click is where the consequence gets spelled out.
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
+
+  // Collapse state is persisted: it describes how you want to look at the list,
+  // and re-collapsing four sections after every reload would make the feature
+  // not worth using. Sections are keyed "§name" so a section and a task id can
+  // never collide in the same set.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(COLLAPSE_KEY);
+      if (raw) setCollapsed(new Set(JSON.parse(raw) as string[]));
+    } catch { /* corrupt or unavailable storage just means nothing collapsed */ }
+  }, []);
+  const toggle = (key: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next])); } catch { /* private mode */ }
+      return next;
+    });
+  };
 
   const { data: groups, isLoading } = useQuery({
     queryKey: ["task-tree"],
@@ -93,7 +115,13 @@ export function TasksView() {
       {(groups ?? []).map((g) => (
         <section key={g.section || "_none"} className="et-tv-section">
           <div className="et-tv-section-head">
-            <span className="et-tv-section-name">{g.section || "unsectioned"}</span>
+            <button className="et-tv-sec-caret" aria-expanded={!collapsed.has("§" + g.section)}
+              aria-label={collapsed.has("§" + g.section) ? "Expand section" : "Collapse section"}
+              onClick={() => toggle("§" + g.section)}>
+              {collapsed.has("§" + g.section) ? "▸" : "▾"}
+            </button>
+            <span className="et-tv-section-name" onClick={() => toggle("§" + g.section)}>
+              {g.section || "unsectioned"}</span>
             <span className="et-tv-section-count">{g.tasks.length}</span>
             {/* The unsectioned group is not a section — it is where deleted
                 sections' tasks land, so it has nothing to delete. */}
@@ -111,18 +139,19 @@ export function TasksView() {
             ))}
           </div>
 
-          {g.tasks.map((t) => (
+          {!collapsed.has("§" + g.section) && g.tasks.map((t) => (
             <TaskRow key={t.id} node={t} depth={0} section={g.section}
-              adding={adding} setAdding={setAdding} onAdd={add} onChanged={refresh} />
+              adding={adding} setAdding={setAdding} onAdd={add} onChanged={refresh}
+              collapsed={collapsed} toggle={toggle} />
           ))}
 
-          <AddRow
+          {!collapsed.has("§" + g.section) && <AddRow
             open={adding?.section === g.section && adding.parent === null}
             onOpen={() => setAdding({ section: g.section, parent: null })}
             onClose={() => setAdding(null)}
             onSubmit={(title, due) => add(g.section, null, title, due)}
             label="+ Add"
-          />
+          />}
         </section>
       ))}
 
@@ -147,8 +176,9 @@ export function TasksView() {
   );
 }
 
-function TaskRow({ node, depth, section, adding, setAdding, onAdd, onChanged }: {
+function TaskRow({ node, depth, section, adding, setAdding, onAdd, onChanged, collapsed, toggle }: {
   node: TaskNode; depth: number; section: string;
+  collapsed: Set<string>; toggle: (key: string) => void;
   adding: { section: string; parent: string | null } | null;
   setAdding: (v: { section: string; parent: string | null } | null) => void;
   onAdd: (section: string, parent: string | null, title: string, due: string) => Promise<void>;
@@ -164,6 +194,7 @@ function TaskRow({ node, depth, section, adding, setAdding, onAdd, onChanged }: 
   const repeat = typeof node.props.recurrence === "string" ? node.props.recurrence : "";
   const [editing, setEditing] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
+  const isShut = collapsed.has(node.id);
 
   const complete = async () => {
     qc.setQueryData<Group[]>(["task-tree"], (old) => old); // keep the list stable while the write lands
@@ -202,6 +233,11 @@ function TaskRow({ node, depth, section, adding, setAdding, onAdd, onChanged }: 
   return (
     <>
       <div className="et-tv-row" style={{ paddingLeft: `${depth * 1.35}rem` }} data-depth={depth}>
+        {hasKids ? (
+          <button className="et-tv-caret" aria-expanded={!isShut}
+            aria-label={isShut ? "Expand subtasks" : "Collapse subtasks"}
+            onClick={() => toggle(node.id)}>{isShut ? "▸" : "▾"}</button>
+        ) : <span className="et-tv-caret-gap" />}
         <button className="et-tv-check" aria-label="Complete" onClick={complete} />
         {editing ? (
           <input className="et-tv-title-edit" autoFocus defaultValue={node.title}
@@ -251,12 +287,13 @@ function TaskRow({ node, depth, section, adding, setAdding, onAdd, onChanged }: 
         )}
       </div>
 
-      {node.children.map((k) => (
+      {!isShut && node.children.map((k) => (
         <TaskRow key={k.id} node={k} depth={depth + 1} section={section}
-          adding={adding} setAdding={setAdding} onAdd={onAdd} onChanged={onChanged} />
+          adding={adding} setAdding={setAdding} onAdd={onAdd} onChanged={onChanged}
+          collapsed={collapsed} toggle={toggle} />
       ))}
 
-      {adding?.parent === node.id && (
+      {!isShut && adding?.parent === node.id && (
         <div style={{ paddingLeft: `${(depth + 1) * 1.35}rem` }}>
           <AddRow open onOpen={() => {}} onClose={() => setAdding(null)}
             onSubmit={(title, d) => onAdd(section, node.id, title, d)} label="" />
@@ -308,6 +345,13 @@ function TasksStyles() {
       .et-tv-section-name { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
         letter-spacing: 0.07em; color: var(--ink-faint); }
       .et-tv-section-count { font-size: 0.7rem; color: var(--line-strong); }
+      .et-tv-sec-caret, .et-tv-caret { flex: none; background: none; border: 0; cursor: pointer;
+        font: inherit; font-size: 0.62rem; line-height: 1; padding: 0; width: 0.9rem;
+        color: var(--line-strong); }
+      .et-tv-sec-caret:hover, .et-tv-caret:hover { color: var(--ink); }
+      .et-tv-section-name { cursor: pointer; }
+      /* Leaves reserve the caret's width so titles line up down the column. */
+      .et-tv-caret-gap { flex: none; width: 0.9rem; }
       /* Hidden until the row is hovered: deleting a section is rare, and a
          permanent × next to every heading reads as clutter. */
       .et-tv-section-del { margin-left: auto; background: none; border: 0; cursor: pointer;
