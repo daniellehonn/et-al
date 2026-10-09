@@ -12,7 +12,7 @@
 //     inline array is stored alongside under `rich` for fidelity — never
 //     instead of it.
 //  2. Unknown types round-trip untouched. et al. has block types BlockNote has
-//     never heard of (collection, page_link, widgets, career blocks). They are
+//     never heard of (collection, page_link). They are
 //     carried through as opaque custom blocks so opening a page in the editor
 //     can never silently delete them.
 import type { Block } from "./api";

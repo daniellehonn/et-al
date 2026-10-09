@@ -236,23 +236,6 @@ export async function writeBlocks(c: Ctx, pageId: string, ops: BlockOp[]): Promi
   return getBlocks(c, pageId);
 }
 
-/** Every career block across all pages — the raw material an agent recycles into
- *  a resume. Still a block-level concept: career capital is written in prose, in
- *  place, as you work, not filed into a separate collection. */
-export interface CareerBlock {
-  id: string; page_id: string; type: string; content_json: string;
-  created_at: number; page_title: string;
-}
-
-export function listCareerBlocks(c: Ctx, pageId?: string): Promise<CareerBlock[]> {
-  const base = `SELECT b.id, b.page_id, b.type, b.content_json, b.created_at, p.title AS page_title
-                FROM block b JOIN page p ON b.page_id = p.id
-                WHERE b.type IN ('accomplishment', 'resume_bullet', 'role', 'project')`;
-  return pageId
-    ? all<CareerBlock>(c, `${base} AND b.page_id = ? ORDER BY b.created_at DESC`, pageId)
-    : all<CareerBlock>(c, `${base} ORDER BY b.created_at DESC`);
-}
-
 // ---- patches (the ONLY way an agent changes a page body) --------------------
 
 export async function proposePagePatch(c: Ctx, pageId: string, ops: BlockOp[], summary: string): Promise<PagePatch> {

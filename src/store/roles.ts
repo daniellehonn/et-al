@@ -1,8 +1,8 @@
-// The typed surface: tasks, sources, insights and decisions.
+// The typed surface: tasks, sources and insights.
 //
 // In v7 each of these was a table with its own module. They are now pages in
 // role-tagged collections, and this module is what keeps them addressable by
-// name — for agents (list_tasks, weekly_review, suggest_daily3) and for the
+// name — for agents (list_tasks, list_inbox, list_insights) and for the
 // parts of the app that legitimately need to know what a task is.
 //
 // The trade this rewrite makes: structure is the user's to author, but meaning
@@ -10,7 +10,7 @@
 // or keep tasks in three different projects; `role` and the stable property keys
 // mean none of that breaks the agent layer.
 import { z } from "zod";
-import { captureInput, createInsightInput, createTaskInput, recordDecisionInput, updateTaskInput, INLINE_SOURCE_KINDS } from "../schema";
+import { captureInput, createInsightInput, createTaskInput, updateTaskInput, INLINE_SOURCE_KINDS } from "../schema";
 import { Ctx, RuleError, all, first, id, logEvent, now } from "./db";
 import { Page, createPage, deletePage, getPage, properties, updatePage } from "./pages";
 import { collectionSchema, ensureRoleCollection, getCollection, pagesWithRole } from "./collections";
@@ -530,31 +530,6 @@ export async function deleteInsight(c: Ctx, iid: string): Promise<void> {
   }
   await deletePage(c, iid);
 }
-
-// ---- Decisions --------------------------------------------------------------
-
-export function listDecisions(c: Ctx, pageId?: string): Promise<RoleRow[]> {
-  return pagesWithRole(c, "decisions", { pageId }).then(decorate);
-}
-
-export async function recordDecision(c: Ctx, input: z.input<typeof recordDecisionInput> & { page_id?: string }): Promise<Page> {
-  const data = recordDecisionInput.parse(input);
-  const target = input.page_id ?? data.workspace_id;
-  const col = await ensureRoleCollection(c, target, "decisions");
-  const page = await createPage(c, {
-    collection_id: col.id,
-    title: data.title,
-    properties: {
-      decided_on: data.decided_on ?? now(),
-      impact: data.impact ?? null,
-      alternatives: data.alternatives ?? null,
-    },
-  });
-  await writeBlocks(c, page.id, [{ op: "replace_content", content: data.rationale }]);
-  return (await getPage(c, page.id))!;
-}
-
-export const deleteDecision = deletePage;
 
 // ---- Shared helpers ---------------------------------------------------------
 

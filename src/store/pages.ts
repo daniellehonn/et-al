@@ -61,7 +61,7 @@ export async function getPageTree(c: Ctx): Promise<PageNode[]> {
     c,
     `SELECT * FROM page WHERE collection_id IS NULL AND status = 'active' AND trashed_at IS NULL
        AND id NOT IN (${HIDDEN_ROOTS})
-     ORDER BY favorite DESC, position, created_at`,
+     ORDER BY position, created_at`,
   );
   const byId = new Map<string, PageNode>(rows.map((r) => [r.id, { ...r, children: [] }]));
   const roots: PageNode[] = [];
@@ -233,13 +233,6 @@ export async function restorePage(c: Ctx, pid: string): Promise<Page> {
   return (await getPage(c, pid))!;
 }
 
-export async function setFavorite(c: Ctx, pid: string, favorite: boolean): Promise<Page> {
-  await c.db.prepare(`UPDATE page SET favorite = ?, updated_at = ? WHERE id = ?`).bind(favorite ? 1 : 0, now(), pid).run();
-  const page = await getPage(c, pid);
-  if (!page) throw new RuleError(`page ${pid} not found`, 404);
-  return page;
-}
-
 /** Delete a page and everything under it: child pages, bodies, the collections
  *  it owns and their rows. Permanent — the UI routes through trashPage instead.
  *  Unlike v7's deleteWorkspace this does NOT promote children: a page tree is
@@ -293,105 +286,6 @@ export async function resolvePagePath(c: Ctx, path: string): Promise<Page | null
     parent = found.id;
   }
   return found;
-}
-
-/** Deep-copy a page: its properties, its body (nesting intact), the collections
- *  it owns with their views and rows, and recursively its child pages.
- *
- *  Ids are regenerated throughout — a copy that shared block ids with its
- *  original would make editing one silently rewrite the other. */
-export async function duplicatePage(c: Ctx, pid: string, parentOverride?: string | null): Promise<Page> {
-  const src = await getPage(c, pid);
-  if (!src) throw new RuleError(`page ${pid} not found`, 404);
-  const t = now();
-  const newId = id("pg");
-  const parent = parentOverride === undefined ? src.parent_page_id : parentOverride;
-  const title = parentOverride === undefined ? `${src.title} (copy)` : src.title;
-  await c.db
-    .prepare(
-      `INSERT INTO page (id, parent_page_id, collection_id, title, icon, cover, properties_json, position, status, trashed_at, favorite, is_ai, actor, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, 0, ?, ?, ?, ?)`,
-    )
-    .bind(newId, parent, src.collection_id, title, src.icon, src.cover, src.properties_json,
-          (await nextPosition(c, parent, src.collection_id)), src.is_ai, c.actor, t, t)
-    .run();
-  await ftsUpsert(c, "page", newId, title, await bodyText(c, pid));
-
-  // Blocks, remapped parent-first so a child never references an id that has
-  // not been written yet.
-  const blocks = await all<{ id: string; parent_block_id: string | null; type: string; content_json: string; position: number; is_ai: number }>(
-    c, `SELECT * FROM block WHERE page_id = ? ORDER BY position`, pid,
-  );
-  const idMap = new Map<string, string>(blocks.map((b) => [b.id, id("blk")]));
-  const ordered = [...blocks].sort((a, b) => (a.parent_block_id ? 1 : 0) - (b.parent_block_id ? 1 : 0));
-  const collMap = new Map<string, string>();
-
-  // Collections first, so a 'collection' placement block can point at the copy.
-  for (const col of await all<Collection>(c, `SELECT * FROM collection WHERE parent_page_id = ? ORDER BY position`, pid)) {
-    const newCol = id("col");
-    collMap.set(col.id, newCol);
-    await c.db
-      .prepare(`INSERT INTO collection (id, parent_page_id, title, icon, role, schema_json, inline, position, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(newCol, newId, col.title, col.icon, col.role, col.schema_json, col.inline, col.position, t, t)
-      .run();
-    for (const v of await all<{ name: string; type: string; filter_json: string; sort_json: string; group_by: string | null; position: number }>(
-      c, `SELECT * FROM collection_view WHERE collection_id = ? ORDER BY position`, col.id)) {
-      await c.db
-        .prepare(`INSERT INTO collection_view (id, collection_id, name, type, filter_json, sort_json, group_by, position, created_at)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .bind(id("cvw"), newCol, v.name, v.type, v.filter_json, v.sort_json, v.group_by, v.position, t)
-        .run();
-    }
-    for (const row of await all<Page>(c, `SELECT * FROM page WHERE collection_id = ? ORDER BY position`, col.id)) {
-      await duplicateRow(c, row, newCol, t);
-    }
-  }
-
-  for (const b of ordered) {
-    let content = b.content_json;
-    if (b.type === "collection") {
-      try {
-        const parsed = JSON.parse(content) as { collection_id?: string };
-        if (parsed.collection_id && collMap.has(parsed.collection_id)) {
-          content = JSON.stringify({ ...parsed, collection_id: collMap.get(parsed.collection_id) });
-        }
-      } catch { /* leave as-is */ }
-    }
-    await c.db
-      .prepare(`INSERT INTO block (id, page_id, parent_block_id, type, content_json, position, version, is_ai, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`)
-      .bind(idMap.get(b.id)!, newId, b.parent_block_id ? idMap.get(b.parent_block_id) ?? null : null,
-            b.type, content, b.position, b.is_ai, t, t)
-      .run();
-  }
-
-  for (const child of await listChildren(c, pid)) await duplicatePage(c, child.id, newId);
-
-  await logEvent(c, "duplicate", "page", newId, { from: pid, title });
-  return (await getPage(c, newId))!;
-}
-
-/** A collection row copy — a page with a body but no children of its own. */
-async function duplicateRow(c: Ctx, row: Page, collectionId: string, t: number): Promise<void> {
-  const newId = id("pg");
-  await c.db
-    .prepare(`INSERT INTO page (id, parent_page_id, collection_id, title, icon, cover, properties_json, position, status, trashed_at, favorite, is_ai, actor, created_at, updated_at)
-              VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'active', NULL, 0, ?, ?, ?, ?)`)
-    .bind(newId, collectionId, row.title, row.icon, row.cover, row.properties_json, row.position, row.is_ai, c.actor, t, t)
-    .run();
-  const blocks = await all<{ id: string; parent_block_id: string | null; type: string; content_json: string; position: number; is_ai: number }>(
-    c, `SELECT * FROM block WHERE page_id = ? ORDER BY position`, row.id,
-  );
-  const map = new Map(blocks.map((b) => [b.id, id("blk")]));
-  for (const b of blocks) {
-    await c.db
-      .prepare(`INSERT INTO block (id, page_id, parent_block_id, type, content_json, position, version, is_ai, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`)
-      .bind(map.get(b.id)!, newId, b.parent_block_id ? map.get(b.parent_block_id) ?? null : null,
-            b.type, b.content_json, b.position, b.is_ai, t, t)
-      .run();
-  }
 }
 
 export interface HistoryEntry {

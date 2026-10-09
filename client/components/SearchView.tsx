@@ -6,7 +6,7 @@ import { api, hitHref, type SearchHit } from "@/lib/api";
 // Full-text search across every entity. FTS returns snippets with [term] markers
 // we render as highlights. Keyword-first; semantic ranking is deferred.
 const TYPE_LABEL: Record<string, string> = {
-  document: "Document", task: "Task", insight: "Insight", source: "Source", decision: "Decision",
+  page: "Page", insight: "Insight",
 };
 
 export function SearchView() {
@@ -55,7 +55,7 @@ export function SearchView() {
       {debounced && !isFetching && (data?.length ?? 0) === 0 && (
         <div className="et-empty">Nothing matches. Try a different term.</div>
       )}
-      {!debounced && <div className="et-search-hint">Search across documents, tasks, insights, sources, and decisions.</div>}
+      {!debounced && <div className="et-search-hint">Search across your pages, tasks, sources and knowledge.</div>}
 
       <style>{`
         .et-search-page { max-width: 46rem; margin: 0 auto; padding: 3.5rem 2.5rem 6rem; }

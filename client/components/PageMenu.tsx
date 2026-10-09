@@ -1,7 +1,6 @@
 "use client";
-// The page-level actions Notion puts behind ••• : duplicate, favourite, move,
-// history, and the trash. Server support for all of these already existed; this
-// is what makes them reachable.
+// The page-level actions behind ••• : move, history, and the trash. History is
+// how an accepted agent patch gets undone, block by block.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, blockContent, type Page } from "@/lib/api";
@@ -23,31 +22,11 @@ export function PageMenu({ page, onChanged }: { page: Page; onChanged: () => voi
   return (
     <>
       <div className="et-pagemenu-row">
-        <button className="et-page-cover-btn" onClick={async () => {
-          await api.post(`/pages/${page.id}/favorite`, { favorite: !page.favorite });
-          refresh();
-        }}>{page.favorite ? "★ Favourited" : "☆ Favourite"}</button>
-
         <details className="et-pagemenu">
           <summary>···</summary>
           <div className="et-pagemenu-list">
-            <button onClick={async (e) => {
-              close(e);
-              const copy = await api.post<Page>(`/pages/${page.id}/duplicate`);
-              qc.invalidateQueries({ queryKey: ["tree"] });
-              window.location.href = `/page/?id=${copy.id}`;
-            }}>Duplicate</button>
             <button onClick={(e) => { close(e); setPanel("move"); }}>Move to…</button>
             <button onClick={(e) => { close(e); setPanel("history"); }}>History</button>
-            <button onClick={async (e) => {
-              close(e);
-              // A template is just a copy, which is the honest version of the
-              // feature: anything you already made can seed the next one.
-              const copy = await api.post<Page>(`/pages/${page.id}/duplicate`);
-              await api.patch(`/pages/${copy.id}`, { title: `${page.title} template` });
-              qc.invalidateQueries({ queryKey: ["tree"] });
-              window.location.href = `/page/?id=${copy.id}`;
-            }}>Save as template</button>
             <button className="et-pagemenu-del" onClick={async (e) => {
               close(e);
               if (!confirm(`Move "${page.title || "Untitled"}" to the trash? Everything inside goes with it.`)) return;

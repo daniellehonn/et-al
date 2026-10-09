@@ -6,8 +6,6 @@ import type { Env } from "./schema";
 import { RuleError, ctx } from "./store";
 import * as store from "./store";
 import { api } from "./api";
-import { handleInbound } from "./imessage";
-import { runNudges } from "./nudge";
 import { extractFromSource } from "./extract";
 import { handleMcp } from "./mcp";
 
@@ -38,11 +36,6 @@ app.use("/api/*", async (c, next) => {
   c.set("actor", "human");
   const path = new URL(c.req.url).pathname;
   if (path === "/api/login" || path === "/api/logout" || path === "/api/session") return next();
-  // The iMessage webhook cannot carry the API key — Sendblue is the caller, not
-  // the browser. It authenticates itself against SENDBLUE_WEBHOOK_TOKEN and
-  // checks the sender is the owner, so it is exempt from this gate but not
-  // unguarded.
-  if (path === "/api/imessage") return next();
   if (!validKey(c.env, credential(c.req.raw))) {
     return c.json({ error: "unauthorized" }, 401);
   }
@@ -129,8 +122,6 @@ app.put("/api/files/:key{.+}", async (c) => {
   return c.json({ ok: true, key, url: `/files/${key}` });
 });
 
-app.post("/api/imessage", (c) => handleInbound(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
-
 app.route("/api", api);
 
 // MCP: Bearer/x-api-key required for every call. The client name becomes the actor.
@@ -144,12 +135,6 @@ app.all("/mcp", async (c) => {
 
 export default {
   fetch: app.fetch,
-
-  // Runs hourly; runNudges decides whether this is the right local hour to say
-  // anything. Nothing else is scheduled, so a quiet hour costs one cheap check.
-  async scheduled(_event: ScheduledController, env: Env, ctxIn: ExecutionContext): Promise<void> {
-    ctxIn.waitUntil(runNudges(env));
-  },
 
   // Deterministic ingest. Best-effort: failures leave the source in the inbox.
   async queue(batch: MessageBatch, env: Env): Promise<void> {

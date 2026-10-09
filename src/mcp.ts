@@ -37,25 +37,14 @@ const TOOLS: Tool[] = [
       model: {
         page: "The universal primitive. A project, a note, a task and a saved link are all pages: a title, an icon, a body of blocks, and child pages. Pages nest freely.",
         collection: "A set of pages with typed properties and saved views — a database. A collection is owned by a page and placed in its body by a block of type 'collection'.",
-        role: "A collection may carry a role (tasks|sources|insights|decisions). The role is how you know what the pages inside mean; the user is free to rename, restyle or relocate the collection without breaking that.",
+        role: "A collection may carry a role (tasks|sources|insights). The role is how you know what the pages inside mean; the user is free to rename, restyle or relocate the collection without breaking that.",
         properties: "A page in a collection carries property values keyed by the collection's schema. Task status/priority/due_date live here — they are not columns any more.",
       },
       rules: [
         "AI writes are immediate but attributed actor:'ai:<client>'.",
         "A page BODY changes only via propose_page_patch (human Accept/Reject). Properties and page metadata can be written directly.",
-        "Decisions are immutable once recorded.",
         "Prefer creating a page over inventing structure. Do not create collections the user did not ask for.",
       ],
-      career_blocks: {
-        note: "When a project wraps, review it (build_context / list_tasks) and propose_page_patch inserting career blocks the user recycles into a resume. Get existing ones with get_career_blocks.",
-        insert_via: "propose_page_patch ops: [{op:'insert', after:<id|null>, type:'<career type>', content:{...}}]",
-        types: {
-          accomplishment: "{ situation, task, action, result, bullet } — STAR + a one-line resume bullet",
-          resume_bullet: "{ text, skills, date } — one polished, quantified line",
-          role: "{ company, title, start, end, location, bullets: string[] } — a CV entry",
-          project: "{ name, role, tech, outcome, link } — a portfolio project highlight",
-        },
-      },
     }),
   },
   {
@@ -68,10 +57,9 @@ const TOOLS: Tool[] = [
       return { page, inherited: await store.getAncestors(c, page.id) };
     },
   },
-  { name: "get_home", description: "Daily 3, page health, inbox count, and recent activity.", inputSchema: obj({}), handler: (c) => store.getHome(c) },
   {
     name: "build_context",
-    description: "Assemble the context package for a page: its ancestors, its own body, child pages, collections, open tasks, recent decisions, and query-related material.",
+    description: "Assemble the context package for a page: its ancestors, its own body, child pages, collections, open tasks, and query-related material.",
     inputSchema: obj({ page_id: str, query: str }, ["page_id"]),
     handler: (c, a) => store.buildContext(c, String(a.page_id), a.query ? String(a.query) : undefined),
   },
@@ -96,7 +84,7 @@ const TOOLS: Tool[] = [
   { name: "list_collections", description: "The collections a page owns.", inputSchema: obj({ page_id: str }, ["page_id"]), handler: (c, a) => store.listCollections(c, String(a.page_id)) },
   { name: "get_collection", description: "A collection with its property schema.", inputSchema: obj({ id: str }, ["id"]), handler: (c, a) => store.getCollection(c, String(a.id)) },
   { name: "query_collection", description: "The rows of a collection, optionally filtered and sorted. filter: [{key,op,value}] with op is|is_not|is_empty|is_not_empty|contains|gt|lt|in. sort: [{key,dir}].", inputSchema: obj({ collection_id: str, filter: { type: "array", items: { type: "object" } }, sort: { type: "array", items: { type: "object" } }, limit: num }, ["collection_id"]), handler: (c, a) => store.queryCollection(c, String(a.collection_id), a as never) },
-  { name: "create_collection", description: "Create a collection on a page. Pass a role (tasks|sources|insights|decisions) to get its standard property schema, or a custom schema of [{key,name,type,options}].", inputSchema: obj({ parent_page_id: str, title: str, icon: str, role: str, schema: { type: "array", items: { type: "object" } } }, ["parent_page_id"]), handler: (c, a) => store.createCollection(c, a as never) },
+  { name: "create_collection", description: "Create a collection on a page. Pass a role (tasks|sources|insights) to get its standard property schema, or a custom schema of [{key,name,type,options}].", inputSchema: obj({ parent_page_id: str, title: str, icon: str, role: str, schema: { type: "array", items: { type: "object" } } }, ["parent_page_id"]), handler: (c, a) => store.createCollection(c, a as never) },
   { name: "update_collection", description: "Rename a collection or change its property schema.", inputSchema: obj({ id: str, title: str, icon: str, schema: { type: "array", items: { type: "object" } } }, ["id"]), handler: (c, a) => store.updateCollection(c, String(a.id), a as never) },
   { name: "list_views", description: "A collection's saved views.", inputSchema: obj({ collection_id: str }, ["collection_id"]), handler: (c, a) => store.listViews(c, String(a.collection_id)) },
   { name: "create_view", description: "Add a view to a collection (table|board|list|gallery|calendar). group_by is a property key, for boards.", inputSchema: obj({ collection_id: str, name: str, type: str, group_by: str }, ["collection_id"]), handler: (c, a) => store.createView(c, a as never) },
@@ -112,10 +100,6 @@ const TOOLS: Tool[] = [
   { name: "complete_task", description: "Mark a task done.", inputSchema: obj({ id: str }, ["id"]), handler: (c, a) => store.completeTask(c, String(a.id)) },
   { name: "delete_task", description: "Delete a task. Destructive — confirm with the user first.", inputSchema: obj({ id: str }, ["id"]), handler: async (c, a) => { await store.deleteTask(c, String(a.id)); return { ok: true }; } },
 
-  // ---- daily 3 ----
-  { name: "get_daily3", description: "Today's three focus slots, status, and streak.", inputSchema: obj({ date: str }), handler: (c, a) => store.getDaily3(c, a.date as string | undefined) },
-  { name: "set_daily3", description: "Set/replace the three focus tasks (before the day is locked).", inputSchema: obj({ task_ids: { type: "array", items: str }, date: str }, ["task_ids"]), handler: (c, a) => store.setDaily3(c, a as never) },
-  { name: "confirm_daily3", description: "Lock the Daily 3 for the day.", inputSchema: obj({ date: str }), handler: (c, a) => store.confirmDaily3(c, a.date as string | undefined) },
 
   // ---- capture & knowledge ----
   { name: "capture", description: "Save a raw input to the inbox immediately. Becomes a page in a Sources collection; `raw` becomes its body.", inputSchema: obj({ kind: str, title: str, url: str, raw: str, page_id: str }, ["kind"]), handler: (c, a) => store.capture(c, a as never) },
@@ -128,28 +112,15 @@ const TOOLS: Tool[] = [
   { name: "update_insight", description: "Refine a knowledge note's title or body.", inputSchema: obj({ id: str, title: str, body: str }, ["id"]), handler: (c, a) => store.updateInsight(c, String(a.id), a as never) },
   { name: "delete_insight", description: "Delete a knowledge note. Destructive — confirm with the user first.", inputSchema: obj({ id: str }, ["id"]), handler: async (c, a) => { await store.deleteInsight(c, String(a.id)); return { ok: true }; } },
 
-  // ---- decisions & graph ----
-  { name: "record_decision", description: "Record an immutable decision (title, rationale, alternatives, impact).", inputSchema: obj({ page_id: str, title: str, rationale: str, impact: str }, ["page_id", "title", "rationale"]), handler: (c, a) => store.recordDecision(c, a as never) },
-  { name: "list_decisions", description: "Decisions, across everything or within one page.", inputSchema: obj({ page_id: str }), handler: (c, a) => store.listDecisions(c, a.page_id as string | undefined) },
-  { name: "relate", description: "Create a typed edge between two pages.", inputSchema: obj({ source_id: str, target_id: str, type: str }, ["source_id", "target_id", "type"]), handler: (c, a) => store.relate(c, { source_type: "page", target_type: "page", ...(a as object) } as never) },
-  { name: "get_backlinks", description: "Everything referencing a page.", inputSchema: obj({ id: str }, ["id"]), handler: (c, a) => store.getBacklinks(c, "page", String(a.id)) },
+  // ---- search ----
   { name: "search", description: "Search across everything. Hybrid: keyword matching over all pages, plus semantic matching over knowledge notes, so a page phrased differently from the query still surfaces.", inputSchema: obj({ query: str }, ["query"]), handler: (c, a) => store.search(c, String(a.query), {}) },
 
-  // ---- health & review ----
-  { name: "get_page_health", description: "The activity/flow health score for a page (or every page that owns tasks).", inputSchema: obj({ page_id: str }), handler: (c, a) => (a.page_id ? store.pageHealth(c, String(a.page_id)) : store.allHealth(c)) },
-  { name: "weekly_review", description: "The raw material for a guided weekly review.", inputSchema: obj({}), handler: (c) => store.getWeeklyReview(c) },
-  { name: "get_career_blocks", description: "Every career block (accomplishment/STAR, resume bullet, role) across the user's work — the raw material for generating a resume, LinkedIn post, or STAR story. Optionally scope to one page.", inputSchema: obj({ page_id: str }), handler: (c, a) => store.listCareerBlocks(c, a.page_id as string | undefined) },
   // ---- proposals ----
   // Read-only on purpose. Accepting or rejecting is the human's half of the
   // review, so it happens in the web app; an agent that could accept would be
   // approving machine-written knowledge on the human's behalf.
   { name: "list_proposals", description: "Machine-extracted insights awaiting the user's review. They are excluded from list_insights, search and build_context until accepted — a proposal is a suggestion, not knowledge. Only the user can accept or reject them, in the web app's inbox.", inputSchema: obj({}), handler: (c) => store.listProposals(c) },
 
-  // ---- automations ----
-  { name: "list_automations", description: "Recurring tasks et al. runs on a schedule.", inputSchema: obj({}), handler: (c) => store.listAutomations(c) },
-  { name: "create_automation", description: "Schedule recurring work. `schedule` is a 5-field cron expression evaluated in the user's timezone. action 'message' texts the task verbatim; 'digest' appends open tasks and pending reviews.", inputSchema: obj({ name: str, schedule: str, task: str, action: str, timezone: str }, ["name", "schedule", "task"]), handler: (c, a) => store.createAutomation(c, a as never) },
-  { name: "update_automation", description: "Change an automation's schedule, task, or enabled state.", inputSchema: obj({ id: str, name: str, schedule: str, task: str, enabled: { type: "boolean" } }, ["id"]), handler: (c, a) => store.updateAutomation(c, String(a.id), a as never) },
-  { name: "delete_automation", description: "Delete an automation. Destructive — confirm with the user first.", inputSchema: obj({ id: str }, ["id"]), handler: async (c, a) => { await store.deleteAutomation(c, String(a.id)); return { ok: true }; } },
   { name: "get_agent_activity", description: "Everything written by an AI agent.", inputSchema: obj({}), handler: (c) => store.getAgentActivity(c) },
 
 ];

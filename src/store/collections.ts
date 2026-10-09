@@ -92,11 +92,6 @@ export function defaultSchemaFor(role: CollectionRole): PropertyDef[] {
         { key: "source_id", name: "From source", type: "text" },
         { key: "is_ai", name: "AI", type: "checkbox" },
       ];
-    case "decisions":
-      return [
-        { key: "decided_on", name: "Decided", type: "date" },
-        { key: "impact", name: "Impact", type: "select" },
-      ];
   }
 }
 
@@ -104,7 +99,6 @@ const ROLE_TITLES: Record<CollectionRole, { title: string; icon: string }> = {
   tasks: { title: "Tasks", icon: "✅" },
   sources: { title: "Sources", icon: "🔗" },
   insights: { title: "Knowledge", icon: "💡" },
-  decisions: { title: "Decisions", icon: "⚖️" },
 };
 
 export async function createCollection(c: Ctx, input: z.input<typeof createCollectionInput>): Promise<Collection> {

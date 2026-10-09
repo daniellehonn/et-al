@@ -52,17 +52,12 @@ describe("session cookie", () => {
   });
 });
 
-describe("MCP and webhook", () => {
+describe("MCP", () => {
   it.each([["none", 401], ["wrong", 401], ["bearer", 200]] as const)("POST /mcp with %s → %i", async (auth, status) => {
     const res = await request("/mcp", {
       method: "POST", auth,
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
     });
     expect(res.status).toBe(status);
-  });
-
-  it("keeps the iMessage webhook closed when no webhook token is configured", async () => {
-    const res = await request("/api/imessage", { method: "POST", auth: "none", body: "{}" });
-    expect(res.status).toBe(401);
   });
 });

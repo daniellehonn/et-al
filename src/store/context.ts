@@ -9,7 +9,7 @@
 import { Ctx } from "./db";
 import { getAncestors, getPage, listChildren, type Page } from "./pages";
 import { listCollections, type Collection } from "./collections";
-import { listDecisions, listTasks, type RoleRow } from "./roles";
+import { listTasks, type RoleRow } from "./roles";
 import { getBlocks, type Block } from "./blocks";
 import { search, type SearchHit } from "./search";
 
@@ -20,7 +20,6 @@ export interface ContextPackage {
   children: Page[];
   collections: Collection[];
   open_tasks: RoleRow[];
-  recent_decisions: RoleRow[];
   related: SearchHit[];    // Layer 2: query matches across the graph
 }
 
@@ -28,13 +27,12 @@ export async function buildContext(c: Ctx, pageId: string, query?: string): Prom
   const page = await getPage(c, pageId);
   if (!page) return null;
 
-  const [inherited, body, children, collections, tasks, decisions] = await Promise.all([
+  const [inherited, body, children, collections, tasks] = await Promise.all([
     getAncestors(c, pageId),
     getBlocks(c, pageId),
     listChildren(c, pageId),
     listCollections(c, pageId),
     listTasks(c, { pageId }),
-    listDecisions(c, pageId),
   ]);
 
   // Layer 2: pull related material by the query (or the page title).
@@ -47,9 +45,6 @@ export async function buildContext(c: Ctx, pageId: string, query?: string): Prom
     children,
     collections,
     open_tasks: tasks.filter((t) => t.props.status !== "done"),
-    recent_decisions: decisions
-      .sort((a, b) => Number(b.props.decided_on ?? 0) - Number(a.props.decided_on ?? 0))
-      .slice(0, 10),
     related,
   };
 }

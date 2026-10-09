@@ -28,7 +28,7 @@ import { fromBlockNote, toBlockNote, type BNBlock } from "@/lib/blocknote-map";
 import { CollectionBlock } from "./CollectionBlock";
 
 /** The passthrough block. et al. has types BlockNote has never heard of —
- *  inline collections, page links, widgets, career blocks. Rather than drop
+ *  inline collections and page links. Rather than drop
  *  them (silent data loss) or teach BlockNote each one, they render through
  *  this single spec, which keeps the original type and payload in props so a
  *  round-trip is lossless even for types this editor cannot edit. */

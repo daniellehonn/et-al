@@ -1,5 +1,5 @@
-// REST surface for the web app. Same store functions as MCP. Reads are open;
-// mutations require the API key (enforced in index.ts middleware). Unlike MCP,
+// REST surface for the web app. Same store functions as MCP. Every route needs
+// the API key or the session cookie (enforced in index.ts middleware). Unlike MCP,
 // the web app CAN write page blocks directly — it is the human surface.
 //
 // v8 routes are page-shaped. The /workspaces/* and /documents/* paths are gone:
@@ -14,9 +14,7 @@ export const api = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 const ctx = (c: { env: Env; get: (k: "actor") => string }) => store.ctx(c.env, c.get("actor"));
 
-// ---- aggregates -------------------------------------------------------------
-api.get("/home", async (c) => c.json(await store.getHome(ctx(c))));
-api.get("/review", async (c) => c.json(await store.getWeeklyReview(ctx(c))));
+// ---- activity -------------------------------------------------------------
 api.get("/agent-activity", async (c) => c.json(await store.getAgentActivity(ctx(c))));
 
 // ---- pages (the tree, the body, and the patch queue) ------------------------
@@ -40,11 +38,6 @@ api.delete("/pages/:id", async (c) => {
 });
 api.get("/trash", async (c) => c.json(await store.listTrash(ctx(c))));
 api.post("/pages/:id/restore", async (c) => c.json(await store.restorePage(ctx(c), c.req.param("id"))));
-api.post("/pages/:id/duplicate", async (c) => c.json(await store.duplicatePage(ctx(c), c.req.param("id"))));
-api.post("/pages/:id/favorite", async (c) => {
-  const { favorite } = await c.req.json();
-  return c.json(await store.setFavorite(ctx(c), c.req.param("id"), !!favorite));
-});
 api.get("/pages/:id/history", async (c) => c.json(await store.pageHistory(ctx(c), c.req.param("id"))));
 api.post("/revisions/:id/restore", async (c) => { await store.restoreRevision(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
 
@@ -106,11 +99,6 @@ api.get("/pages/:id/tasks", async (c) => c.json(await store.listTasks(ctx(c), { 
 api.post("/tasks", async (c) => c.json(await store.createTask(ctx(c), await c.req.json())));
 api.patch("/tasks/:id", async (c) => c.json(await store.updateTask(ctx(c), c.req.param("id"), await c.req.json())));
 api.delete("/tasks/:id", async (c) => { await store.deleteTask(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
-
-// ---- daily 3 ----------------------------------------------------------------
-api.get("/daily3", async (c) => c.json(await store.getDaily3(ctx(c), c.req.query("date"))));
-api.post("/daily3", async (c) => c.json(await store.setDaily3(ctx(c), await c.req.json())));
-api.post("/daily3/confirm", async (c) => c.json(await store.confirmDaily3(ctx(c), c.req.query("date"))));
 
 // ---- inbox / sources / insights ---------------------------------------------
 api.get("/inbox", async (c) => c.json(await store.listInbox(ctx(c))));
@@ -184,30 +172,13 @@ api.get("/insights", async (c) => c.json(await store.listInsights(ctx(c), c.req.
 api.patch("/insights/:id", async (c) => c.json(await store.updateInsight(ctx(c), c.req.param("id"), await c.req.json())));
 api.delete("/insights/:id", async (c) => { await store.deleteInsight(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
 
-api.get("/career", async (c) => c.json(await store.listCareerBlocks(ctx(c), c.req.query("page_id"))));
-
 // ---- proposals (machine-extracted knowledge, awaiting review) ---------------
 api.get("/proposals", async (c) => c.json(await store.listProposals(ctx(c))));
 api.post("/proposals/:id/accept", async (c) => c.json(await store.acceptProposal(ctx(c), c.req.param("id"))));
 api.post("/proposals/:id/reject", async (c) => { await store.rejectProposal(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
 
-// ---- automations ------------------------------------------------------------
-api.get("/automations", async (c) => c.json(await store.listAutomations(ctx(c))));
-api.post("/automations", async (c) => c.json(await store.createAutomation(ctx(c), await c.req.json())));
-api.patch("/automations/:id", async (c) => c.json(await store.updateAutomation(ctx(c), c.req.param("id"), await c.req.json())));
-api.delete("/automations/:id", async (c) => { await store.deleteAutomation(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
-api.get("/automations/:id/runs", async (c) => c.json(await store.automationRuns(ctx(c), c.req.param("id"))));
-
-// ---- decisions / graph / search / health ------------------------------------
-api.get("/pages/:id/decisions", async (c) => c.json(await store.listDecisions(ctx(c), c.req.param("id"))));
-api.get("/pages/:id/timeline", async (c) => c.json(await store.getPageTimeline(ctx(c), c.req.param("id"))));
-api.post("/decisions", async (c) => c.json(await store.recordDecision(ctx(c), await c.req.json())));
-api.delete("/decisions/:id", async (c) => { await store.deleteDecision(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
-api.post("/relate", async (c) => c.json(await store.relate(ctx(c), await c.req.json())));
-api.get("/backlinks", async (c) => c.json(await store.getBacklinks(ctx(c), c.req.query("type") ?? "page", c.req.query("id")!)));
+// ---- search & context ------------------------------------
 api.get("/search", async (c) => c.json(await store.search(ctx(c), c.req.query("q") ?? "", {})));
-api.get("/health-scores", async (c) => c.json(await store.allHealth(ctx(c))));
-api.get("/pages/:id/health", async (c) => c.json(await store.pageHealth(ctx(c), c.req.param("id"))));
 api.get("/context/:id", async (c) => c.json(await store.buildContext(ctx(c), c.req.param("id"), c.req.query("q"))));
 
 // The Overview tab is gone: a page's body IS its overview now, so the widget

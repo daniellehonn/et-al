@@ -1,5 +1,5 @@
 "use client";
-// One page: cover, icon, title, then the body. Nothing else.
+// One page: icon, title, then the body. Nothing else.
 //
 // This is the whole point of v8. v7 put a project behind six tabs — Overview,
 // Tasks, Documents, Sources, Decisions, Timeline — so reading a project meant
@@ -9,7 +9,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { api, props, type Collection, type Page, type PagePatch } from "@/lib/api";
 import { PageEditor } from "./PageEditor";
-import { EmojiPicker } from "./EmojiPicker";
 import { PageMenu } from "./PageMenu";
 
 export function PageView({ id }: { id: string }) {
@@ -46,8 +45,6 @@ export function PageView({ id }: { id: string }) {
 
   return (
     <div className="et-page">
-      {page.cover && <div className="et-page-cover" style={{ backgroundImage: `url(${page.cover})` }} />}
-
       <div className="et-page-inner" data-full={fullWidth || undefined}>
         <div className="et-crumbs">
           {(ancestors ?? []).map((a) => (
@@ -56,13 +53,7 @@ export function PageView({ id }: { id: string }) {
         </div>
 
         <div className="et-page-icon-row">
-          <EmojiPicker className="et-page-icon" value={page.icon ?? "📄"} onPick={(e) => save({ icon: e })} />
-          {!page.cover && (
-            <button className="et-page-cover-btn" onClick={() => {
-              const url = prompt("Cover image URL");
-              if (url) save({ cover: url });
-            }}>Add cover</button>
-          )}
+          <span className="et-page-icon">{page.icon ?? "📄"}</span>
           <button className="et-page-cover-btn" onClick={() => save({ properties: { full_width: !fullWidth } })}>
             {fullWidth ? "Narrow width" : "Full width"}
           </button>
@@ -82,7 +73,7 @@ export function PageView({ id }: { id: string }) {
           {/* No "Tasks database" here: a page is for the durable thing — a
               tracker, a plan, notes — and tasks live in one place so that
               "what do I do next" is not split across the tree. */}
-          {(["sources", "insights", "decisions"] as const)
+          {(["sources", "insights"] as const)
             .filter((r) => !hasRole(r))
             .map((r) => <button key={r} onClick={() => addCollection(r)}>+ {r[0].toUpperCase() + r.slice(1)} database</button>)}
           <button onClick={() => addCollection(null)}>+ Blank database</button>
@@ -184,7 +175,6 @@ function PageStyles() {
     <style jsx global>{`
       .et-page { flex: 1; min-width: 0; }
       .et-page-loading { padding: 3rem; color: var(--ink-faint); }
-      .et-page-cover { height: 11rem; background-size: cover; background-position: center; }
       /* One column, one measure. A page is meant to be read top to bottom. */
       .et-page-inner { max-width: 46rem; margin: 0 auto; padding: 2rem 3rem 6rem; }
       /* Full width: the measure gives way but the gutters stay, so text never
@@ -194,7 +184,7 @@ function PageStyles() {
       .et-crumbs a { color: inherit; text-decoration: none; }
       .et-crumbs a:hover { color: var(--ink); }
       .et-page-icon-row { display: flex; align-items: center; gap: 0.6rem; position: relative; }
-      .et-page-icon { font-size: 3rem; background: none; border: none; cursor: pointer; padding: 0; line-height: 1; }
+      .et-page-icon { font-size: 3rem; line-height: 1; }
       .et-page-cover-btn { opacity: 0; background: none; border: none; color: var(--ink-faint); font-size: 0.8rem; cursor: pointer; }
       .et-page-inner:hover .et-page-cover-btn, .et-page-inner:hover .et-pagemenu-row { opacity: 1; }
       .et-pagemenu-row { opacity: 0; transition: opacity 0.12s; }

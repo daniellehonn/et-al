@@ -19,16 +19,6 @@ export interface Env {
   KV?: KVNamespace;
   ET_AL_API_KEY?: string;
   APP_NAME?: string;
-  // Sendblue relays iMessage: Apple ships no API of its own.
-  SENDBLUE_API_KEY_ID?: string;
-  SENDBLUE_API_SECRET?: string;
-  SENDBLUE_WEBHOOK_TOKEN?: string;
-  SENDBLUE_OWNER_NUMBER?: string;
-  SENDBLUE_FROM_NUMBER?: string;
-  // Nudges are scheduled in the user's own time, not UTC.
-  TIMEZONE?: string;
-  NUDGE_EVENING_HOUR?: string;
-  NUDGE_MORNING_HOUR?: string;
   EXTRACT_MODEL?: string;
 }
 
@@ -41,7 +31,7 @@ export type EntityType = (typeof ENTITY_TYPES)[number];
 // away: 'tasks' means "the pages in here are tasks", so list_tasks, weekly_review
 // and suggest_daily3 stay meaningful without hard-coding a table. A collection
 // with no role is just a collection the user made, and agents treat it generically.
-export const COLLECTION_ROLES = ["tasks", "sources", "insights", "decisions"] as const;
+export const COLLECTION_ROLES = ["tasks", "sources", "insights"] as const;
 export type CollectionRole = (typeof COLLECTION_ROLES)[number];
 
 export const PROPERTY_TYPES = [
@@ -70,7 +60,6 @@ export const ROLE_PROPERTY_KEYS = {
   tasks: { status: "status", priority: "priority", due: "due_date", objective: "objective", notes: "notes" },
   sources: { kind: "kind", url: "url", status: "status", captured: "captured" },
   insights: { source: "source_id", isAi: "is_ai" },
-  decisions: { decidedOn: "decided_on", impact: "impact" },
 } as const;
 
 export const WORKSPACE_TYPES = ["area", "project", "course", "organization"] as const;
@@ -95,17 +84,7 @@ export const BLOCK_TYPES = [
   "collection",
   // A link to another page, rendered inline. content_json is {page_id}.
   "page_link",
-  // Live "widget" blocks (compute from workspace data) — a page mixes both freely
-  "tasks", "deadlines", "child_progress", "objective_progress", "progress", "backlinks", "metric", "links", "career_summary",
-  // Career blocks — structured career capital you recycle into a resume
-  "accomplishment", "resume_bullet", "role", "project",
 ] as const;
-// Block types that render a live widget rather than static content.
-export const WIDGET_BLOCK_TYPES = [
-  "tasks", "deadlines", "child_progress", "objective_progress", "progress", "backlinks", "metric", "links", "career_summary",
-] as const;
-// Structured career blocks — captured as you work, recycled into resume/LinkedIn.
-export const CAREER_BLOCK_TYPES = ["accomplishment", "resume_bullet", "role", "project"] as const;
 
 export const SOURCE_KINDS = [
   "note", "idea", "url", "pdf", "youtube", "book", "image", "voice", "github", "email", "document",
@@ -114,11 +93,6 @@ export const SOURCE_STATUSES = ["inbox", "processing", "processed"] as const;
 
 // Sources whose payload lives inline (no fetch needed) vs. needing async ingest.
 export const INLINE_SOURCE_KINDS = ["note", "idea"] as const;
-
-export const RELATIONSHIP_TYPES = [
-  "references", "uses", "inspired_by", "generated_from",
-  "related_to", "learned_from", "created_from", "depends_on",
-] as const;
 
 export const PATCH_STATUSES = ["pending", "accepted", "rejected"] as const;
 
@@ -258,23 +232,6 @@ export const createInsightInput = z.object({
   source_id: z.string().nullish(),
 });
 
-export const recordDecisionInput = z.object({
-  workspace_id: z.string(),
-  title: z.string().min(1),
-  rationale: z.string().min(1),
-  alternatives: z.array(z.string()).nullish(),
-  impact: z.string().nullish(),
-  decided_on: z.number().int().nullish(),
-});
-
-export const relateInput = z.object({
-  source_type: z.enum(ENTITY_TYPES),
-  source_id: z.string(),
-  target_type: z.enum(ENTITY_TYPES),
-  target_id: z.string(),
-  type: z.enum(RELATIONSHIP_TYPES),
-});
-
 export const createDocumentInput = z.object({
   workspace_id: z.string(),
   title: z.string().min(1),
@@ -301,7 +258,3 @@ export const proposePatchInput = z.object({
   summary: z.string().min(1),
 });
 
-export const setDaily3Input = z.object({
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  task_ids: z.array(z.string()).max(3),
-});

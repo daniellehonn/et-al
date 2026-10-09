@@ -39,7 +39,7 @@ export interface Page {
   id: string; parent_page_id: string | null; collection_id: string | null;
   title: string; icon: string | null; cover: string | null;
   properties_json: string; position: number; status: string;
-  trashed_at: number | null; favorite: number;
+  trashed_at: number | null;
   is_ai: number; actor: string; created_at: number; updated_at: number;
 }
 export interface PageNode extends Page { children: PageNode[] }
@@ -69,23 +69,8 @@ export interface RoleRow extends Page {
   props: Record<string, unknown>;
 }
 
-export interface Health {
-  page_id: string; score: number; open_tasks: number; done_tasks: number;
-  days_since_activity: number | null;
-}
-export interface Daily3 {
-  date: string; confirmed: boolean; reflection: string | null; streak: number;
-  slots: Array<{ slot: number; status: string; task: RoleRow | null }>;
-}
 export interface RecentEvent {
   id: string; actor: string; action: string; entity_type: string; entity_id: string; created_at: number;
-}
-export interface Home {
-  daily3: Daily3;
-  health: Health[];
-  root_pages: Page[];
-  inbox_count: number;
-  recent_activity: RecentEvent[];
 }
 export interface Block {
   id: string; page_id: string; parent_block_id: string | null; type: string;
@@ -121,9 +106,6 @@ export function awaitingEnrichment(p: Page): boolean {
 }
 export interface SearchHit {
   entity_type: string; entity_id: string; title: string; snippet: string; workspace_id: string | null;
-}
-export interface Relationship {
-  id: string; source_type: string; source_id: string; target_type: string; target_id: string; type: string;
 }
 
 /** Where a search hit navigates. Everything is a page, so every hit has a home —
