@@ -65,6 +65,27 @@ One Worker serves the web app, the REST API, the MCP endpoint and a background
 queue, on a single origin. The schema is one file:
 [`migrations/0001_schema.sql`](migrations/0001_schema.sql).
 
+## How a saved link is read
+
+1. **Saved.** From the web app, the share sheet or an agent's `capture`. It lands
+   in the inbox at once; saving the same link twice returns the first.
+2. **Fetched, once, on a queue.** That one response gives the inbox row its
+   title, site, description and image (OpenGraph tags, read with
+   `HTMLRewriter`), and its text is indexed for keyword search.
+3. **Extracted.** The text — stripped of markup, first 6,000 characters — goes
+   to **Llama 3.3 70B on Workers AI** (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`,
+   overridable with `EXTRACT_MODEL`). It returns at most three durable facts,
+   each with a title, a sentence or two, a category and an importance score.
+   The reply is constrained to a JSON schema, so it always parses. Pages with
+   under 200 characters of text, typically login walls, are skipped.
+4. **Proposed, not saved.** Each fact waits in **Review**. Keep it and it becomes
+   a note — written under the extractor's name, filed where the link was — and
+   is embedded with `@cf/baai/bge-base-en-v1.5` so search can find it by
+   meaning. Discard it and it never existed.
+
+The model runs on a Cloudflare binding, so no model vendor key lives in the
+Worker. A failed fetch records why and can be retried from the inbox.
+
 ## Engineering notes
 
 **A preview that cannot lie.** Block edits run as a pure function from one body
@@ -109,6 +130,25 @@ the deployed build was tested with.
 
 The reasoning behind these, and what was cut to get here, is in the
 [design log](docs/DESIGN.md).
+
+## What the tests check
+
+The suite is the trust model written down as executable rules: if any of these
+stop being true, a test fails and the deploy is refused.
+
+| File | Checks |
+|---|---|
+| [`trust.test.ts`](test/trust.test.ts) | Agents cannot write a body, resolve a proposal or delete a note; every write is attributed; an accepted edit keeps its agent as author; patches apply whole or not at all |
+| [`review.test.ts`](test/review.test.ts) | The preview equals what accepting writes; a patch the note has moved on from is stale |
+| [`proposals.test.ts`](test/proposals.test.ts) | Extracted insights stay out of search, context and the tree until kept; parsing model replies; hybrid search |
+| [`auth.test.ts`](test/auth.test.ts) | Every route needs the key or the session cookie |
+| [`capture.test.ts`](test/capture.test.ts) | Idempotent saves; fetching against a mocked site; queue retry and give-up |
+| [`body.test.ts`](test/body.test.ts) | The pure edit engine, markdown round-trip, the line diff |
+| [`model.test.ts`](test/model.test.ts) | Note tree and trash, tasks, share-sheet parsing |
+| [`markdown.test.ts`](test/markdown.test.ts) | Markdown into blocks |
+| [`docs.test.ts`](test/docs.test.ts) | `docs/MCP.md` lists exactly the tools the server offers |
+
+The latest run, with every test, is on the app's `/test-suite` page.
 
 ## Connect an agent
 
