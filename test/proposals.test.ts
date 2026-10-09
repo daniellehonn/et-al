@@ -80,6 +80,10 @@ describe("extraction parsing", () => {
     expect((await extract(out)).created).toBe(1);
   });
 
+  it("reads a JSON-mode reply that arrives already parsed", async () => {
+    expect((await extract({ response: { facts: [{ title: "a", content: "b", segment: "knowledge", importance: 0.5 }] } })).created).toBe(1);
+  });
+
   it("reads the OpenAI-style {choices} shape", async () => {
     expect((await extract({ choices: [{ message: { content: facts({ title: "a", content: "b" }) } }] })).created).toBe(1);
   });

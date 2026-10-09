@@ -13,7 +13,8 @@
     "db:migrate:remote": "wrangler d1 migrations apply et-al --remote",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "eval": "vitest run --config vitest.eval.config.ts -u"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.4.0",
