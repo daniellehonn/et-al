@@ -10,7 +10,8 @@
 import { z } from "zod";
 import { insightPayload, proposePatchInput, type BlockOp, type InsightPayload, type ProposalKind } from "../schema";
 import { Ctx, RuleError, all, first, id, logEvent, now } from "./db";
-import { applyOps, assertOpsTarget } from "./blocks";
+import { applyOps, previewOps } from "./blocks";
+import type { DiffLine } from "./body";
 import { createNote, requireNote } from "./notes";
 import { requireSource } from "./sources";
 
@@ -56,7 +57,9 @@ export async function proposePatch(c: Ctx, input: z.input<typeof proposePatchInp
     throw new RuleError(`invalid patch — ops are insert, update, delete, move, replace_content. ${parsed.error.issues[0]?.message ?? ""}`, 400);
   }
   await requireNote(c, parsed.data.note_id);
-  await assertOpsTarget(c, parsed.data.note_id, parsed.data.ops);
+  // A dry run against the note as it is now: an op naming a block that is not
+  // there fails here, for the agent, rather than later for the reviewer.
+  await previewOps(c, parsed.data.note_id, parsed.data.ops);
   return insert(c, { kind: "patch", note_id: parsed.data.note_id, source_id: null, summary: parsed.data.summary, payload: { ops: parsed.data.ops } });
 }
 
@@ -77,6 +80,28 @@ export function listProposals(c: Ctx, opts: { note_id?: string; source_id?: stri
       WHERE ${where.join(" AND ")} ORDER BY p.created_at DESC, p.rowid DESC`,
     ...[opts.note_id, opts.source_id].filter((x): x is string => !!x),
   );
+}
+
+/** What accepting would do. For a patch: the note's body before and after, as
+ *  markdown, and the line diff between them — computed by the same function
+ *  accept uses, so the reviewer sees exactly what will be written. A patch the
+ *  note has moved on from is reported as stale rather than thrown. */
+export type ProposalPreview =
+  | { kind: "patch"; before: string[]; after: string[]; diff: DiffLine[] }
+  | { kind: "patch"; stale: string }
+  | { kind: "insight"; insight: InsightPayload };
+
+export async function previewProposal(c: Ctx, pid: string): Promise<ProposalPreview> {
+  const p = await getProposal(c, pid);
+  if (!p) throw new RuleError(`proposal ${pid} not found`, 404);
+  if (p.kind === "insight") return { kind: "insight", insight: JSON.parse(p.payload) as InsightPayload };
+  try {
+    await requireNote(c, p.note_id!);
+    return { kind: "patch", ...(await previewOps(c, p.note_id!, (JSON.parse(p.payload) as { ops: BlockOp[] }).ops)) };
+  } catch (e) {
+    if (e instanceof RuleError) return { kind: "patch", stale: e.message };
+    throw e;
+  }
 }
 
 async function requirePending(c: Ctx, pid: string): Promise<Proposal> {

@@ -3,6 +3,7 @@
 export * from "./db";
 export * from "./notes";
 export * from "./blocks";
+export * from "./body";
 export * from "./tasks";
 export * from "./sources";
 export * from "./proposals";

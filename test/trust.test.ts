@@ -30,6 +30,13 @@ describe("the MCP surface", () => {
     expect(await bodyText(note.id)).toBe("");
   });
 
+  it("gives an agent a note's body as markdown as well as blocks", async () => {
+    const note = await noteWithBody("# Title\n- point");
+    const got = await tool("get_note", { id: note.id });
+    expect(got.markdown).toBe("# Title\n- point");
+    expect(got.blocks).toHaveLength(2);
+  });
+
   it("names the field at fault when an agent sends bad input", async () => {
     await expect(tool("create_task", { title: "" })).rejects.toThrow(/^create_task: title:/);
   });
@@ -105,7 +112,7 @@ describe("patches", () => {
     const mine = await noteWithBody("Mine");
     const other = await noteWithBody("Other");
     const [block] = await api(`/notes/${mine.id}/blocks`);
-    await expect(propose(other.id, [{ op: "update", id: block.id, content: { text: "hijacked" } }])).rejects.toThrow(/is not on note/);
+    await expect(propose(other.id, [{ op: "update", id: block.id, content: { text: "hijacked" } }])).rejects.toThrow(/is not on this note/);
     expect(await bodyText(mine.id)).toBe("Mine");
   });
 

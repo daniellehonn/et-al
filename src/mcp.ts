@@ -58,11 +58,12 @@ const TOOLS: Tool[] = [
   { name: "get_note_tree", description: "Every note, nested. Titles and ids only; no bodies.", inputSchema: obj({}), handler: (c) => store.getNoteTree(c) },
   {
     name: "get_note",
-    description: "One note with its body (blocks, in document order) and its ancestors.",
+    description: "One note: its ancestors, its body as markdown (to read), and its blocks with ids (to target with update/insert/delete ops).",
     inputSchema: obj({ id: str }, ["id"]),
     handler: async (c, a) => {
       const note = await store.requireNote(c, String(a.id));
-      return { note, ancestors: await store.getAncestors(c, note.id), blocks: await store.getBlocks(c, note.id) };
+      const blocks = await store.getBlocks(c, note.id);
+      return { note, ancestors: await store.getAncestors(c, note.id), markdown: store.bodyLines(store.toBody(blocks)).join("\n"), blocks };
     },
   },
   { name: "get_agent_activity", description: "Recent writes by agents, newest first.", inputSchema: obj({}), handler: (c) => store.getAgentActivity(c) },

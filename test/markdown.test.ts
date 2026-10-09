@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markdownToBlocks } from "../src/store/blocks";
+import { markdownToBlocks } from "../src/store/body";
 
 const shape = (md: string) => markdownToBlocks(md).map((b) => [b.type, b.depth, b.content]);
 

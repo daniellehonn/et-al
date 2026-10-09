@@ -37,6 +37,7 @@ api.get("/notes/:id/tasks", async (c) => c.json(await store.listTasks(ctx(c), { 
 
 // ---- proposals: the review queue -------------------------------------------
 api.get("/proposals", async (c) => c.json(await store.listProposals(ctx(c), { note_id: c.req.query("note_id"), source_id: c.req.query("source_id") })));
+api.get("/proposals/:id/preview", async (c) => c.json(await store.previewProposal(ctx(c), c.req.param("id"))));
 api.post("/proposals/:id/accept", async (c) => c.json(await store.acceptProposal(ctx(c), c.req.param("id"))));
 api.post("/proposals/:id/reject", async (c) => c.json(await store.rejectProposal(ctx(c), c.req.param("id"))));
 
