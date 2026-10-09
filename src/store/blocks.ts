@@ -1,51 +1,36 @@
-// Blocks: the body of a page.
+// Blocks: a note's body.
 //
-// The write model is unchanged from v7 and is deliberately the one thing this
-// rewrite did not liberalise: HUMANS (web app / REST) apply block ops directly
-// via `writeBlocks`; AGENTS never touch blocks — they call `proposePagePatch`,
-// which the human accepts or rejects. That gate is the product.
-//
-// What is new is nesting. v7 blocks were a flat list, which is most of why its
-// documents felt shallower than Notion's: a toggle could not contain anything
-// and a bullet could not have sub-bullets. Blocks now carry parent_block_id.
-import { z } from "zod";
-import { blockOp, type BlockOp } from "../schema";
-import { Ctx, RuleError, all, first, ftsUpsert, id, logEvent, now } from "./db";
-import { getPage } from "./pages";
+// Two ways to write one, and the split is the product. The HUMAN surface (the
+// web app, over REST) writes blocks directly: `writeBlocks` for op lists and
+// `setBlocks` for the editor's whole tree. AGENTS never do: they propose a
+// patch (proposals.ts), and its ops only run here once a human accepts it —
+// under the agent's name, so the body records who actually wrote each block.
+import type { z } from "zod";
+import { blockOp, blockTree, type BlockOp } from "../schema";
+import { Ctx, RuleError, all, first, ftsUpsert, id, logEvent, marks, now } from "./db";
+import { requireNote } from "./notes";
 
 export interface Block {
   id: string;
-  page_id: string;
+  note_id: string;
   parent_block_id: string | null;
   type: string;
   content_json: string;
   position: number;
   version: number;
-  is_ai: number;
+  actor: string;
   created_at: number;
   updated_at: number;
 }
 
-export interface PagePatch {
-  id: string;
-  page_id: string;
-  ops_json: string;
-  summary: string;
-  status: string;
-  actor: string;
-  created_at: number;
-  resolved_at: number | null;
-}
-
-/** A page's blocks, flat but ordered depth-first so a client can render them in
+/** A note's blocks, flat but depth-first, so a client can render them in
  *  document order without building the tree first. */
-export async function getBlocks(c: Ctx, pageId: string): Promise<Block[]> {
-  const rows = await all<Block>(c, `SELECT * FROM block WHERE page_id = ? ORDER BY position`, pageId);
+export async function getBlocks(c: Ctx, noteId: string): Promise<Block[]> {
+  const rows = await all<Block>(c, `SELECT * FROM block WHERE note_id = ? ORDER BY position`, noteId);
   const byParent = new Map<string | null, Block[]>();
   for (const b of rows) {
-    const k = b.parent_block_id;
-    if (!byParent.has(k)) byParent.set(k, []);
-    byParent.get(k)!.push(b);
+    if (!byParent.has(b.parent_block_id)) byParent.set(b.parent_block_id, []);
+    byParent.get(b.parent_block_id)!.push(b);
   }
   const out: Block[] = [];
   const seen = new Set<string>();
@@ -58,8 +43,7 @@ export async function getBlocks(c: Ctx, pageId: string): Promise<Block[]> {
     }
   };
   walk(null);
-  // Anything orphaned by a missing parent still has to appear, or edits could
-  // make content silently invisible rather than merely misplaced.
+  // Anything orphaned by a missing parent still appears: misplaced beats invisible.
   for (const b of rows) if (!seen.has(b.id)) out.push(b);
   return out;
 }
@@ -68,11 +52,28 @@ export function getBlock(c: Ctx, bid: string): Promise<Block | null> {
   return first<Block>(c, `SELECT * FROM block WHERE id = ?`, bid);
 }
 
-// ---- the op engine (shared by human writes and accepted patches) ------------
+/** A note's body as plain text, in document order. */
+export async function noteText(c: Ctx, noteId: string): Promise<string> {
+  return (await getBlocks(c, noteId)).map(blockText).filter(Boolean).join("\n");
+}
 
-async function positionAfter(c: Ctx, pageId: string, parent: string | null, afterId: string | null | undefined): Promise<number> {
+function blockText(b: Block): string {
+  try {
+    const content = JSON.parse(b.content_json);
+    if (Array.isArray(content.columns)) return [content.columns, ...(content.rows ?? [])].flat().join(" ");
+    return typeof content.text === "string" ? content.text : "";
+  } catch { return ""; }
+}
+
+/** Refresh a note's keyword index entry from its title and body. */
+export async function reindexNote(c: Ctx, noteId: string): Promise<void> {
+  const note = await first<{ title: string }>(c, `SELECT title FROM note WHERE id = ?`, noteId);
+  if (note) await ftsUpsert(c, "note", noteId, note.title, await noteText(c, noteId));
+}
+
+async function positionAfter(c: Ctx, noteId: string, parent: string | null, afterId: string | null | undefined): Promise<number> {
   const siblings = parent === null
-    ? await all<Block>(c, `SELECT * FROM block WHERE page_id = ? AND parent_block_id IS NULL ORDER BY position`, pageId)
+    ? await all<Block>(c, `SELECT * FROM block WHERE note_id = ? AND parent_block_id IS NULL ORDER BY position`, noteId)
     : await all<Block>(c, `SELECT * FROM block WHERE parent_block_id = ? ORDER BY position`, parent);
   if (!afterId) return (siblings[0]?.position ?? 1) - 1; // prepend
   const idx = siblings.findIndex((b) => b.id === afterId);
@@ -137,237 +138,156 @@ export function markdownToBlocks(md: string): ParsedBlock[] {
 }
 
 /** Write parsed blocks, rebuilding the nesting implied by their depth. */
-async function insertParsed(c: Ctx, pageId: string, parsed: ParsedBlock[], isAi: number, t: number): Promise<void> {
-  // stack[d] is the id of the most recent block at depth d — the parent for d+1.
-  const stack: string[] = [];
+async function insertParsed(c: Ctx, noteId: string, parsed: ParsedBlock[], actor: string, t: number): Promise<void> {
+  const stack: string[] = []; // stack[d] is the most recent block at depth d — the parent for d+1
   let pos = 1;
   for (const b of parsed) {
     const depth = Math.min(b.depth, stack.length); // never skip a level
-    const parent = depth > 0 ? stack[depth - 1] : null;
     const bid = id("blk");
     await c.db
-      .prepare(
-        `INSERT INTO block (id, page_id, parent_block_id, type, content_json, position, version, is_ai, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
-      )
-      .bind(bid, pageId, parent, b.type, JSON.stringify(b.content), pos++, isAi, t, t)
+      .prepare(`INSERT INTO block (id, note_id, parent_block_id, type, content_json, position, version, actor, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`)
+      .bind(bid, noteId, depth > 0 ? stack[depth - 1] : null, b.type, JSON.stringify(b.content), pos++, actor, t, t)
       .run();
     stack[depth] = bid;
     stack.length = depth + 1;
   }
 }
 
-/** Descendants of a block, so deleting a toggle takes its contents with it. */
+/** A block and everything nested under it. */
 async function blockSubtree(c: Ctx, bid: string): Promise<string[]> {
   const out = [bid];
-  const seen = new Set([bid]);
+  const seen = new Set(out);
   for (let i = 0; i < out.length; i++) {
-    const kids = await all<{ id: string }>(c, `SELECT id FROM block WHERE parent_block_id = ?`, out[i]);
-    for (const k of kids) if (!seen.has(k.id)) { seen.add(k.id); out.push(k.id); }
+    for (const k of await all<{ id: string }>(c, `SELECT id FROM block WHERE parent_block_id = ?`, out[i])) {
+      if (!seen.has(k.id)) { seen.add(k.id); out.push(k.id); }
+    }
   }
   return out;
 }
 
-async function applyOps(c: Ctx, pageId: string, ops: BlockOp[]): Promise<void> {
-  const isAi = c.actor.startsWith("ai:") ? 1 : 0;
+/** Remove blocks and their kept revisions, children before parents. */
+async function deleteBlocks(c: Ctx, ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  const m = marks(ids.length);
+  await c.db.batch([
+    c.db.prepare(`DELETE FROM block_revision WHERE block_id IN (${m})`).bind(...ids),
+    c.db.prepare(`UPDATE block SET parent_block_id = NULL WHERE id IN (${m})`).bind(...ids),
+    c.db.prepare(`DELETE FROM block WHERE id IN (${m})`).bind(...ids),
+  ]);
+}
+
+/** Keep the version a write is about to replace, attributed to whoever wrote it. */
+function keepRevision(c: Ctx, prev: Block, t: number) {
+  return c.db
+    .prepare(`INSERT INTO block_revision (id, block_id, content_json, version, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
+    .bind(id("brev"), prev.id, prev.content_json, prev.version, prev.actor, t);
+}
+
+/** Every block an op list names must already be on this note. Checked before
+ *  anything is written, so a bad op cannot leave a body half-applied. */
+export async function assertOpsTarget(c: Ctx, noteId: string, ops: BlockOp[]): Promise<void> {
+  const named = [...new Set(ops.flatMap((op) => [
+    "id" in op ? op.id : null,
+    "after" in op ? op.after : null,
+    "parent" in op ? op.parent : null,
+  ]).filter((x): x is string => !!x))];
+  if (!named.length) return;
+  const found = await all<{ id: string }>(c, `SELECT id FROM block WHERE note_id = ? AND id IN (${marks(named.length)})`, noteId, ...named);
+  const missing = named.filter((x) => !found.some((f) => f.id === x));
+  if (missing.length) throw new RuleError(`block ${missing[0]} is not on note ${noteId}`, 400);
+}
+
+/** Run block ops against a note, written as `actor`. The only path that changes
+ *  a body from ops: a human's direct write, or an accepted agent patch. */
+export async function applyOps(c: Ctx, noteId: string, ops: BlockOp[], actor: string): Promise<void> {
+  await assertOpsTarget(c, noteId, ops);
   const t = now();
   for (const op of ops) {
     if (op.op === "replace_content") {
-      // Wipe the body and rebuild from markdown. Collection blocks are spared:
-      // they are placements of a real collection, and dropping one would strip a
-      // database off the page as a side effect of rewriting its prose.
-      await c.db.prepare(`DELETE FROM block_revision WHERE block_id IN (SELECT id FROM block WHERE page_id = ? AND type <> 'collection')`).bind(pageId).run();
-      await c.db.prepare(`DELETE FROM block WHERE page_id = ? AND type <> 'collection'`).bind(pageId).run();
-      await insertParsed(c, pageId, markdownToBlocks(op.content), isAi, t);
+      // A rewrite replaces the blocks rather than editing them, so their history
+      // goes with them; a granular update/delete patch keeps it.
+      const existing = await all<{ id: string }>(c, `SELECT id FROM block WHERE note_id = ?`, noteId);
+      await deleteBlocks(c, existing.map((b) => b.id));
+      await insertParsed(c, noteId, markdownToBlocks(op.content), actor, t);
     } else if (op.op === "insert") {
       const parent = op.parent ?? null;
-      const pos = await positionAfter(c, pageId, parent, op.after);
       await c.db
-        .prepare(`INSERT INTO block (id, page_id, parent_block_id, type, content_json, position, version, is_ai, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`)
-        .bind(id("blk"), pageId, parent, op.type, JSON.stringify(op.content), pos, isAi, t, t)
+        .prepare(`INSERT INTO block (id, note_id, parent_block_id, type, content_json, position, version, actor, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`)
+        .bind(id("blk"), noteId, parent, op.type, JSON.stringify(op.content), await positionAfter(c, noteId, parent, op.after), actor, t, t)
         .run();
     } else if (op.op === "update") {
-      const existing = await getBlock(c, op.id);
-      if (!existing) continue;
-      await c.db
-        .prepare(`INSERT INTO block_revision (id, block_id, content_json, version, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
-        .bind(id("brev"), existing.id, existing.content_json, existing.version, c.actor, t)
-        .run();
-      await c.db
-        .prepare(`UPDATE block SET type = ?, content_json = ?, version = version + 1, is_ai = ?, updated_at = ? WHERE id = ?`)
-        .bind(op.type ?? existing.type, JSON.stringify(op.content), isAi, t, op.id)
-        .run();
+      const prev = (await getBlock(c, op.id))!;
+      await c.db.batch([
+        keepRevision(c, prev, t),
+        c.db.prepare(`UPDATE block SET type = ?, content_json = ?, version = version + 1, actor = ?, updated_at = ? WHERE id = ?`)
+          .bind(op.type ?? prev.type, JSON.stringify(op.content), actor, t, op.id),
+      ]);
     } else if (op.op === "delete") {
-      const ids = await blockSubtree(c, op.id);
-      const marks = ids.map(() => "?").join(",");
-      await c.db.prepare(`DELETE FROM block_revision WHERE block_id IN (${marks})`).bind(...ids).run();
-      // Children first: block.parent_block_id is a self-referencing foreign key.
-      for (const bid of ids.slice(1).reverse()) await c.db.prepare(`DELETE FROM block WHERE id = ?`).bind(bid).run();
-      await c.db.prepare(`DELETE FROM block WHERE id = ?`).bind(op.id).run();
+      await deleteBlocks(c, await blockSubtree(c, op.id));
     } else if (op.op === "move") {
       const parent = op.parent ?? null;
       // Moving a block under its own descendant would detach the subtree.
-      if (parent && (await blockSubtree(c, op.id)).includes(parent)) continue;
-      const pos = await positionAfter(c, pageId, parent, op.after);
-      await c.db.prepare(`UPDATE block SET parent_block_id = ?, position = ?, updated_at = ? WHERE id = ?`).bind(parent, pos, t, op.id).run();
+      if (parent && (await blockSubtree(c, op.id)).includes(parent)) throw new RuleError("a block cannot move inside itself", 400);
+      await c.db.prepare(`UPDATE block SET parent_block_id = ?, position = ?, updated_at = ? WHERE id = ? AND note_id = ?`)
+        .bind(parent, await positionAfter(c, noteId, parent, op.after), t, op.id, noteId).run();
     }
   }
-  await c.db.prepare(`UPDATE page SET updated_at = ? WHERE id = ?`).bind(t, pageId).run();
-  const page = await getPage(c, pageId);
-  if (page) {
-    const blocks = await getBlocks(c, pageId);
-    const text = blocks.map((b) => {
-      try {
-        const parsed = JSON.parse(b.content_json);
-        if (Array.isArray(parsed.columns)) return [parsed.columns, ...(parsed.rows ?? [])].flat().join(" ");
-        return parsed.text ?? "";
-      } catch { return ""; }
-    }).join("\n");
-    await ftsUpsert(c, "page", pageId, page.title, text);
-  }
+  await c.db.prepare(`UPDATE note SET updated_at = ? WHERE id = ?`).bind(t, noteId).run();
+  await reindexNote(c, noteId);
 }
 
-/** Direct block write — for the HUMAN web app / REST only, never exposed to MCP. */
-export async function writeBlocks(c: Ctx, pageId: string, ops: BlockOp[]): Promise<Block[]> {
-  const page = await getPage(c, pageId);
-  if (!page) throw new RuleError(`page ${pageId} not found`, 404);
-  await applyOps(c, pageId, ops);
-  await logEvent(c, "update", "page", pageId, { blocks: ops.length });
-  return getBlocks(c, pageId);
+/** Direct block write — the human surface only. Never exposed over MCP. */
+export async function writeBlocks(c: Ctx, noteId: string, ops: unknown): Promise<Block[]> {
+  await requireNote(c, noteId);
+  const parsed = blockOp.array().parse(ops);
+  await applyOps(c, noteId, parsed, c.actor);
+  await logEvent(c, "update", "note", noteId, { blocks: parsed.length });
+  return getBlocks(c, noteId);
 }
 
-// ---- patches (the ONLY way an agent changes a page body) --------------------
-
-export async function proposePagePatch(c: Ctx, pageId: string, ops: BlockOp[], summary: string): Promise<PagePatch> {
-  const page = await getPage(c, pageId);
-  if (!page) throw new RuleError(`page ${pageId} not found`, 404);
-  // Validate up front so a malformed patch is rejected here, not silently
-  // ignored on accept.
-  const parsed = z.array(blockOp).safeParse(ops);
-  if (!parsed.success) {
-    throw new RuleError(`invalid page ops — supported ops are insert, update, delete, move, replace_content. ${parsed.error.issues[0]?.message ?? ""}`, 400);
-  }
-  const pid = id("pat");
-  await c.db
-    .prepare(`INSERT INTO page_patch (id, page_id, ops_json, summary, status, actor, created_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)`)
-    .bind(pid, pageId, JSON.stringify(parsed.data), summary, c.actor, now())
-    .run();
-  await logEvent(c, "patch_proposed", "page", pageId, { patch_id: pid, summary });
-  return (await getPatch(c, pid))!;
-}
-
-export function getPatch(c: Ctx, pid: string): Promise<PagePatch | null> {
-  return first<PagePatch>(c, `SELECT * FROM page_patch WHERE id = ?`, pid);
-}
-
-export function listPatches(c: Ctx, pageId: string, status?: string): Promise<PagePatch[]> {
-  return status
-    ? all<PagePatch>(c, `SELECT * FROM page_patch WHERE page_id = ? AND status = ? ORDER BY created_at DESC`, pageId, status)
-    : all<PagePatch>(c, `SELECT * FROM page_patch WHERE page_id = ? ORDER BY created_at DESC`, pageId);
-}
-
-/** Every pending patch across the workspace — the review queue. */
-export function listPendingPatches(c: Ctx): Promise<(PagePatch & { page_title: string })[]> {
-  return all<PagePatch & { page_title: string }>(
-    c,
-    `SELECT pp.*, p.title AS page_title FROM page_patch pp JOIN page p ON pp.page_id = p.id
-     WHERE pp.status = 'pending' ORDER BY pp.created_at DESC`,
-  );
-}
-
-/** Human decision. Accepting runs the ops; rejecting just marks it. */
-export async function resolvePatch(c: Ctx, pid: string, accept: boolean): Promise<PagePatch> {
-  const patch = await getPatch(c, pid);
-  if (!patch) throw new RuleError(`patch ${pid} not found`, 404);
-  if (patch.status !== "pending") throw new RuleError(`patch ${pid} is already ${patch.status}`);
-  if (accept) await applyOps(c, patch.page_id, JSON.parse(patch.ops_json) as BlockOp[]);
-  await c.db
-    .prepare(`UPDATE page_patch SET status = ?, resolved_at = ? WHERE id = ?`)
-    .bind(accept ? "accepted" : "rejected", now(), pid)
-    .run();
-  await logEvent(c, accept ? "patch_accepted" : "patch_rejected", "page", patch.page_id, { patch_id: pid });
-  return (await getPatch(c, pid))!;
-}
-
-/** Reconcile a page's whole body against a client-owned tree.
+/** Reconcile a note's body against the editor's whole tree.
  *
- *  BlockNote holds the document and hands back the full tree on change, so the
- *  op engine above is the wrong shape for it: there is no "insert after X", only
- *  "this is the body now". Reconciling by id rather than replacing wholesale is
- *  what preserves block identity — and with it block_revision, per-block AI
- *  provenance, and any relationship edge pointing at a block.
- *
- *  Still human-only. Agents keep going through proposePagePatch; this is the
- *  same trust boundary as writeBlocks, just a different write shape. */
-export async function setBlocks(
-  c: Ctx,
-  pageId: string,
-  tree: Array<{ id: string; parent_block_id: string | null; type: string; content: Record<string, unknown>; position: number }>,
-): Promise<Block[]> {
-  const page = await getPage(c, pageId);
-  if (!page) throw new RuleError(`page ${pageId} not found`, 404);
-
-  const existing = await all<Block>(c, `SELECT * FROM block WHERE page_id = ?`, pageId);
+ *  The editor holds the document and hands back the full tree on each change,
+ *  so there is no "insert after X", only "this is the body now". Reconciling by
+ *  id rather than replacing wholesale keeps block identity — and with it each
+ *  block's history and author. Human-only, like writeBlocks. */
+export async function setBlocks(c: Ctx, noteId: string, input: z.input<typeof blockTree>): Promise<Block[]> {
+  await requireNote(c, noteId);
+  const tree = blockTree.parse(input);
+  const existing = await all<Block>(c, `SELECT * FROM block WHERE note_id = ?`, noteId);
   const byId = new Map(existing.map((b) => [b.id, b]));
-  const incoming = new Set(tree.map((t) => t.id));
   const t = now();
-  const isAi = c.actor.startsWith("ai:") ? 1 : 0;
 
-  // Parents before children, so a self-referencing foreign key is never
-  // violated by a child arriving first.
+  // Parents before children, so the self-reference is never violated.
   const ordered = [...tree].sort((a, b) => (a.parent_block_id ? 1 : 0) - (b.parent_block_id ? 1 : 0));
-
+  const writes: D1PreparedStatement[] = [];
   for (const node of ordered) {
     const prev = byId.get(node.id);
     const json = JSON.stringify(node.content);
     if (!prev) {
-      await c.db
-        .prepare(`INSERT INTO block (id, page_id, parent_block_id, type, content_json, position, version, is_ai, created_at, updated_at)
-                  VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`)
-        .bind(node.id, pageId, node.parent_block_id, node.type, json, node.position, isAi, t, t)
-        .run();
+      writes.push(c.db
+        .prepare(`INSERT INTO block (id, note_id, parent_block_id, type, content_json, position, version, actor, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`)
+        .bind(node.id, noteId, node.parent_block_id, node.type, json, node.position, c.actor, t, t));
       continue;
     }
-    // Unchanged blocks are skipped entirely: an edit to one paragraph should not
-    // bump the version of every other block on the page, or history becomes noise.
-    if (prev.content_json === json && prev.type === node.type &&
-        prev.parent_block_id === node.parent_block_id && prev.position === node.position) continue;
-
-    if (prev.content_json !== json) {
-      await c.db
-        .prepare(`INSERT INTO block_revision (id, block_id, content_json, version, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
-        .bind(id("brev"), prev.id, prev.content_json, prev.version, c.actor, t)
-        .run();
-    }
-    await c.db
-      .prepare(`UPDATE block SET parent_block_id = ?, type = ?, content_json = ?, position = ?,
-                version = version + ?, is_ai = ?, updated_at = ? WHERE id = ?`)
-      .bind(node.parent_block_id, node.type, json, node.position,
-            prev.content_json !== json ? 1 : 0, isAi, t, node.id)
-      .run();
+    const contentChanged = prev.content_json !== json || prev.type !== node.type;
+    // An untouched block is skipped entirely: editing one paragraph must not bump
+    // every other block's version, or history becomes noise.
+    if (!contentChanged && prev.parent_block_id === node.parent_block_id && prev.position === node.position) continue;
+    if (contentChanged) writes.push(keepRevision(c, prev, t));
+    writes.push(c.db
+      .prepare(`UPDATE block SET parent_block_id = ?, type = ?, content_json = ?, position = ?, version = version + ?, actor = ?, updated_at = ? WHERE id = ?`)
+      // Moving a block is not writing it: only a content change takes authorship.
+      .bind(node.parent_block_id, node.type, json, node.position, contentChanged ? 1 : 0, contentChanged ? c.actor : prev.actor, t, node.id));
   }
+  if (writes.length) await c.db.batch(writes);
 
-  // Children first when removing, for the same foreign-key reason.
-  const gone = existing.filter((b) => !incoming.has(b.id));
-  if (gone.length) {
-    const ids = gone.map((b) => b.id);
-    const marks = ids.map(() => "?").join(",");
-    await c.db.prepare(`DELETE FROM block_revision WHERE block_id IN (${marks})`).bind(...ids).run();
-    for (const b of [...gone].sort((a, b) => (a.parent_block_id ? -1 : 1))) {
-      await c.db.prepare(`DELETE FROM block WHERE id = ?`).bind(b.id).run();
-    }
-  }
+  const incoming = new Set(tree.map((n) => n.id));
+  const gone = existing.filter((b) => !incoming.has(b.id)).map((b) => b.id);
+  await deleteBlocks(c, gone);
 
-  await c.db.prepare(`UPDATE page SET updated_at = ? WHERE id = ?`).bind(t, pageId).run();
-  await ftsUpsert(c, "page", pageId, page.title, await pageText(c, pageId));
-  await logEvent(c, "update", "page", pageId, { blocks: tree.length, removed: gone.length });
-  return getBlocks(c, pageId);
-}
-
-/** Concatenated block text for the FTS body column. */
-async function pageText(c: Ctx, pageId: string): Promise<string> {
-  const rows = await all<{ t: string | null }>(
-    c, `SELECT json_extract(content_json, '$.text') AS t FROM block WHERE page_id = ?`, pageId,
-  );
-  return rows.map((r) => r.t ?? "").filter(Boolean).join("\n");
+  await c.db.prepare(`UPDATE note SET updated_at = ? WHERE id = ?`).bind(t, noteId).run();
+  await reindexNote(c, noteId);
+  await logEvent(c, "update", "note", noteId, { blocks: tree.length, removed: gone.length });
+  return getBlocks(c, noteId);
 }

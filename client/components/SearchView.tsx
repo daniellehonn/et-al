@@ -3,10 +3,10 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api, hitHref, type SearchHit } from "@/lib/api";
 
-// Full-text search across every entity. FTS returns snippets with [term] markers
-// we render as highlights. Keyword-first; semantic ranking is deferred.
+// Search across notes, tasks and sources: keyword matches with [term] snippets,
+// fused with meaning-based matches over notes (see src/store/search.ts).
 const TYPE_LABEL: Record<string, string> = {
-  page: "Page", insight: "Insight",
+  note: "Note", task: "Task", source: "Source",
 };
 
 export function SearchView() {

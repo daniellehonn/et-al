@@ -1,5 +1,5 @@
 "use client";
-// The page body, edited with BlockNote.
+// The note body, edited with BlockNote.
 //
 // This replaces a hand-rolled surface that was a list of textareas with one
 // active at a time. That design cost three things you feel constantly: clicking
@@ -23,12 +23,11 @@ import {
 import { BlockNoteView } from "@blocknote/ariakit";
 import "@blocknote/core/fonts/inter.css";
 import "@blocknote/ariakit/style.css";
-import { api, type Block } from "@/lib/api";
+import { api, flattenTree, type Block, type NoteNode } from "@/lib/api";
 import { fromBlockNote, toBlockNote, type BNBlock } from "@/lib/blocknote-map";
-import { CollectionBlock } from "./CollectionBlock";
 
 /** The passthrough block. et al. has types BlockNote has never heard of —
- *  inline collections and page links. Rather than drop
+ *  links to other notes, and tables. Rather than drop
  *  them (silent data loss) or teach BlockNote each one, they render through
  *  this single spec, which keeps the original type and payload in props so a
  *  round-trip is lossless even for types this editor cannot edit. */
@@ -40,11 +39,8 @@ const etAlBlock = createReactBlockSpec(
       let payload: Record<string, unknown> = {};
       try { payload = JSON.parse(String(props.block.props.payload)); } catch { /* keep empty */ }
 
-      if (etype === "collection") {
-        return <CollectionBlock collectionId={String(payload.collection_id ?? "")} />;
-      }
       if (etype === "page_link") {
-        return <PageLink pageId={String(payload.page_id ?? "")} />;
+        return <NoteLink noteId={String(payload.note_id ?? "")} />;
       }
       if (etype === "table") {
         return <SimpleTable columns={(payload.columns as string[]) ?? []} rows={(payload.rows as string[][]) ?? []} />;
@@ -60,42 +56,41 @@ const etAlBlock = createReactBlockSpec(
   },
 );
 
-/** An inline reference to another page — Notion's @-mention.
+/** An inline reference to another note — an @-mention.
  *
  *  Stored with the title alongside the id so the text stays readable to agents
  *  and to FTS even though the id is what actually resolves. The title is a
- *  cached label: the link below reads the live page, so a rename shows through
+ *  cached label: the link below reads the live note, so a rename shows through
  *  without rewriting every block that mentions it. */
-const pageMention = createReactInlineContentSpec(
-  { type: "pageMention", propSchema: { pageId: { default: "" }, title: { default: "" } }, content: "none" },
+const noteMention = createReactInlineContentSpec(
+  { type: "noteMention", propSchema: { noteId: { default: "" }, title: { default: "" } }, content: "none" },
   {
-    render: (props) => <MentionChip pageId={String(props.inlineContent.props.pageId)} fallback={String(props.inlineContent.props.title)} />,
+    render: (props) => <MentionChip noteId={String(props.inlineContent.props.noteId)} fallback={String(props.inlineContent.props.title)} />,
   },
 );
 
-function MentionChip({ pageId, fallback }: { pageId: string; fallback: string }) {
+function MentionChip({ noteId, fallback }: { noteId: string; fallback: string }) {
   const { data } = useQuery({
-    queryKey: ["page", pageId],
-    queryFn: () => api.get<{ title: string; icon: string | null }>(`/pages/${pageId}`),
-    enabled: !!pageId,
+    queryKey: ["note", noteId],
+    queryFn: () => api.get<{ title: string }>(`/notes/${noteId}`),
+    enabled: !!noteId,
   });
   return (
-    <a className="et-mention" href={`/page/?id=${pageId}`} contentEditable={false}>
-      {data?.icon ?? "📄"} {data ? data.title || "Untitled" : fallback || "…"}
+    <a className="et-mention" href={`/note/?id=${noteId}`} contentEditable={false}>
+      {data ? data.title || "Untitled" : fallback || "…"}
     </a>
   );
 }
 
-function PageLink({ pageId }: { pageId: string }) {
+function NoteLink({ noteId }: { noteId: string }) {
   const { data } = useQuery({
-    queryKey: ["page", pageId],
-    queryFn: () => api.get<{ title: string; icon: string | null }>(`/pages/${pageId}`),
-    enabled: !!pageId,
+    queryKey: ["note", noteId],
+    queryFn: () => api.get<{ title: string }>(`/notes/${noteId}`),
+    enabled: !!noteId,
   });
-  if (!pageId) return null;
+  if (!noteId) return null;
   return (
-    <a className="et-page-link" href={`/page/?id=${pageId}`} contentEditable={false}>
-      <span>{data?.icon ?? "📄"}</span>
+    <a className="et-page-link" href={`/note/?id=${noteId}`} contentEditable={false}>
       <span className="et-page-link-title">{data ? data.title || "Untitled" : "…"}</span>
     </a>
   );
@@ -117,31 +112,29 @@ function SimpleTable({ columns, rows }: { columns: string[]; rows: string[][] })
 const schema = BlockNoteSchema.create({
   blockSpecs: { ...defaultBlockSpecs, etAlBlock: etAlBlock() },
   // Unlike createReactBlockSpec, the inline variant returns the spec directly.
-  inlineContentSpecs: { ...defaultInlineContentSpecs, pageMention },
+  inlineContentSpecs: { ...defaultInlineContentSpecs, noteMention },
 });
 
-export function PageEditor({ pageId }: { pageId: string }) {
+export function NoteEditor({ noteId }: { noteId: string }) {
   const qc = useQueryClient();
   const { data: blocks, isLoading } = useQuery({
-    queryKey: ["blocks", pageId],
-    queryFn: () => api.get<Block[]>(`/pages/${pageId}/blocks`),
+    queryKey: ["blocks", noteId],
+    queryFn: () => api.get<Block[]>(`/notes/${noteId}/blocks`),
   });
 
   const initial = useMemo(() => (blocks ? toBlockNote(blocks) : undefined), [blocks]);
 
   const editor = useCreateBlockNote(
-    // Keyed on the page below, so this only runs once per page load — BlockNote
+    // Keyed on the note below, so this only runs once per note load — BlockNote
     // owns the document from then on and re-seeding it would fight the user.
     { schema, initialContent: initial as never },
-    [pageId, !!blocks],
+    [noteId, !!blocks],
   );
 
-  // Every page, for the @-menu. Small enough to hold in memory, and the menu has
+  // Every note, for the @-menu. Small enough to hold in memory, and the menu has
   // to be able to reach anything — not just the current branch.
-  const { data: allPages } = useQuery({
-    queryKey: ["all-pages"],
-    queryFn: () => api.get<Array<{ id: string; title: string; icon: string | null }>>("/pages"),
-  });
+  const { data: tree } = useQuery({ queryKey: ["tree"], queryFn: () => api.get<NoteNode[]>("/notes/tree") });
+  const allNotes = flattenTree(tree ?? []);
 
   const saving = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dirty = useRef(false);
@@ -150,7 +143,7 @@ export function PageEditor({ pageId }: { pageId: string }) {
     dirty.current = false;
     const tree = fromBlockNote(editor.document as unknown as BNBlock[]);
     try {
-      await api.put(`/pages/${pageId}/blocks`, { blocks: tree });
+      await api.put(`/notes/${noteId}/blocks`, { blocks: tree });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       qc.invalidateQueries({ queryKey: ["session"] });
@@ -158,7 +151,7 @@ export function PageEditor({ pageId }: { pageId: string }) {
         ? "Your session has ended. Sign in again to save."
         : `Couldn't save: ${msg}`);
     }
-  }, [editor, pageId, qc]);
+  }, [editor, noteId, qc]);
 
   const onChange = useCallback(() => {
     dirty.current = true;
@@ -185,32 +178,30 @@ export function PageEditor({ pageId }: { pageId: string }) {
           getItems={async (query) =>
             filterSuggestionItems(
               [
-                // Creating from the menu is the important half: mentioning a page
+                // Creating from the menu is the important half: mentioning a note
                 // that does not exist yet is how an outline actually gets written.
                 {
-                  title: query ? `New page "${query}"` : "New page",
+                  title: query ? `New note "${query}"` : "New note",
                   group: "Create",
                   onItemClick: async () => {
-                    const child = await api.post<{ id: string; title: string }>("/pages", {
-                      parent_page_id: pageId, title: query || "Untitled",
+                    const child = await api.post<{ id: string; title: string }>("/notes", {
+                      parent_id: noteId, title: query || "Untitled",
                     });
                     qc.invalidateQueries({ queryKey: ["tree"] });
-                    qc.invalidateQueries({ queryKey: ["all-pages"] });
                     editor.insertInlineContent([
-                      { type: "pageMention", props: { pageId: child.id, title: child.title } } as never,
+                      { type: "noteMention", props: { noteId: child.id, title: child.title } } as never,
                       " ",
                     ]);
                   },
                 },
-                ...(allPages ?? [])
-                  .filter((p) => p.id !== pageId)
+                ...allNotes
+                  .filter((p) => p.id !== noteId)
                   .map((p) => ({
                     title: p.title || "Untitled",
-                    group: "Link to page",
-                    icon: <span>{p.icon ?? "📄"}</span>,
+                    group: "Link to note",
                     onItemClick: () => {
                       editor.insertInlineContent([
-                        { type: "pageMention", props: { pageId: p.id, title: p.title } } as never,
+                        { type: "noteMention", props: { noteId: p.id, title: p.title } } as never,
                         " ",
                       ]);
                     },
@@ -234,7 +225,7 @@ function EditorStyles() {
       .et-bn { margin-left: -3rem; }
       .et-bn .bn-editor { padding-inline: 3rem; background: transparent; font-family: var(--font-sans); }
       /* BlockNote puts the level on the inner tag, not the block wrapper, and
-         its defaults run larger than the page title. Match et al.'s scale. */
+         its defaults run larger than the note title. Match et al.'s scale. */
       .et-bn .bn-editor h1 { font-size: 1.75rem; font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; }
       .et-bn .bn-editor h2 { font-size: 1.35rem; font-weight: 600; line-height: 1.3; }
       .et-bn .bn-editor h3 { font-size: 1.1rem;  font-weight: 600; line-height: 1.35; }

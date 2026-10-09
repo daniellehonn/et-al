@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, Instrument_Serif, JetBrains_Mono } from "next/font/google";
 import { Providers } from "./providers";
-import { PageTree } from "@/components/PageTree";
+import { NoteTree } from "@/components/NoteTree";
 import { AuthGate } from "@/components/AuthGate";
 import "./globals.css";
 
@@ -55,7 +55,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               column under the mobile breakpoint, where the Spine goes off-canvas. */}
           <AuthGate>
             <div className="et-shell">
-              <PageTree />
+              <NoteTree />
               <main style={{ minWidth: 0 }}>
                 {children}
               </main>

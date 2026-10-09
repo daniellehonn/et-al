@@ -11,16 +11,11 @@ describe("open routes", () => {
 
 describe("reads need a credential", () => {
   it.each([["none", 401], ["wrong", 401], ["key", 200], ["bearer", 200], ["cookie", 200]] as const)(
-    "GET /api/tree with %s → %i",
+    "GET /api/notes/tree with %s → %i",
     async (auth, status) => {
-      expect((await request("/api/tree", { auth })).status).toBe(status);
+      expect((await request("/api/notes/tree", { auth })).status).toBe(status);
     },
   );
-
-  it("gates the read-shaped POST that queries a collection", async () => {
-    const res = await request("/api/collections/col_x/query", { method: "POST", auth: "none", body: "{}" });
-    expect(res.status).toBe(401);
-  });
 
   it("gates /files, and with a key reaches R2", async () => {
     expect((await request("/files/missing.png", { auth: "none" })).status).toBe(401);
@@ -30,7 +25,7 @@ describe("reads need a credential", () => {
 
 describe("writes need a credential", () => {
   it("refuses an unauthenticated write", async () => {
-    const res = await request("/api/pages", { method: "POST", auth: "none", body: JSON.stringify({ title: "nope" }) });
+    const res = await request("/api/notes", { method: "POST", auth: "none", body: JSON.stringify({ title: "nope" }) });
     expect(res.status).toBe(401);
   });
 });

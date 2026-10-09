@@ -1,11 +1,11 @@
 "use client";
-// The page-level actions behind ••• : move, history, and the trash. History is
+// The note-level actions behind ••• : move, history, and the trash. History is
 // how an accepted agent patch gets undone, block by block.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { api, blockContent, type Page } from "@/lib/api";
+import { actorLabel, api, type HistoryEntry, type Note, type NoteNode } from "@/lib/api";
 
-export function PageMenu({ page, onChanged }: { page: Page; onChanged: () => void }) {
+export function NoteMenu({ note }: { note: Note }) {
   const qc = useQueryClient();
   const [panel, setPanel] = useState<"none" | "history" | "move">("none");
 
@@ -15,22 +15,21 @@ export function PageMenu({ page, onChanged }: { page: Page; onChanged: () => voi
   };
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["tree"] });
-    qc.invalidateQueries({ queryKey: ["page", page.id] });
-    onChanged();
+    qc.invalidateQueries({ queryKey: ["note", note.id] });
   };
 
   return (
     <>
       <div className="et-pagemenu-row">
         <details className="et-pagemenu">
-          <summary>···</summary>
+          <summary aria-label="Note options">···</summary>
           <div className="et-pagemenu-list">
             <button onClick={(e) => { close(e); setPanel("move"); }}>Move to…</button>
             <button onClick={(e) => { close(e); setPanel("history"); }}>History</button>
             <button className="et-pagemenu-del" onClick={async (e) => {
               close(e);
-              if (!confirm(`Move "${page.title || "Untitled"}" to the trash? Everything inside goes with it.`)) return;
-              await api.del(`/pages/${page.id}`);
+              if (!confirm(`Move "${note.title || "Untitled"}" to the trash? Everything inside goes with it.`)) return;
+              await api.del(`/notes/${note.id}`);
               qc.invalidateQueries({ queryKey: ["tree"] });
               window.location.href = "/";
             }}>Move to trash</button>
@@ -38,55 +37,57 @@ export function PageMenu({ page, onChanged }: { page: Page; onChanged: () => voi
         </details>
       </div>
 
-      {panel === "move" && <MovePanel page={page} onDone={() => { setPanel("none"); refresh(); }} />}
-      {panel === "history" && <HistoryPanel pageId={page.id} onDone={() => { setPanel("none"); refresh(); }} />}
+      {panel === "move" && <MovePanel note={note} onDone={() => { setPanel("none"); refresh(); }} />}
+      {panel === "history" && <HistoryPanel noteId={note.id} onDone={() => setPanel("none")} />}
       <PageMenuStyles />
     </>
   );
 }
 
-/** Move-to: pick a destination from the flat page list. Descendants of the page
- *  are filtered out here as well as refused server-side — offering a move that
- *  will certainly fail is worse than not offering it. */
-function MovePanel({ page, onDone }: { page: Page; onDone: () => void }) {
-  const { data: pages } = useQuery({ queryKey: ["all-pages"], queryFn: () => api.get<Page[]>("/pages") });
+/** Every note in the tree, flattened, leaving out `exclude` and everything
+ *  under it: a note cannot move inside itself, and offering a move that will
+ *  certainly fail is worse than not offering it. */
+function flatten(nodes: NoteNode[], exclude: string, out: NoteNode[] = []): NoteNode[] {
+  for (const n of nodes) {
+    if (n.id === exclude) continue;
+    out.push(n);
+    flatten(n.children, exclude, out);
+  }
+  return out;
+}
+
+function MovePanel({ note, onDone }: { note: Note; onDone: () => void }) {
+  const { data: tree } = useQuery({ queryKey: ["tree"], queryFn: () => api.get<NoteNode[]>("/notes/tree") });
   const [q, setQ] = useState("");
-  const options = (pages ?? [])
-    .filter((p) => p.id !== page.id && p.id !== page.parent_page_id)
-    .filter((p) => p.title.toLowerCase().includes(q.toLowerCase()))
+  const options = flatten(tree ?? [], note.id)
+    .filter((n) => n.id !== note.parent_id && n.title.toLowerCase().includes(q.toLowerCase()))
     .slice(0, 20);
 
   const move = async (parent: string | null) => {
-    try { await api.post(`/pages/${page.id}/move`, { new_parent_page_id: parent }); }
-    catch (e) { alert(e instanceof Error ? e.message : "Could not move that page"); }
+    try { await api.post(`/notes/${note.id}/move`, { parent_id: parent }); }
+    catch (e) { alert(e instanceof Error ? e.message : "Could not move that note"); }
     onDone();
   };
 
   return (
     <div className="et-panel">
       <div className="et-panel-head">Move to<button onClick={onDone}>×</button></div>
-      <input className="et-panel-search" placeholder="Search pages…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
-      <button className="et-panel-row" onClick={() => move(null)}>↑ Top level</button>
-      {options.map((p) => (
-        <button key={p.id} className="et-panel-row" onClick={() => move(p.id)}>{p.icon ?? "📄"} {p.title || "Untitled"}</button>
+      <input id="et-move-search" className="et-panel-search" placeholder="Search notes…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
+      {note.parent_id && <button className="et-panel-row" onClick={() => move(null)}>↑ Top level</button>}
+      {options.map((n) => (
+        <button key={n.id} className="et-panel-row" onClick={() => move(n.id)}>{n.title || "Untitled"}</button>
       ))}
     </div>
   );
 }
 
-interface HistoryEntry {
-  id: string; block_id: string; content_json: string; version: number;
-  actor: string; created_at: number; block_type: string | null; current_content: string | null;
-}
-
-/** Edit history. block_revision has been recording every prior version since v7;
- *  this is the first thing that reads it. Restoring is per block rather than
- *  whole-page, because that is the granularity the revisions were written at. */
-function HistoryPanel({ pageId, onDone }: { pageId: string; onDone: () => void }) {
+/** Edit history, per block: what each edit replaced and who wrote it. This is
+ *  where an accepted agent patch is undone. */
+function HistoryPanel({ noteId, onDone }: { noteId: string; onDone: () => void }) {
   const qc = useQueryClient();
   const { data: history } = useQuery({
-    queryKey: ["history", pageId],
-    queryFn: () => api.get<HistoryEntry[]>(`/pages/${pageId}/history`),
+    queryKey: ["history", noteId],
+    queryFn: () => api.get<HistoryEntry[]>(`/notes/${noteId}/history`),
   });
 
   const textOf = (json: string) => {
@@ -100,13 +101,13 @@ function HistoryPanel({ pageId, onDone }: { pageId: string; onDone: () => void }
       {(history ?? []).map((h) => (
         <div key={h.id} className="et-panel-hist">
           <div className="et-panel-hist-meta">
-            {new Date(h.created_at).toLocaleString()} · {h.actor}
+            {new Date(h.created_at).toLocaleString()} · written by {actorLabel(h.actor)}
           </div>
           <div className="et-panel-hist-text">{textOf(h.content_json) || <em>(empty)</em>}</div>
           <button onClick={async () => {
             await api.post(`/revisions/${h.id}/restore`);
-            qc.invalidateQueries({ queryKey: ["blocks", pageId] });
-            qc.invalidateQueries({ queryKey: ["history", pageId] });
+            qc.invalidateQueries({ queryKey: ["blocks", noteId] });
+            qc.invalidateQueries({ queryKey: ["history", noteId] });
           }}>Restore this version</button>
         </div>
       ))}
@@ -114,10 +115,10 @@ function HistoryPanel({ pageId, onDone }: { pageId: string; onDone: () => void }
   );
 }
 
-/** The trash: what was deleted, with restore and permanent delete. */
+/** The trash: what was trashed, with restore and permanent delete. */
 export function TrashPanel({ onDone }: { onDone: () => void }) {
   const qc = useQueryClient();
-  const { data: trash } = useQuery({ queryKey: ["trash"], queryFn: () => api.get<Page[]>("/trash") });
+  const { data: trash } = useQuery({ queryKey: ["trash"], queryFn: () => api.get<Note[]>("/trash") });
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["trash"] });
     qc.invalidateQueries({ queryKey: ["tree"] });
@@ -129,12 +130,12 @@ export function TrashPanel({ onDone }: { onDone: () => void }) {
       {trash?.length === 0 && <div className="et-panel-empty">Nothing in the trash.</div>}
       {(trash ?? []).map((p) => (
         <div key={p.id} className="et-panel-hist">
-          <div className="et-panel-hist-text">{p.icon ?? "📄"} {p.title || "Untitled"}</div>
-          <div className="et-panel-hist-meta">deleted {p.trashed_at ? new Date(p.trashed_at).toLocaleString() : ""}</div>
-          <button onClick={async () => { await api.post(`/pages/${p.id}/restore`); refresh(); }}>Restore</button>
+          <div className="et-panel-hist-text">{p.title || "Untitled"}</div>
+          <div className="et-panel-hist-meta">trashed {p.trashed_at ? new Date(p.trashed_at).toLocaleString() : ""}</div>
+          <button onClick={async () => { await api.post(`/notes/${p.id}/restore`); refresh(); }}>Restore</button>
           <button className="et-pagemenu-del" onClick={async () => {
             if (!confirm(`Permanently delete "${p.title || "Untitled"}"? This cannot be undone.`)) return;
-            await api.del(`/pages/${p.id}?permanent=1`);
+            await api.del(`/trash/${p.id}`);
             refresh();
           }}>Delete forever</button>
         </div>

@@ -1,11 +1,11 @@
-// The store: pages and collections are the primitives; roles.ts keeps the typed
-// surface (tasks, sources, insights) addressable on top of them.
-// Every function takes a Ctx carrying the actor, so writes are attributed.
+// The store. Every function takes a Ctx carrying the actor, so every write is
+// attributed and logged without the caller having to remember to.
 export * from "./db";
-export * from "./pages";
-export * from "./collections";
+export * from "./notes";
 export * from "./blocks";
-export * from "./roles";
+export * from "./tasks";
+export * from "./sources";
+export * from "./proposals";
 export * from "./search";
 export * from "./context";
 export * from "./activity";

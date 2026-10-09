@@ -7,7 +7,7 @@ import type { Env, EntityType } from "../schema";
 export interface Ctx {
   db: D1Database;
   env: Env;
-  actor: string; // 'human' | 'ai:<name>'
+  actor: string; // 'human' | 'ai:<name>' | 'system' (background jobs)
 }
 
 export function ctx(env: Env, actor = "human"): Ctx {
@@ -33,7 +33,7 @@ export class RuleError extends Error {
 export async function logEvent(
   c: Ctx,
   action: string,
-  entityType: string,
+  entityType: EntityType,
   entityId: string,
   detail?: unknown,
 ): Promise<void> {
@@ -90,3 +90,6 @@ export async function all<T = Record<string, unknown>>(
   const res = await c.db.prepare(sql).bind(...binds).all<T>();
   return res.results ?? [];
 }
+
+/** `?, ?, ?` for an IN list of n values. */
+export const marks = (n: number): string => Array.from({ length: n }, () => "?").join(", ");

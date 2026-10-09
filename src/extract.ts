@@ -6,7 +6,7 @@
 //
 // The important divergence: boop writes memories directly. Nothing here writes.
 // Every extracted insight is created as a PROPOSAL and stays invisible to
-// search, context assembly and the knowledge shelf until a human accepts it.
+// search, context assembly and the note tree until a human accepts it.
 // That is the invariant the whole system rests on — machine-written knowledge
 // is reviewed, not assumed — and it is also what bounds volume, since the
 // ceiling is what you accept rather than what a model produces.
@@ -46,21 +46,6 @@ Respond with ONLY the JSON object.`;
 
 interface Fact { title?: string; content?: string; segment?: string; importance?: number }
 
-/** Strip a fetched page down to prose.
- *
- *  A fetch returns raw HTML; script and style bodies in particular are pure
- *  noise that would dominate the model's window and push the actual article
- *  out of it. */
-function readable(raw: string): string {
-  return raw
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&(nbsp|amp|lt|gt|quot|#39);/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 /** Workers AI returns two different shapes depending on the model: the older
  *  `{response}` and an OpenAI-style `{choices:[{message:{content}}]}`. Reading
  *  only the first silently yielded nothing when the model was swapped. */
@@ -89,52 +74,35 @@ function parseFacts(raw: string): Fact[] {
  *
  * Best-effort throughout: extraction failing must never stop a capture from
  * being kept. A source with no proposals is a normal outcome, not an error.
+ * `text` is the fetched page, already reduced to prose.
  */
-export async function extractFromSource(
-  c: store.Ctx, env: Env, sourceId: string, fetchedText?: string,
-): Promise<number> {
+export async function extractFromSource(c: store.Ctx, env: Env, sourceId: string, text: string): Promise<number> {
   if (!env.AI) return 0;
-
-  const page = await store.getPage(c, sourceId);
-  if (!page) return 0;
-  // The fetched text is passed in rather than read back: ingest indexes the
-  // fetch for search but deliberately does not store 100KB of markup as blocks,
-  // so the page body is empty at this point.
-  const raw = fetchedText ?? (await store.bodyText(c, sourceId));
-  const body = readable(raw);
-  // Below this there is nothing to extract from — a bare link whose fetch
-  // returned a login wall, typically.
-  if (body.length < 200) return 0;
+  const source = await store.getSource(c, sourceId);
+  if (!source) return 0;
+  // Below this there is nothing to extract from — typically a login wall.
+  if (text.length < 200) return 0;
 
   let facts: Fact[] = [];
   try {
-    // Overridable by env: Workers AI deprecates models on a schedule, and the
-    // previous choice here was retired on 2026-05-30 — which surfaced only as
-    // silently empty extraction until the error was logged.
+    // Overridable by env: Workers AI retires models on a schedule, and a retired
+    // model surfaces only as silently empty extraction.
     const model = env.EXTRACT_MODEL ?? "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
     const out = (await env.AI.run(model as never, {
       messages: [
         { role: "system", content: PROMPT },
         // Truncated: the tail of a long article is rarely where the durable
-        // material is, and the whole point is to stay cheap enough to run on
-        // every capture.
-        { role: "user", content: `TITLE: ${page.title}\n\n${body.slice(0, 6000)}` },
+        // material is, and this has to stay cheap enough to run on every capture.
+        { role: "user", content: `TITLE: ${source.title}\n\n${text.slice(0, 6000)}` },
       ],
     } as never)) as unknown;
     facts = parseFacts(textOf(out));
   } catch (e) {
-    // Logged rather than swallowed: a silent extraction failure is
-    // indistinguishable from "nothing durable here", which is exactly how the
-    // deprecated-model and response-shape bugs stayed hidden.
+    // Logged rather than swallowed: a silent failure is indistinguishable from
+    // "nothing durable here", which is how past model retirements stayed hidden.
     console.log("[extract] failed", e instanceof Error ? e.message : String(e));
     return 0;
   }
-
-  // The owning page is where the insight belongs — the source sits in that
-  // page's Sources collection, so its knowledge belongs on the same page.
-  const owner = await ownerPageOf(c, sourceId);
-  if (!owner) return 0;
-  const col = await store.ensureRoleCollection(c, owner, "insights");
 
   let created = 0;
   for (const f of facts.slice(0, MAX_PER_SOURCE)) {
@@ -143,35 +111,10 @@ export async function extractFromSource(
     const segment = (SEGMENTS as readonly string[]).includes(String(f.segment)) ? (f.segment as Segment) : "knowledge";
     const importance = Number.isFinite(f.importance) && f.importance! >= 0 && f.importance! <= 1
       ? f.importance! : SEGMENT_IMPORTANCE[segment];
-
-    const insight = await store.createPage(c, {
-      collection_id: col.id,
-      title: String(f.title ?? content).slice(0, 90),
-      properties: {
-        source_id: sourceId,
-        is_ai: true,
-        // The gate. Nothing reads a proposed insight until this clears.
-        proposed: true,
-        segment,
-        importance,
-      },
-    });
-    await store.writeBlocks(c, insight.id, [{ op: "replace_content", content }]);
+    // A proposal, not a note: invisible to search, context and the tree until
+    // a human accepts it.
+    await store.proposeInsight(c, sourceId, { title: String(f.title ?? content).slice(0, 90), content, segment, importance });
     created++;
   }
-
-  if (created) {
-    await store.logEvent(c, "propose", "page", sourceId, { insights: created, from: page.title });
-  }
   return created;
-}
-
-/** Which page owns the collection this source sits in. */
-async function ownerPageOf(c: store.Ctx, sourceId: string): Promise<string | null> {
-  const row = await store.first<{ parent_page_id: string | null }>(
-    c,
-    `SELECT col.parent_page_id FROM page p JOIN collection col ON p.collection_id = col.id WHERE p.id = ?`,
-    sourceId,
-  );
-  return row?.parent_page_id ?? null;
 }

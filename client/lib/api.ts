@@ -32,86 +32,73 @@ export const api = {
 };
 
 // ── shared shapes (mirror src/store) ────────────────────────────────────────
-// v8: one primitive. A project, a note, a task and a saved link are all pages;
-// what differs is whether a page sits in the tree (parent_page_id) or in a
-// collection (collection_id, and its properties mean something).
-export interface Page {
-  id: string; parent_page_id: string | null; collection_id: string | null;
-  title: string; icon: string | null; cover: string | null;
-  properties_json: string; position: number; status: string;
-  trashed_at: number | null;
-  is_ai: number; actor: string; created_at: number; updated_at: number;
-}
-export interface PageNode extends Page { children: PageNode[] }
 
-/** A page's property values, decoded. */
-export function props(p: Page): Record<string, unknown> {
-  try { return JSON.parse(p.properties_json) as Record<string, unknown>; } catch { return {}; }
+export interface Note {
+  id: string; parent_id: string | null; title: string; position: number;
+  source_id: string | null; actor: string; trashed_at: number | null; trash_root: number;
+  created_at: number; updated_at: number;
+}
+export interface NoteNode extends Note { children: NoteNode[] }
+
+/** Every note in a tree, depth-first. */
+export function flattenTree(nodes: NoteNode[], out: NoteNode[] = []): NoteNode[] {
+  for (const n of nodes) { out.push(n); flattenTree(n.children, out); }
+  return out;
 }
 
-export interface PropertyDef { key: string; name: string; type: string; options?: string[] }
-export interface Collection {
-  id: string; parent_page_id: string | null; title: string; icon: string | null;
-  role: string | null; schema_json: string; inline: number; position: number;
-}
-export function collectionSchema(c: Collection): PropertyDef[] {
-  try { return JSON.parse(c.schema_json) as PropertyDef[]; } catch { return []; }
-}
-export interface CollectionView {
-  id: string; collection_id: string; name: string; type: string;
-  filter_json: string; sort_json: string; group_by: string | null; position: number;
-  widths_json?: string;
+export interface Block {
+  id: string; note_id: string; parent_block_id: string | null; type: string;
+  content_json: string; position: number; version: number; actor: string;
 }
 
-/** A page from a role collection, with properties already decoded. */
-export interface RoleRow extends Page {
-  owner_page_id: string | null;
-  props: Record<string, unknown>;
+export interface HistoryEntry {
+  id: string; block_id: string; content_json: string; version: number; actor: string;
+  created_at: number; block_type: string | null; current_content: string | null;
 }
+
+export type TaskStatus = "todo" | "doing" | "done";
+export interface Task {
+  id: string; title: string; status: TaskStatus; due_at: number | null;
+  parent_id: string | null; note_id: string | null; position: number; actor: string;
+  completed_at: number | null; created_at: number; updated_at: number;
+}
+export interface TaskNode extends Task { subtasks: TaskNode[] }
+
+export interface Source {
+  id: string; title: string; url: string | null; text: string | null;
+  status: "inbox" | "done"; note_id: string | null;
+  fetch_status: "pending" | "fetched" | "failed" | null; fetch_error: string | null;
+  site: string | null; description: string | null; image: string | null;
+  actor: string; created_at: number; updated_at: number;
+}
+
+export interface Proposal {
+  id: string; kind: "patch" | "insight"; note_id: string | null; source_id: string | null;
+  summary: string; payload: string; status: "pending" | "accepted" | "rejected";
+  actor: string; result_id: string | null; created_at: number;
+  note_title: string | null; source_title: string | null;
+}
+/** What an insight proposal carries. */
+export interface InsightPayload { title: string; content: string; segment: string; importance: number }
 
 export interface RecentEvent {
   id: string; actor: string; action: string; entity_type: string; entity_id: string; created_at: number;
 }
-export interface Block {
-  id: string; page_id: string; parent_block_id: string | null; type: string;
-  content_json: string; position: number; version: number; is_ai: number;
-}
-export interface PagePatch {
-  id: string; page_id: string; ops_json: string; summary: string;
-  status: string; actor: string; created_at: number; page_title?: string;
-}
 
-// What the enrich_source queue job writes onto a captured link. It now lands in
-// the page's `metadata` property rather than a metadata_json column.
-export interface LinkMeta {
-  site?: string; title?: string; description?: string; image?: string;
-  enriched_at?: number;
-}
-export function linkMeta(p: Page): LinkMeta | null {
-  const raw = props(p).metadata;
-  if (typeof raw !== "string") return null;
-  try {
-    const m = JSON.parse(raw) as LinkMeta;
-    return m.enriched_at ? m : null;
-  } catch { return null; }
-}
-// A link captured but not yet decorated. The UI polls while any row is in this
-// state, so it must become false eventually no matter what — a link captured
-// before enrichment existed, or whose job was dropped, would otherwise keep the
-// inbox refetching forever. The job lands in seconds; anything still bare after
-// this window is never getting enriched, so stop waiting on it.
-const ENRICH_WINDOW_MS = 2 * 60 * 1000;
-export function awaitingEnrichment(p: Page): boolean {
-  return !!props(p).url && !linkMeta(p) && Date.now() - p.created_at < ENRICH_WINDOW_MS;
-}
 export interface SearchHit {
-  entity_type: string; entity_id: string; title: string; snippet: string; workspace_id: string | null;
+  entity_type: "note" | "task" | "source" | "proposal"; entity_id: string; title: string; snippet: string;
 }
 
-/** Where a search hit navigates. Everything is a page, so every hit has a home —
- *  in v7 a hit with no workspace was simply an unnavigable dead link. */
+/** Where a search hit navigates. */
 export function hitHref(h: SearchHit): string {
-  return `/page/?id=${h.entity_id}`;
+  if (h.entity_type === "source") return `/source/?id=${h.entity_id}`;
+  if (h.entity_type === "task") return "/tasks/";
+  return `/note/?id=${h.entity_id}`;
+}
+
+/** Who wrote something, for display: an agent's client name, or "you". */
+export function actorLabel(actor: string): string {
+  return actor === "human" ? "you" : actor === "system" ? "extractor" : actor.replace(/^ai:/, "");
 }
 
 // One block operation, mirrors src/schema BlockOp.
@@ -122,10 +109,6 @@ export type BlockOp =
   | { op: "move"; id: string; after?: string | null; parent?: string | null }
   | { op: "replace_content"; content: string };
 
-// content_json helpers — blocks store { text, ...} as JSON.
-export function blockText(b: Block): string {
-  try { return (JSON.parse(b.content_json) as { text?: string }).text ?? ""; } catch { return ""; }
-}
-export function blockContent(b: Block): Record<string, unknown> {
+export function blockContent(b: { content_json: string }): Record<string, unknown> {
   try { return JSON.parse(b.content_json) as Record<string, unknown>; } catch { return {}; }
 }

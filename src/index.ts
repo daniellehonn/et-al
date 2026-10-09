@@ -1,12 +1,13 @@
-// The Worker: routing, auth, REST + MCP, health, and the deterministic ingest
-// queue. No LLM provider lives here — the Worker fetches, parses, and embeds;
-// all reasoning happens in an external agent over MCP.
+// The Worker: routing, auth, REST + MCP, health, and the background queue.
+// Agents do their reasoning outside, over MCP. The one model call inside is
+// extraction on Workers AI (a Cloudflare binding, so no vendor key lives here),
+// and it can only propose: nothing it produces is real until a human accepts it.
 import { Hono } from "hono";
-import type { Env } from "./schema";
+import { ZodError } from "zod";
+import type { Env, Job } from "./schema";
 import { RuleError, ctx } from "./store";
-import * as store from "./store";
 import { api } from "./api";
-import { extractFromSource } from "./extract";
+import { embedNote, ingestSource } from "./ingest";
 import { handleMcp } from "./mcp";
 
 const app = new Hono<{ Bindings: Env; Variables: { actor: string } }>();
@@ -59,6 +60,11 @@ app.get("/api/session", (c) => c.json({ authed: validKey(c.env, credential(c.req
 // Map rule violations to clean status codes.
 app.onError((err, c) => {
   if (err instanceof RuleError) return c.json({ error: err.message }, err.status as 400);
+  // Bad input is the caller's to fix, so say which field and why.
+  if (err instanceof ZodError) {
+    const issue = err.issues[0];
+    return c.json({ error: `${issue?.path.join(".") || "input"}: ${issue?.message ?? "invalid"}` }, 400);
+  }
   const message = err instanceof Error ? err.message : "internal error";
   return c.json({ error: message }, 500);
 });
@@ -66,35 +72,19 @@ app.onError((err, c) => {
 app.get("/health", (c) => {
   return c.json({
     app: c.env.APP_NAME ?? "et al.",
-    version: "8.0.0",
+    version: "9.0.0",
     bindings: {
       d1: !!c.env.DB,
       r2: !!c.env.VAULT,
       vectorize: !!c.env.VECTORIZE,
       ai: !!c.env.AI,
       queue: !!c.env.JOBS,
-      kv: !!c.env.KV,
     },
   });
 });
 
-// Seed the default Life Areas as root pages. Idempotent-ish: only seeds when empty.
-app.post("/api/bootstrap", async (c) => {
-  const c2 = ctx(c.env, "human");
-  const existing = await store.listChildren(c2, null);
-  if (existing.length > 0) return c.json({ seeded: false, count: existing.length });
-  const life = await store.createPage(c2, { title: "Life", icon: "\u{1F31F}" });
-  for (const title of ["Build", "School", "Career", "Health", "Personal"]) {
-    await store.createPage(c2, { parent_page_id: life.id, title });
-  }
-  return c.json({ seeded: true });
-});
-
 // ---- Files (R2) -------------------------------------------------------------
-// Imported Notion images have to live somewhere permanent: Notion serves them
-// from S3 with X-Amz-Expires measured in minutes, so a copied URL is a dead link
-// almost immediately. Uploading them into VAULT and serving from here is what
-// makes an imported note survive leaving Notion.
+// Images pasted into a note are uploaded to VAULT and served from here.
 
 // Served outside /api so an <img src> is a plain URL. It is gated like the API:
 // an <img> on the same origin sends the session cookie, so the app's own images
@@ -108,7 +98,7 @@ app.get("/files/*", async (c) => {
   const headers = new Headers();
   obj.writeHttpMetadata(headers);
   headers.set("etag", obj.httpEtag);
-  // Keys are content-addressed by the importer, so a hit can be cached hard —
+  // A key is never reused for different content, so a hit can be cached hard —
   // but only by the browser that was allowed to fetch it, never a shared cache.
   headers.set("cache-control", "private, max-age=31536000, immutable");
   return new Response(obj.body, { headers });
@@ -136,19 +126,14 @@ app.all("/mcp", async (c) => {
 export default {
   fetch: app.fetch,
 
-  // Deterministic ingest. Best-effort: failures leave the source in the inbox.
-  async queue(batch: MessageBatch, env: Env): Promise<void> {
+  // Background work. Each job is best-effort and records its own failures, so
+  // a throw here means something unexpected: retry it, up to max_retries.
+  async queue(batch: MessageBatch<Job>, env: Env): Promise<void> {
     const c = ctx(env, "system");
     for (const msg of batch.messages) {
       try {
-        const body = msg.body as { type: string; source_id?: string; insight_id?: string };
-        if (body.type === "ingest_source" && body.source_id) {
-          await ingestSource(c, env, body.source_id);
-        } else if (body.type === "enrich_source" && body.source_id) {
-          await enrichSource(c, env, body.source_id);
-        } else if (body.type === "embed_insight" && body.insight_id) {
-          await embedInsight(c, env, body.insight_id);
-        }
+        if (msg.body.type === "ingest_source") await ingestSource(c, env, msg.body.source_id);
+        else if (msg.body.type === "embed_note") await embedNote(c, env, msg.body.note_id);
         msg.ack();
       } catch {
         msg.retry();
@@ -156,146 +141,3 @@ export default {
     }
   },
 };
-
-// Give a captured link a face: title, description, site, image.
-//
-// Deliberately NOT ingestSource. That one drives a source through its lifecycle
-// and lands it on 'processed', which pulls it out of the inbox. Enrichment is
-// the opposite contract — it only ever decorates, and never touches `status`, so
-// a pasted link stays in the inbox looking like something you can recognise
-// instead of a bare URL. Best-effort throughout: a link that won't fetch or
-// won't parse is still a perfectly good capture.
-async function enrichSource(c: store.Ctx, env: Env, sourceId: string): Promise<void> {
-  const src = await store.getPage(c, sourceId);
-  if (!src) return;
-  const props = store.properties(src);
-  const url = typeof props.url === "string" ? props.url : null;
-  if (!url) return;
-
-  let target: URL;
-  try { target = new URL(url); } catch { return; }
-  if (target.protocol !== "http:" && target.protocol !== "https:") return;
-
-  const meta = await fetchLinkMeta(target);
-  // Always record the site, so even a failed fetch leaves the row more legible
-  // than a raw URL — and so the UI can tell "enriched" from "not yet tried".
-  const merged = { site: target.hostname.replace(/^www\./, ""), ...meta, enriched_at: Date.now() };
-
-  // Only claim the title if the human never wrote one. `/api/share` seeds title
-  // from the URL when a bare link is pasted, so that counts as unwritten too.
-  const keepTitle = src.title && src.title !== url;
-  const title = keepTitle ? src.title : (usefulTitle(meta.title, merged.site) ?? src.title);
-
-  await store.updatePage(c, sourceId, { title: title ?? src.title, properties: { metadata: JSON.stringify(merged) } });
-  await store.ftsUpsert(c, "page", sourceId, title ?? url, [await store.bodyText(c, sourceId), meta.description].filter(Boolean).join("\n"));
-}
-
-// Reject a fetched title that only names the platform. Login-walled feeds serve
-// a JS shell to any anonymous fetch — Instagram returns <title>Instagram</title>
-// on every reel — so taking it would label every saved item identically and lose
-// the URL, which at least identifies the thing. Better to keep the link and let
-// the human name it.
-function usefulTitle(title: string | undefined, site: string): string | undefined {
-  if (!title) return undefined;
-  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const t = norm(title);
-  // The site as given ("Instagram") and its bare hostname token ("instagram").
-  return t && t !== norm(site) && t !== norm(site.split(".")[0]) ? title : undefined;
-}
-
-// Parse OpenGraph/meta out of a page with HTMLRewriter — streaming, so we never
-// buffer the document, and we can abandon the body once <head> is done.
-async function fetchLinkMeta(target: URL): Promise<{ title?: string; description?: string; image?: string; site?: string }> {
-  const out: { title?: string; description?: string; image?: string; site?: string } = {};
-  try {
-    const res = await fetch(target.toString(), {
-      redirect: "follow",
-      headers: {
-        // Many sites serve a stub or a consent wall to unknown agents; a plain
-        // browser UA gets the real markup with the OG tags on it.
-        "user-agent": "Mozilla/5.0 (compatible; et-al/1.0; +https://et-al.daniellehonnn.workers.dev)",
-        accept: "text/html,application/xhtml+xml",
-      },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok || !res.headers.get("content-type")?.includes("html")) return out;
-
-    // og:* wins over twitter:* wins over the bare tags, so only fill a blank.
-    const set = (k: keyof typeof out, v: string | null, force = false) => {
-      const t = v?.trim().replace(/\s+/g, " ").slice(0, 400);
-      if (t && (force || !out[k])) out[k] = t;
-    };
-
-    // <title> arrives in arbitrary text chunks, so accumulate separately and
-    // only commit once the element closes — set() refuses to overwrite.
-    let titleBuf = "";
-    await new HTMLRewriter()
-      .on("meta", {
-        element(el) {
-          const key = (el.getAttribute("property") ?? el.getAttribute("name") ?? "").toLowerCase();
-          const content = el.getAttribute("content");
-          // force=true for og:*: it outranks a <title> we may already have taken.
-          if (key === "og:title" || key === "twitter:title") set("title", content, key === "og:title");
-          else if (key === "og:description" || key === "twitter:description" || key === "description") set("description", content, key === "og:description");
-          else if (key === "og:image" || key === "twitter:image") set("image", content);
-          else if (key === "og:site_name") set("site", content, true);
-        },
-      })
-      .on("title", {
-        text(t) {
-          titleBuf += t.text;
-          if (t.lastInTextNode) { set("title", titleBuf); titleBuf = ""; }
-        },
-      })
-      .transform(res)
-      .arrayBuffer();
-  } catch { /* offline, timeout, malformed — the capture survives regardless */ }
-
-  // Resolve a relative og:image against the page it came from.
-  if (out.image) { try { out.image = new URL(out.image, target).toString(); } catch { delete out.image; } }
-  return out;
-}
-
-async function ingestSource(c: store.Ctx, env: Env, sourceId: string): Promise<void> {
-  const src = await store.getPage(c, sourceId);
-  if (!src) return;
-  const url = store.properties(src).url;
-  if (typeof url !== "string") return;
-  await store.updatePage(c, sourceId, { properties: { status: "processing" } });
-  // Deterministic fetch only — no interpretation. The agent turns this into insights.
-  let text = "";
-  try {
-    // A bare fetch sends no User-Agent, and a great many sites — Wikipedia
-    // among them — answer that with a short error page rather than content.
-    // Every URL capture was storing ~126 bytes of rejection instead of the
-    // article, which also starved extraction of anything to work from.
-    const res = await fetch(url, {
-      headers: {
-        "user-agent": "et-al/8.0 (personal knowledge base; +https://et-al.daniellehonnn.workers.dev)",
-        accept: "text/html,application/xhtml+xml,*/*",
-      },
-      redirect: "follow",
-    });
-    text = (await res.text()).slice(0, 100_000);
-  } catch { /* leave text empty; still mark processed so it exits the inbox */ }
-  await store.updatePage(c, sourceId, { properties: { status: "processed", fetched_len: text.length } });
-  await store.ftsUpsert(c, "page", sourceId, src.title || url, text);
-
-  // Propose knowledge from what was just fetched. Best-effort and last: a
-  // failure here must not undo a capture that already succeeded.
-  try { await extractFromSource(c, env, sourceId, text); }
-  catch (e) { console.log("[extract] threw", e instanceof Error ? e.message : String(e)); }
-}
-
-async function embedInsight(c: store.Ctx, env: Env, insightId: string): Promise<void> {
-  if (!env.AI || !env.VECTORIZE) return;
-  const ins = await store.getPage(c, insightId);
-  if (!ins) return;
-  // The note's prose lives in its blocks now, not a body column.
-  const body = await store.bodyText(c, insightId);
-  const out = (await env.AI.run("@cf/baai/bge-base-en-v1.5" as never, { text: [`${ins.title}\n\n${body}`] } as never)) as unknown as { data: number[][] };
-  const vector = out?.data?.[0];
-  if (!vector) return;
-  await env.VECTORIZE.upsert([{ id: insightId, values: vector, metadata: { page_id: ins.collection_id ?? "" } }]);
-  await store.updatePage(c, insightId, { properties: { embedding_id: insightId } });
-}

@@ -51,10 +51,15 @@ export async function tool<T = any>(name: string, args: Record<string, unknown> 
   return JSON.parse(out.result.content[0].text) as T;
 }
 
-/** A page's body as plain text, in document order. */
-export async function bodyText(pageId: string): Promise<string> {
-  const blocks = await api<Array<{ content_json: string }>>(`/pages/${pageId}/blocks`);
+/** A note's body as plain text, in document order. */
+export async function bodyText(noteId: string): Promise<string> {
+  const blocks = await api<Array<{ content_json: string }>>(`/notes/${noteId}/blocks`);
   return blocks.map((b) => JSON.parse(b.content_json).text ?? "").join("\n");
+}
+
+/** A note with a body, written by the human. */
+export async function noteWithBody(body: string, title = unique("note")): Promise<{ id: string }> {
+  return api("/notes", "POST", { title, body });
 }
 
 /** Who wrote the events for an entity, oldest first. Read straight from D1:

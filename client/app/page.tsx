@@ -2,7 +2,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import Link from "next/link";
-import { api, type RecentEvent, type RoleRow } from "@/lib/api";
+import { api, type RecentEvent, type Source } from "@/lib/api";
 
 const GREETING = () => {
   const h = new Date().getHours();
@@ -15,7 +15,7 @@ const DATE_LABEL = () =>
 export default function HomePage() {
   const qc = useQueryClient();
   const activity = useQuery({ queryKey: ["agent-activity"], queryFn: () => api.get<RecentEvent[]>("/agent-activity") });
-  const inbox = useQuery({ queryKey: ["inbox"], queryFn: () => api.get<RoleRow[]>("/inbox") });
+  const inbox = useQuery({ queryKey: ["inbox"], queryFn: () => api.get<Source[]>("/inbox") });
   const [capture, setCapture] = useState("");
 
   const captureMut = useMutation({

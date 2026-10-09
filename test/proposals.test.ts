@@ -1,15 +1,16 @@
 // Machine-extracted knowledge is proposed, never assumed: an extracted insight
-// stays out of every read path until a human accepts it. Extraction runs here
-// with a fake model, so the gate is tested end to end without Workers AI.
+// is a proposal, not a note, until a human accepts it. Extraction runs here with
+// a fake model, so this is tested end to end without Workers AI.
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { extractFromSource } from "../src/extract";
-import { ctx } from "../src/store";
+import { ctx, search } from "../src/store";
 import { api, tool, unique } from "./helpers";
 
 const ARTICLE = "A long enough article body. ".repeat(12); // extraction skips anything under 200 chars
 
-/** An env whose model returns `output` (or throws it, if it is an Error). */
+/** The real env with Workers AI swapped for a model that returns `output`
+ *  (or throws it, if it is an Error). */
 function withModel(output: unknown) {
   const calls: unknown[] = [];
   const fake = {
@@ -21,59 +22,56 @@ function withModel(output: unknown) {
 
 const facts = (...items: Array<Record<string, unknown>>) => JSON.stringify({ facts: items });
 
-/** A page with one captured source on it. */
-async function sourceOnPage() {
-  const owner = await api("/pages", "POST", { title: unique("owner") });
-  const source = await tool("capture", { kind: "note", title: unique("src"), raw: "saved", page_id: owner.id });
-  return { ownerId: owner.id as string, sourceId: source.id as string };
-}
-
-async function extract(output: unknown, text = ARTICLE) {
-  const { ownerId, sourceId } = await sourceOnPage();
+/** Capture a source (optionally filed into a note) and run extraction on it. */
+async function extract(output: unknown, opts: { text?: string; note_id?: string } = {}) {
+  const source = await tool("capture", { title: unique("src"), text: "saved", note_id: opts.note_id });
   const model = withModel(output);
-  const created = await extractFromSource(ctx(env, "system"), model.env, sourceId, text);
-  return { ownerId, sourceId, created, calls: model.calls };
+  const created = await extractFromSource(ctx(env, "system"), model.env, source.id, opts.text ?? ARTICLE);
+  const proposals = (await api<Array<{ id: string; kind: string; source_id: string; summary: string; payload: string }>>(`/proposals?source_id=${source.id}`));
+  return { sourceId: source.id as string, created, calls: model.calls, proposals };
 }
-
-const proposalsFor = async (sourceId: string) =>
-  (await tool<Array<{ id: string; title: string; props: Record<string, unknown> }>>("list_proposals"))
-    .filter((p) => p.props.source_id === sourceId);
 
 describe("the proposal gate", () => {
-  it("hides a proposal from insights, search and context until a human accepts it", async () => {
+  it("keeps an insight out of the tree, search and context until it is accepted", async () => {
     const word = unique("fact");
-    const { ownerId, sourceId } = await extract({ response: facts({ title: `About ${word}`, content: `${word} is durable.` }) });
+    const home = await api("/notes", "POST", { title: unique("home") });
+    const { proposals: [p] } = await extract({ response: facts({ title: `About ${word}`, content: `${word} is durable.` }) }, { note_id: home.id });
+    expect(p).toMatchObject({ kind: "insight", summary: `About ${word}` });
 
-    const [proposal] = await proposalsFor(sourceId);
-    expect(proposal.title).toContain(word);
-    expect(proposal.props).toMatchObject({ proposed: true, is_ai: true });
-
-    const insightIds = async () => (await tool<Array<{ id: string }>>("list_insights", { page_id: ownerId })).map((i) => i.id);
+    const treeTitles = async () => JSON.stringify(await api("/notes/tree"));
     const searchIds = async () => (await api<Array<{ entity_id: string }>>(`/search?q=${word}`)).map((h) => h.entity_id);
-    const contextIds = async () =>
-      (await tool<{ related: Array<{ entity_id: string }> }>("build_context", { page_id: ownerId, query: word })).related.map((h) => h.entity_id);
+    const contextIds = async () => (await api<{ related: Array<{ entity_id: string }> }>(`/context/${home.id}?q=${word}`)).related.map((h) => h.entity_id);
 
-    expect(await insightIds()).not.toContain(proposal.id);
-    expect(await searchIds()).not.toContain(proposal.id);
-    expect(await contextIds()).not.toContain(proposal.id);
+    expect(await treeTitles()).not.toContain(word);
+    expect(await searchIds()).toEqual([]);
+    expect(await contextIds()).toEqual([]);
 
-    await api(`/proposals/${proposal.id}/accept`, "POST");
+    const accepted = await api(`/proposals/${p.id}/accept`, "POST");
+    const note = await api(`/notes/${accepted.result_id}`);
+    // Written by the extractor, filed where its source was, and traceable to it.
+    expect(note).toMatchObject({ title: `About ${word}`, actor: "system", parent_id: home.id });
+    expect(note.source_id).toBeTruthy();
 
-    expect(await insightIds()).toContain(proposal.id);
-    expect(await searchIds()).toContain(proposal.id);
-    expect(await contextIds()).toContain(proposal.id);
-    expect(await proposalsFor(sourceId)).toEqual([]);
+    expect(await treeTitles()).toContain(word);
+    expect(await searchIds()).toContain(note.id);
+    expect(await contextIds()).toContain(note.id);
   });
 
-  it("deletes a rejected proposal and leaves its source alone", async () => {
-    const { sourceId } = await extract({ response: facts({ title: "t", content: "c" }) });
-    const [proposal] = await proposalsFor(sourceId);
-    await api(`/proposals/${proposal.id}/reject`, "POST");
-    expect(await proposalsFor(sourceId)).toEqual([]);
+  it("creates nothing when rejected, and the source survives", async () => {
+    const { sourceId, proposals: [p] } = await extract({ response: facts({ title: "t", content: "c" }) });
+    const rejected = await api(`/proposals/${p.id}/reject`, "POST");
+    expect(rejected).toMatchObject({ status: "rejected", result_id: null });
     expect((await api(`/sources/${sourceId}`)).id).toBe(sourceId);
   });
 
-  it.todo("finds an accepted insight by meaning — the vector arm of search still reads the v7 `insight` table");
+  it("takes pending insights with it when a source is deleted, but keeps accepted ones", async () => {
+    const { sourceId, proposals } = await extract({ response: facts({ title: "keep", content: "a" }, { title: "drop", content: "b" }) });
+    const keep = proposals.find((p) => p.summary === "keep")!;
+    const accepted = await api(`/proposals/${keep.id}/accept`, "POST");
+    await api(`/sources/${sourceId}`, "DELETE");
+    expect(await api(`/proposals?source_id=${sourceId}`)).toEqual([]);
+    expect((await api(`/notes/${accepted.result_id}`)).title).toBe("keep");
+  });
 });
 
 describe("extraction parsing", () => {
@@ -83,8 +81,7 @@ describe("extraction parsing", () => {
   });
 
   it("reads the OpenAI-style {choices} shape", async () => {
-    const out = { choices: [{ message: { content: facts({ title: "a", content: "b" }) } }] };
-    expect((await extract(out)).created).toBe(1);
+    expect((await extract({ choices: [{ message: { content: facts({ title: "a", content: "b" }) } }] })).created).toBe(1);
   });
 
   it("caps a source at three proposals", async () => {
@@ -97,9 +94,8 @@ describe("extraction parsing", () => {
   });
 
   it("falls back to sane defaults for an unknown segment or out-of-range importance", async () => {
-    const { sourceId } = await extract({ response: facts({ title: "t", content: "c", segment: "gossip", importance: 7 }) });
-    const [p] = await proposalsFor(sourceId);
-    expect(p.props).toMatchObject({ segment: "knowledge", importance: 0.6 });
+    const { proposals: [p] } = await extract({ response: facts({ title: "t", content: "c", segment: "gossip", importance: 7 }) });
+    expect(JSON.parse(p.payload)).toMatchObject({ segment: "knowledge", importance: 0.6 });
   });
 
   it.each([
@@ -112,8 +108,32 @@ describe("extraction parsing", () => {
   });
 
   it("does not call the model for a body too short to extract from", async () => {
-    const { created, calls } = await extract({ response: facts({ title: "a", content: "b" }) }, "Login required.");
+    const { created, calls } = await extract({ response: facts({ title: "a", content: "b" }) }, { text: "Login required." });
     expect(created).toBe(0);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("hybrid search", () => {
+  it("finds a note by meaning when no keyword matches, ranked by fusion with keyword hits", async () => {
+    const byMeaning = await api("/notes", "POST", { title: "Sourdough starter", body: "Feed it flour and water daily." });
+    const byKeyword = await api("/notes", "POST", { title: unique("bread"), body: "bread" });
+    const fake = {
+      ...env,
+      AI: { run: async () => ({ data: [[0.1, 0.2, 0.3]] }) },
+      VECTORIZE: { query: async () => ({ matches: [{ id: byMeaning.id }, { id: "note_deleted_since" }] }) },
+    } as unknown as typeof env;
+    const hits = await search(ctx(fake), "bread");
+    const ids = hits.map((h) => h.entity_id);
+    expect(ids).toContain(byMeaning.id); // no keyword overlap: only the vector arm finds it
+    expect(ids).toContain(byKeyword.id);
+    expect(ids).not.toContain("note_deleted_since"); // a stale vector is dropped, not returned
+  });
+
+  it("falls back to keywords when the vector arm fails", async () => {
+    const word = unique("kw");
+    const note = await api("/notes", "POST", { title: word });
+    const broken = { ...env, AI: { run: async () => { throw new Error("down"); } }, VECTORIZE: {} } as unknown as typeof env;
+    expect((await search(ctx(broken), word)).map((h) => h.entity_id)).toEqual([note.id]);
   });
 });

@@ -1,116 +1,61 @@
-// REST surface for the web app. Same store functions as MCP. Every route needs
-// the API key or the session cookie (enforced in index.ts middleware). Unlike MCP,
-// the web app CAN write page blocks directly — it is the human surface.
-//
-// v8 routes are page-shaped. The /workspaces/* and /documents/* paths are gone:
-// both were the same thing all along, and the client now speaks /pages.
+// REST surface for the web app — the human side of the trust model. Same store
+// as MCP, plus what only a person may do: write a note's body directly, resolve
+// proposals, and delete. Every route needs the API key or the session cookie
+// (enforced in index.ts).
 import { Hono } from "hono";
 import type { Env } from "./schema";
-import { SOURCE_KINDS } from "./schema";
 import * as store from "./store";
 
 type Vars = { actor: string };
 export const api = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 const ctx = (c: { env: Env; get: (k: "actor") => string }) => store.ctx(c.env, c.get("actor"));
+const ok = { ok: true };
 
-// ---- activity -------------------------------------------------------------
-api.get("/agent-activity", async (c) => c.json(await store.getAgentActivity(ctx(c))));
-
-// ---- pages (the tree, the body, and the patch queue) ------------------------
-api.get("/pages", async (c) => {
-  const parent = c.req.query("parent_page_id");
-  return c.json(await store.listChildren(ctx(c), parent && parent !== "root" ? parent : null));
-});
-api.get("/tree", async (c) => c.json(await store.getPageTree(ctx(c))));
-api.get("/pages/:id", async (c) => c.json(await store.getPage(ctx(c), c.req.param("id"))));
-api.get("/pages/:id/ancestors", async (c) => c.json(await store.getAncestors(ctx(c), c.req.param("id"))));
-api.post("/pages", async (c) => c.json(await store.createPage(ctx(c), await c.req.json())));
-api.patch("/pages/:id", async (c) => c.json(await store.updatePage(ctx(c), c.req.param("id"), await c.req.json())));
-api.post("/pages/:id/move", async (c) => c.json(await store.movePage(ctx(c), c.req.param("id"), await c.req.json())));
-// Delete means trash: reversible by default, because an accidental delete takes
-// the whole subtree with it. ?permanent=1 is the irreversible version.
-api.delete("/pages/:id", async (c) => {
-  const id = c.req.param("id");
-  if (c.req.query("permanent")) await store.deletePage(ctx(c), id);
-  else await store.trashPage(ctx(c), id);
-  return c.json({ ok: true });
-});
+// ---- notes ------------------------------------------------------------------
+api.get("/notes/tree", async (c) => c.json(await store.getNoteTree(ctx(c))));
+api.get("/notes/:id", async (c) => c.json(await store.requireNote(ctx(c), c.req.param("id"))));
+api.get("/notes/:id/ancestors", async (c) => c.json(await store.getAncestors(ctx(c), c.req.param("id"))));
+api.post("/notes", async (c) => c.json(await store.createNote(ctx(c), await c.req.json())));
+api.patch("/notes/:id", async (c) => c.json(await store.updateNote(ctx(c), c.req.param("id"), await c.req.json())));
+api.post("/notes/:id/move", async (c) => c.json(await store.moveNote(ctx(c), c.req.param("id"), await c.req.json())));
+// Delete means trash: reversible, because a delete takes the whole subtree.
+api.delete("/notes/:id", async (c) => { await store.trashNote(ctx(c), c.req.param("id")); return c.json(ok); });
 api.get("/trash", async (c) => c.json(await store.listTrash(ctx(c))));
-api.post("/pages/:id/restore", async (c) => c.json(await store.restorePage(ctx(c), c.req.param("id"))));
-api.get("/pages/:id/history", async (c) => c.json(await store.pageHistory(ctx(c), c.req.param("id"))));
-api.post("/revisions/:id/restore", async (c) => { await store.restoreRevision(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
+api.post("/notes/:id/restore", async (c) => c.json(await store.restoreNote(ctx(c), c.req.param("id"))));
+api.delete("/trash/:id", async (c) => { await store.deleteNote(ctx(c), c.req.param("id")); return c.json(ok); });
 
-api.get("/pages/:id/blocks", async (c) => c.json(await store.getBlocks(ctx(c), c.req.param("id"))));
-api.post("/pages/:id/blocks", async (c) => {
-  const { ops } = await c.req.json();
-  return c.json(await store.writeBlocks(ctx(c), c.req.param("id"), ops));
-});
-// The editor owns the document and sends the whole tree; the server reconciles
-// by id so block identity, history and provenance survive an edit.
-api.put("/pages/:id/blocks", async (c) => {
-  const { blocks } = await c.req.json();
-  return c.json(await store.setBlocks(ctx(c), c.req.param("id"), blocks));
-});
-api.get("/pages/:id/patches", async (c) => c.json(await store.listPatches(ctx(c), c.req.param("id"), c.req.query("status"))));
-api.get("/patches", async (c) => c.json(await store.listPendingPatches(ctx(c))));
-api.post("/patches/:id/resolve", async (c) => {
-  const { accept } = await c.req.json();
-  return c.json(await store.resolvePatch(ctx(c), c.req.param("id"), !!accept));
-});
+// A note's body. Direct writes are the human's; agents propose instead.
+api.get("/notes/:id/blocks", async (c) => c.json(await store.getBlocks(ctx(c), c.req.param("id"))));
+api.post("/notes/:id/blocks", async (c) => c.json(await store.writeBlocks(ctx(c), c.req.param("id"), (await c.req.json()).ops)));
+// The editor sends its whole tree; the server reconciles by block id.
+api.put("/notes/:id/blocks", async (c) => c.json(await store.setBlocks(ctx(c), c.req.param("id"), (await c.req.json()).blocks)));
+api.get("/notes/:id/history", async (c) => c.json(await store.noteHistory(ctx(c), c.req.param("id"))));
+api.post("/revisions/:id/restore", async (c) => { await store.restoreRevision(ctx(c), c.req.param("id")); return c.json(ok); });
+api.get("/notes/:id/sources", async (c) => c.json(await store.listNoteSources(ctx(c), c.req.param("id"))));
+api.get("/notes/:id/tasks", async (c) => c.json(await store.listTasks(ctx(c), { note_id: c.req.param("id") })));
 
-// ---- collections ------------------------------------------------------------
-api.get("/pages/:id/collections", async (c) => c.json(await store.listCollections(ctx(c), c.req.param("id"))));
-api.get("/collections/:id", async (c) => c.json(await store.getCollection(ctx(c), c.req.param("id"))));
-api.get("/collections/:id/rows", async (c) => c.json(await store.queryCollection(ctx(c), c.req.param("id"), {})));
-// POST rather than GET: a view's filters and sorts are structured, and encoding
-// them into a query string would mean a second parser to keep in step.
-api.post("/collections/:id/query", async (c) => c.json(await store.queryCollection(ctx(c), c.req.param("id"), await c.req.json())));
-api.get("/collections/:id/views", async (c) => c.json(await store.listViews(ctx(c), c.req.param("id"))));
-api.post("/collections", async (c) => c.json(await store.createCollection(ctx(c), await c.req.json())));
-api.patch("/collections/:id", async (c) => c.json(await store.updateCollection(ctx(c), c.req.param("id"), await c.req.json())));
-api.delete("/collections/:id", async (c) => { await store.deleteCollection(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
-api.put("/collections/:id/properties", async (c) => {
-  const { schema } = await c.req.json();
-  return c.json(await store.setProperties(ctx(c), c.req.param("id"), schema));
-});
-api.post("/views", async (c) => c.json(await store.createView(ctx(c), await c.req.json())));
-api.patch("/views/:id", async (c) => c.json(await store.updateView(ctx(c), c.req.param("id"), await c.req.json())));
-api.delete("/views/:id", async (c) => { await store.deleteView(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
+// ---- proposals: the review queue -------------------------------------------
+api.get("/proposals", async (c) => c.json(await store.listProposals(ctx(c), { note_id: c.req.query("note_id"), source_id: c.req.query("source_id") })));
+api.post("/proposals/:id/accept", async (c) => c.json(await store.acceptProposal(ctx(c), c.req.param("id"))));
+api.post("/proposals/:id/reject", async (c) => c.json(await store.rejectProposal(ctx(c), c.req.param("id"))));
 
 // ---- tasks ------------------------------------------------------------------
-api.get("/tasks", async (c) => c.json(await store.listTasks(ctx(c), { pageId: c.req.query("page_id"), status: c.req.query("status"), section: c.req.query("section") })));
-// Everything open, grouped by section — what the Tasks screen renders.
-api.get("/tasks/by-section", async (c) => c.json(await store.tasksBySection(ctx(c))));
-// The whole task system: goals with their tasks and subtasks, grouped by section.
-api.get("/tasks/tree", async (c) => c.json(await store.taskTree(ctx(c))));
-api.get("/tasks/pressing", async (c) => c.json(await store.pressingDeadlines(ctx(c))));
-api.post("/tasks/sections", async (c) => {
-  const { name } = await c.req.json();
-  const { collectionId } = await store.tasksHome(ctx(c));
-  return c.json(await store.addSelectOption(ctx(c), collectionId, "section", name));
-});
-api.delete("/tasks/sections/:name", async (c) => {
-  const { collectionId } = await store.tasksHome(ctx(c));
-  return c.json(await store.removeSelectOption(ctx(c), collectionId, "section", c.req.param("name")));
-});
-api.get("/tasks/home", async (c) => c.json(await store.tasksHome(ctx(c))));
-api.get("/pages/:id/tasks", async (c) => c.json(await store.listTasks(ctx(c), { pageId: c.req.param("id"), status: c.req.query("status") })));
+api.get("/tasks", async (c) => c.json(await store.taskTree(ctx(c))));
 api.post("/tasks", async (c) => c.json(await store.createTask(ctx(c), await c.req.json())));
 api.patch("/tasks/:id", async (c) => c.json(await store.updateTask(ctx(c), c.req.param("id"), await c.req.json())));
-api.delete("/tasks/:id", async (c) => { await store.deleteTask(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
+api.delete("/tasks/:id", async (c) => { await store.deleteTask(ctx(c), c.req.param("id")); return c.json(ok); });
 
-// ---- inbox / sources / insights ---------------------------------------------
+// ---- sources ----------------------------------------------------------------
 api.get("/inbox", async (c) => c.json(await store.listInbox(ctx(c))));
 api.post("/capture", async (c) => c.json(await store.capture(ctx(c), await c.req.json())));
 
-// Share-sheet front door. `/capture` is strict — it demands a `kind` from the
-// vocabulary. A share sheet can't supply that: iOS hands over a URL, sometimes a
-// page title, and a text blob that may itself just be the URL again. So this
-// endpoint is deliberately forgiving where `/capture` is deliberately strict —
-// it accepts JSON or form encoding, untangles the url/text/title overlap, infers
-// the kind, and delegates. Keeping it separate leaves `/capture` honest as the
-// typed API that MCP and the web app use.
+// Share-sheet front door. `/capture` is strict — `url` must be a real URL. A
+// share sheet can't promise that: iOS hands over a URL, sometimes a page title,
+// and a text blob that may itself just be the URL again. So this endpoint is
+// deliberately forgiving where `/capture` is strict — it accepts JSON or form
+// encoding, untangles the url/text/title overlap, and delegates. Keeping it
+// separate leaves `/capture` honest as the typed API.
 api.post("/share", async (c) => {
   const ct = c.req.header("content-type") ?? "";
   const raw: Record<string, unknown> = ct.includes("json")
@@ -136,50 +81,13 @@ api.post("/share", async (c) => {
 
   if (!url && !note && !title) return c.json({ error: "nothing to capture" }, 400);
 
-  // Default to `note` even when a URL is present. This looks wrong but matches
-  // Quick Capture, which also files links as notes: `note` is an inline kind, so
-  // it does NOT enqueue ingest, and the row stays put with status 'inbox'. The
-  // link-ish kinds (url/youtube/pdf) enqueue a fetch that flips the source to
-  // 'processed', which would drop a share straight out of the inbox — the exact
-  // opposite of capture-first-organize-later. The URL is still stored in `url`,
-  // so the inbox renders it as a link and process_inbox can type it properly.
-  // A Shortcut that genuinely wants eager fetching can pass `kind` explicitly.
-  // Narrow against the vocabulary rather than casting: an unknown `kind` from a
-  // hand-built Shortcut falls back to `note` instead of reaching zod as a 400.
-  const asked = str(raw.kind);
-  const kind = (SOURCE_KINDS as readonly string[]).includes(asked ?? "")
-    ? (asked as (typeof SOURCE_KINDS)[number])
-    : "note";
-
-  return c.json(await store.capture(ctx(c), {
-    kind,
-    title: title ?? url ?? note?.slice(0, 60),
-    url,
-    raw: note,
-    page_id: str(raw.page_id) ?? str(raw.workspace_id) ?? undefined,
-  }));
+  return c.json(await store.capture(ctx(c), { title, url, text: note, note_id: str(raw.note_id) }));
 });
-api.get("/sources", async (c) => c.json(await store.listSources(ctx(c), c.req.query("q"))));
-api.get("/pages/:id/sources", async (c) => c.json(await store.listPageSources(ctx(c), c.req.param("id"))));
-api.get("/sources/:id", async (c) => c.json(await store.getPage(ctx(c), c.req.param("id"))));
-api.patch("/sources/:id", async (c) => {
-  const body = await c.req.json();
-  return c.json(await store.fileSource(ctx(c), c.req.param("id"), body.page_id ?? null, body));
-});
-api.delete("/sources/:id", async (c) => { await store.deleteSource(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
-api.post("/insights", async (c) => c.json(await store.createInsight(ctx(c), await c.req.json())));
-api.get("/insights", async (c) => c.json(await store.listInsights(ctx(c), c.req.query("page_id"))));
-api.patch("/insights/:id", async (c) => c.json(await store.updateInsight(ctx(c), c.req.param("id"), await c.req.json())));
-api.delete("/insights/:id", async (c) => { await store.deleteInsight(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
+api.get("/sources/:id", async (c) => c.json(await store.requireSource(ctx(c), c.req.param("id"))));
+api.patch("/sources/:id", async (c) => c.json(await store.fileSource(ctx(c), c.req.param("id"), await c.req.json())));
+api.delete("/sources/:id", async (c) => { await store.deleteSource(ctx(c), c.req.param("id")); return c.json(ok); });
 
-// ---- proposals (machine-extracted knowledge, awaiting review) ---------------
-api.get("/proposals", async (c) => c.json(await store.listProposals(ctx(c))));
-api.post("/proposals/:id/accept", async (c) => c.json(await store.acceptProposal(ctx(c), c.req.param("id"))));
-api.post("/proposals/:id/reject", async (c) => { await store.rejectProposal(ctx(c), c.req.param("id")); return c.json({ ok: true }); });
-
-// ---- search & context ------------------------------------
-api.get("/search", async (c) => c.json(await store.search(ctx(c), c.req.query("q") ?? "", {})));
+// ---- search, context, activity ---------------------------------------------
+api.get("/search", async (c) => c.json(await store.search(ctx(c), c.req.query("q") ?? "")));
 api.get("/context/:id", async (c) => c.json(await store.buildContext(ctx(c), c.req.param("id"), c.req.query("q"))));
-
-// The Overview tab is gone: a page's body IS its overview now, so the widget
-// endpoints that used to back it have no equivalent and no callers.
+api.get("/agent-activity", async (c) => c.json(await store.getAgentActivity(ctx(c))));

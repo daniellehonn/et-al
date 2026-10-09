@@ -12,8 +12,8 @@
 //     inline array is stored alongside under `rich` for fidelity — never
 //     instead of it.
 //  2. Unknown types round-trip untouched. et al. has block types BlockNote has
-//     never heard of (collection, page_link). They are
-//     carried through as opaque custom blocks so opening a page in the editor
+//     never heard of (page_link). They are
+//     carried through as opaque custom blocks so opening a note in the editor
 //     can never silently delete them.
 import type { Block } from "./api";
 
@@ -76,7 +76,7 @@ export function markdownToInline(md: string): InlineContent[] {
         // A link at the mention href IS a mention — this is what lets an agent
         // write one in plain markdown and have it render as a chip.
         if (link[2].startsWith(MENTION_HREF)) {
-          out.push({ type: "pageMention", props: { pageId: link[2].slice(MENTION_HREF.length), title: link[1] } } as unknown as InlineContent);
+          out.push({ type: "noteMention", props: { noteId: link[2].slice(MENTION_HREF.length), title: link[1] } } as unknown as InlineContent);
         } else {
           out.push({ type: "link", href: link[2], content: [{ type: "text", text: link[1], styles: {} }] });
         }
@@ -88,18 +88,18 @@ export function markdownToInline(md: string): InlineContent[] {
   return out.length ? out : [{ type: "text", text: md, styles: {} }];
 }
 
-/** A page mention serialises as a normal markdown link to the page. That keeps
+/** A note mention serialises as a normal markdown link to the note. That keeps
  *  `text` readable to agents and indexable by FTS, and means a mention written
  *  by an agent as a plain link comes back as a real mention on load. */
-export const MENTION_HREF = "/page/?id=";
+export const MENTION_HREF = "/note/?id=";
 
 export function inlineToMarkdown(content: unknown): string {
   if (!Array.isArray(content)) return "";
   return content.map((n) => {
     const node = n as InlineContent & { styles?: Record<string, unknown> };
-    if ((node as { type: string }).type === "pageMention") {
-      const p = (n as { props?: { pageId?: string; title?: string } }).props ?? {};
-      return `[${p.title || "Untitled"}](${MENTION_HREF}${p.pageId ?? ""})`;
+    if ((node as { type: string }).type === "noteMention") {
+      const p = (n as { props?: { noteId?: string; title?: string } }).props ?? {};
+      return `[${p.title || "Untitled"}](${MENTION_HREF}${p.noteId ?? ""})`;
     }
     if (node.type === "link") {
       const inner = inlineToMarkdown((node as { content: unknown }).content);
