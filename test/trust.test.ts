@@ -50,6 +50,15 @@ describe("attribution", () => {
     expect(await eventActors(a.id)).toEqual([{ actor: "ai:cursor", action: "create" }]);
   });
 
+  it("shows agent and extractor writes in the activity feed, with what they were, and never the user's own", async () => {
+    const mine = await api("/notes", "POST", { title: unique("mine") });
+    const theirs = await tool("create_note", { title: unique("theirs") }, "cursor");
+    const feed = await api<Array<{ actor: string; entity_id: string; detail: { title?: string } | null }>>("/agent-activity");
+    const entry = feed.find((e) => e.entity_id === theirs.id);
+    expect(entry).toMatchObject({ actor: "ai:cursor", detail: { title: theirs.title } });
+    expect(feed.some((e) => e.entity_id === mine.id)).toBe(false);
+  });
+
   it("stamps a REST write as human", async () => {
     const note = await api("/notes", "POST", { title: unique() });
     expect(note.actor).toBe("human");

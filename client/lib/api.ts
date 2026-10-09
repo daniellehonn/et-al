@@ -90,6 +90,24 @@ export interface InsightPayload { title: string; content: string; segment: strin
 
 export interface RecentEvent {
   id: string; actor: string; action: string; entity_type: string; entity_id: string; created_at: number;
+  detail: Record<string, unknown> | null;
+}
+
+/** An event as a sentence and a place to go: "proposed an edit: Expand the list". */
+export function describeEvent(e: RecentEvent): { text: string; subject: string; href: string | null } {
+  const d = e.detail ?? {};
+  const subject = String(d.title ?? d.summary ?? "");
+  const verbs: Record<string, string> = {
+    "create:note": "created a note", "update:note": "renamed a note", "move:note": "moved a note",
+    "create:task": "added a task", "update:task": "updated a task", "complete:task": "finished a task", "delete:task": "deleted a task",
+    "capture:source": "saved", "file:source": "filed a source",
+    "propose:proposal": d.kind === "insight" ? "suggested an insight" : "proposed an edit",
+  };
+  const href = e.entity_type === "note" ? `/note/?id=${e.entity_id}`
+    : e.entity_type === "source" ? `/source/?id=${e.entity_id}`
+    : e.entity_type === "task" ? "/tasks/"
+    : e.entity_type === "proposal" ? "/review/" : null;
+  return { text: verbs[`${e.action}:${e.entity_type}`] ?? `${e.action.replace(/_/g, " ")} ${e.entity_type}`, subject, href };
 }
 
 export interface SearchHit {

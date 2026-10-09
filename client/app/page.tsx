@@ -2,7 +2,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import Link from "next/link";
-import { api, type RecentEvent, type Source } from "@/lib/api";
+import { actorLabel, api, describeEvent, type RecentEvent, type Source } from "@/lib/api";
 
 const GREETING = () => {
   const h = new Date().getHours();
@@ -59,21 +59,26 @@ export default function HomePage() {
         {saved && <span className="et-capture-saved" role="status">{saved}</span>}
       </section>
 
-      {/* What agents have written — every agent write is attributed, so this is
-          the audit trail made visible. */}
+      {/* What agents and the extractor have written. Every machine write is
+          attributed, so this is the audit trail made visible. */}
       <section>
         <div className="et-section-label"><span className="eyebrow">Agent activity</span>
           {!!inbox.data?.length && <Link href="/inbox" className="et-inbox-pill">{inbox.data.length} in inbox</Link>}
         </div>
         <div className="et-activity">
-          {events.slice(0, 12).map((e) => (
-            <div key={e.id} className="et-act-row">
-              <span className="et-act-actor">{e.actor.replace(/^ai:/, "")}</span>
-              <span className="et-act-text">{e.action.replace(/_/g, " ")} <span className="et-act-type">{e.entity_type}</span></span>
-              <span className="et-act-time eyebrow">{timeAgo(e.created_at)}</span>
-            </div>
-          ))}
-          {!activity.isLoading && events.length === 0 && <div className="et-empty">No agent has written anything yet. Connect one over MCP.</div>}
+          {events.slice(0, 12).map((e) => {
+            const { text, subject, href } = describeEvent(e);
+            return (
+              <div key={e.id} className="et-act-row">
+                <span className="et-act-actor">{actorLabel(e.actor)}</span>
+                <span className="et-act-text">
+                  {text}{subject && <>: {href ? <a className="et-act-type" href={href}>{subject}</a> : <span className="et-act-type">{subject}</span>}</>}
+                </span>
+                <span className="et-act-time eyebrow">{timeAgo(e.created_at)}</span>
+              </div>
+            );
+          })}
+          {!activity.isLoading && events.length === 0 && <div className="et-empty">No agent has written anything yet. Connect one over MCP, or save a link for the extractor to read.</div>}
         </div>
       </section>
 
@@ -120,7 +125,8 @@ function HomeStyles() {
       .et-act-row { display: grid; grid-template-columns: 4.5rem 1fr auto; align-items: baseline; gap: 0.6rem; padding: 0.4rem 0; border-bottom: 1px solid var(--line); font-size: 0.88rem; }
       .et-act-actor { font-family: var(--font-mono); font-size: 0.78rem; color: var(--color-iris); }
       .et-act-text { color: var(--ink-soft); }
-      .et-act-type { color: var(--ink); }
+      .et-act-type { color: var(--ink); text-decoration: none; }
+      a.et-act-type:hover { color: var(--color-iris); }
       .et-act-time { color: var(--ink-faint); }
 
       .et-empty { color: var(--ink-faint); font-size: 0.88rem; padding: 0.6rem 0; font-style: italic; }
