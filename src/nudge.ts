@@ -88,6 +88,31 @@ export async function send(env: Env, text: string): Promise<{ ok: boolean; detai
   }
 }
 
+/** Send the planning question and record the list it offered.
+ *
+ *  The numbers in a reply have to resolve against the list that was actually
+ *  shown. Re-deriving it from openTasks at reply time looked equivalent but is
+ *  not: any task created, completed or re-sorted between the question and the
+ *  answer silently shifts what "3" means, and the reply would commit to the
+ *  wrong work without either side noticing. */
+async function sendPlanning(c: store.Ctx, env: Env, date: string, prefix = ""): Promise<void> {
+  const open = await store.openTasks(c, 5);
+  await send(env, `${prefix}${planningPrompt(open, await pressingLines(c))}`);
+  await store.logEvent(c, "nudge", "page", `plan:${date}`, { ids: open.map((t) => t.id) });
+}
+
+/** The ids the planning question actually listed, in order. */
+async function offeredIds(c: store.Ctx, date: string): Promise<string[]> {
+  const row = await store.first<{ detail_json: string | null }>(
+    c, `SELECT detail_json FROM event WHERE action = 'nudge' AND entity_id = ? ORDER BY created_at DESC LIMIT 1`,
+    `plan:${date}`,
+  );
+  try {
+    const ids = JSON.parse(row?.detail_json ?? "{}").ids;
+    return Array.isArray(ids) ? ids as string[] : [];
+  } catch { return []; }
+}
+
 /** Nudges are logged so an hourly cron cannot send the same one twice — a
  *  duplicate wake-up is worse than a missed one. */
 async function alreadySent(c: store.Ctx, kind: string, date: string): Promise<boolean> {
@@ -123,7 +148,7 @@ export async function runNudges(env: Env): Promise<void> {
       return;
     }
     // Nothing to reflect on, so go straight to planning.
-    await send(env, planningPrompt(await store.openTasks(c, 5), await pressingLines(c)));
+    await sendPlanning(c, env, date);
     await markSent(c, "evening", date);
     return;
   }
@@ -222,7 +247,7 @@ export async function tryRecordReflection(c: store.Ctx, env: Env, text: string):
       ? "Noted — none closed out."
       : `${done.length} of ${live.length} done.`;
   const carry = carried.length ? `\n\nStill open: ${carried.join(", ")}` : "";
-  await send(env, `${note}${carry}\n\n${planningPrompt(await store.openTasks(c, 5), await pressingLines(c))}`);
+  await sendPlanning(c, env, date, `${note}${carry}\n\n`);
   return true;
 }
 
@@ -248,18 +273,35 @@ export async function trySetDailyThree(c: store.Ctx, env: Env, text: string): Pr
   // Already answered tonight: treat further messages as ordinary captures.
   if (existing.slots.some((s) => s.task)) return false;
 
-  const lines = text.split(/\n|;/).map((l) => l.replace(/^\s*\d+[.)]\s*/, "").trim()).filter(Boolean);
+  // "2, 3, 5" arrives as ONE line — commas are not line separators — so it
+  // matched no title and fell through to "create a new task", producing a task
+  // literally titled "2, 3, 5". A reply that is nothing but numbers is a
+  // selection, so it is split on anything that is not a digit. Commas are only
+  // treated as separators in that case, leaving titles like "write up A, B" to
+  // split on newlines as before.
+  const selection = /^\s*\d+(?:\s*(?:,|&|and|\s)\s*\d+)*\s*$/i.test(text);
+  const lines = selection
+    ? text.split(/\D+/).filter(Boolean)
+    : text.split(/\n|;/).map((l) => l.replace(/^\s*\d+[.)]\s*/, "").trim()).filter(Boolean);
   if (lines.length < 1 || lines.length > 3) return false;
   // A message with a link is something you are keeping, not a plan.
   if (/https?:\/\//.test(text)) return false;
 
   const open = await store.openTasks(c, 25);
+  // What the question actually listed, when it is known; the wider open list is
+  // only a fallback for a reply to a nudge sent before this was recorded.
+  const offered = await offeredIds(c, date);
   const chosen: string[] = [];
 
   for (const line of lines) {
     // A bare number refers to the numbered list the nudge sent.
     const asIndex = /^\d+$/.test(line.trim()) ? Number(line.trim()) : null;
-    if (asIndex && open[asIndex - 1]) { chosen.push(open[asIndex - 1].id); continue; }
+    if (asIndex) {
+      const id = offered[asIndex - 1] ?? open[asIndex - 1]?.id;
+      if (id) { chosen.push(id); continue; }
+      // A number with nothing behind it is a mis-reply, not a task title.
+      continue;
+    }
 
     const needle = line.toLowerCase();
     const match = open.find((t) => t.title.toLowerCase().includes(needle) || needle.includes(t.title.toLowerCase()));
