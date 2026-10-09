@@ -78,6 +78,13 @@ export interface Proposal {
   actor: string; result_id: string | null; created_at: number;
   note_title: string | null; source_title: string | null;
 }
+/** What accepting a proposal would do: a patch's diff (or why it is stale),
+ *  or the insight that would become a note. */
+export type ProposalPreview =
+  | { kind: "patch"; before: string[]; after: string[]; diff: Array<{ kind: "same" | "add" | "del"; text: string }> }
+  | { kind: "patch"; stale: string }
+  | { kind: "insight"; insight: InsightPayload };
+
 /** What an insight proposal carries. */
 export interface InsightPayload { title: string; content: string; segment: string; importance: number }
 

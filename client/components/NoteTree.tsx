@@ -2,7 +2,7 @@
 // The sidebar: the note tree, plus the three other places — inbox, tasks, search.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { api, type NoteNode } from "@/lib/api";
+import { api, type NoteNode, type Proposal } from "@/lib/api";
 import { TrashPanel } from "./NoteMenu";
 
 export function NoteTree() {
@@ -21,6 +21,7 @@ export function NoteTree() {
     return () => window.removeEventListener("popstate", read);
   }, []);
   const { data: tree } = useQuery({ queryKey: ["tree"], queryFn: () => api.get<NoteNode[]>("/notes/tree") });
+  const { data: pending } = useQuery({ queryKey: ["proposals"], queryFn: () => api.get<Proposal[]>("/proposals"), refetchInterval: 30000 });
 
   // Below 860px the tree is an off-canvas drawer rather than a column. It used
   // to be one when the sidebar was Spine.tsx; the replacement dropped it, which
@@ -60,6 +61,7 @@ export function NoteTree() {
         ))}
       </div>
       <button className="et-tree-new" onClick={addRoot}>+ New note</button>
+      <a className="et-tree-link" href="/review/">Review{!!pending?.length && <span className="et-tree-count">{pending.length}</span>}</a>
       <a className="et-tree-link" href="/inbox/">Inbox</a>
       <a className="et-tree-link" href="/tasks/">Tasks</a>
       <a className="et-tree-link" href="/search/">Search</a>
@@ -231,6 +233,7 @@ function TreeStyles() {
       .et-tree-menu-list button:hover { background: var(--color-iris-soft); color: var(--ink); }
       .et-tree-del:hover { color: var(--color-rust, #b4462e); }
       .et-tree-new, .et-tree-link { background: none; border: none; text-align: left; font: inherit; font-size: 0.85rem; color: var(--ink-faint); cursor: pointer; padding: 0.35rem 0.6rem; text-decoration: none; border-radius: 5px; }
+      .et-tree-count { margin-left: 0.4rem; font-family: var(--font-mono); font-size: 0.7rem; color: #fff; background: var(--color-iris); border-radius: 99px; padding: 0 0.4rem; }
       .et-tree-new:hover, .et-tree-link:hover { background: var(--surface-3, rgba(128,128,128,0.12)); color: var(--ink); }
     `}</style>
   );

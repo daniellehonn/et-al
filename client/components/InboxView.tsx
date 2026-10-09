@@ -1,7 +1,7 @@
 "use client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { actorLabel, api, flattenTree, type InsightPayload, type NoteNode, type Proposal, type Source } from "@/lib/api";
+import { api, flattenTree, type NoteNode, type Proposal, type Source } from "@/lib/api";
 
 // The inbox: what is waiting on you. Insights the extractor drew from your
 // saved links come first — nothing it writes is real until you keep it — then
@@ -81,38 +81,16 @@ export function InboxView() {
   );
 }
 
-/** Insights extracted from saved links. Kept means it becomes a note, filed
- *  where its source was; discarded means it never existed. */
+/** Insights extracted from saved links are reviewed with everything else
+ *  proposed; the inbox just says they are waiting. */
 function InsightQueue() {
-  const qc = useQueryClient();
   const { data: proposals } = useQuery({ queryKey: ["proposals"], queryFn: () => api.get<Proposal[]>("/proposals"), refetchInterval: 15000 });
-  const insights = (proposals ?? []).filter((p) => p.kind === "insight");
-  if (!insights.length) return null;
-
-  const resolve = async (id: string, accept: boolean) => {
-    await api.post(`/proposals/${id}/${accept ? "accept" : "reject"}`);
-    qc.invalidateQueries({ queryKey: ["proposals"] });
-    qc.invalidateQueries({ queryKey: ["tree"] });
-  };
-
+  const n = (proposals ?? []).filter((p) => p.kind === "insight").length;
+  if (!n) return null;
   return (
-    <section className="et-insights">
-      <div className="eyebrow et-inbox-label">Suggested from your links · {insights.length}</div>
-      {insights.map((p) => {
-        const insight = JSON.parse(p.payload) as InsightPayload;
-        return (
-          <div key={p.id} className="et-insight">
-            <div className="et-insight-title">{insight.title}</div>
-            <div className="et-insight-content">{insight.content}</div>
-            <div className="et-insight-foot">
-              <span>by {actorLabel(p.actor)}{p.source_title && <> · from <a href={`/source/?id=${p.source_id}`}>{p.source_title}</a></>}</span>
-              <button className="et-insight-keep" onClick={() => resolve(p.id, true)}>Keep</button>
-              <button className="et-clear" onClick={() => resolve(p.id, false)}>Discard</button>
-            </div>
-          </div>
-        );
-      })}
-    </section>
+    <a className="et-insights-link" href="/review/">
+      {n} insight{n === 1 ? "" : "s"} suggested from your links — review {n === 1 ? "it" : "them"} →
+    </a>
   );
 }
 
@@ -128,14 +106,7 @@ function InboxStyles() {
       .et-capture input:focus { outline: none; border-color: var(--color-iris); }
       .et-capture button { background: var(--color-iris); color: #fff; border: none; border-radius: 9px; padding: 0 1.3rem; font: inherit; font-weight: 500; cursor: pointer; }
       .et-capture button:disabled { opacity: 0.4; }
-      .et-insights { display: flex; flex-direction: column; gap: 0.6rem; }
-      .et-insight { border: 1px solid var(--color-sage); border-radius: 9px; padding: 0.75rem 0.9rem; display: grid; gap: 0.3rem; }
-      .et-insight-title { font-weight: 600; font-size: 0.95rem; }
-      .et-insight-content { font-size: 0.9rem; color: var(--ink-soft); }
-      .et-insight-foot { display: flex; align-items: center; gap: 0.5rem; font-size: 0.78rem; color: var(--ink-faint); }
-      .et-insight-foot span { flex: 1; min-width: 0; }
-      .et-insight-foot a { color: inherit; }
-      .et-insight-keep { background: var(--color-sage); color: #fff; border: none; border-radius: 6px; font: inherit; font-size: 0.8rem; padding: 0.25rem 0.75rem; cursor: pointer; }
+      .et-insights-link { display: block; margin-top: 1.4rem; border: 1px solid var(--color-sage); border-radius: 9px; padding: 0.7rem 0.9rem; color: var(--color-sage); text-decoration: none; font-size: 0.9rem; }
       .et-inbox-list { display: flex; flex-direction: column; }
       .et-inbox-item { display: grid; grid-template-columns: 1fr auto; gap: 1rem; align-items: center; padding: 0.95rem 0; border-bottom: 1px solid var(--line); }
       .et-inbox-main { display: flex; gap: 0.8rem; align-items: flex-start; min-width: 0; }

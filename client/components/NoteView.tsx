@@ -3,7 +3,8 @@
 // its body, and the tasks and sources that belong to it.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { actorLabel, api, type BlockOp, type Note, type Proposal, type Source, type Task } from "@/lib/api";
+import { actorLabel, api, type Note, type Proposal, type ProposalPreview, type Source, type Task } from "@/lib/api";
+import { DiffView } from "./ReviewView";
 import { NoteEditor } from "./NoteEditor";
 import { NoteMenu } from "./NoteMenu";
 
@@ -66,21 +67,8 @@ function TitleInput({ title, onSave }: { title: string; onSave: (t: string) => v
   );
 }
 
-/** What an op list would do, in a sentence a reviewer can check. */
-function describeOps(ops: BlockOp[]): string[] {
-  return ops.map((op) => {
-    switch (op.op) {
-      case "replace_content": return "Rewrite the whole note";
-      case "insert": return `Add a ${op.type}: “${String(op.content.text ?? "").slice(0, 80)}”`;
-      case "update": return `Change a block to: “${String(op.content.text ?? "").slice(0, 80)}”`;
-      case "delete": return "Remove a block";
-      case "move": return "Move a block";
-    }
-  });
-}
-
-/** Agent-proposed changes to this note, waiting on the user. At the top of the
- *  note rather than in a side panel: a pending patch is a decision the note is
+/** Agent-proposed edits to this note, waiting on the user. At the top of the
+ *  note rather than in a side panel: a pending edit is a decision the note is
  *  waiting on, and burying it would quietly turn the gate into a rubber stamp. */
 function PatchQueue({ noteId }: { noteId: string }) {
   const qc = useQueryClient();
@@ -92,33 +80,33 @@ function PatchQueue({ noteId }: { noteId: string }) {
   if (!patches?.length) return null;
 
   const resolve = async (pid: string, accept: boolean) => {
-    await api.post(`/proposals/${pid}/${accept ? "accept" : "reject"}`);
+    try { await api.post(`/proposals/${pid}/${accept ? "accept" : "reject"}`); }
+    catch (e) { alert(e instanceof Error ? e.message : "Could not resolve that edit"); }
     qc.invalidateQueries({ queryKey: ["proposals"] });
-    qc.invalidateQueries({ queryKey: ["blocks", noteId] });
+    // The editor seeds once per load, so an accepted edit needs a fresh mount.
+    if (accept) window.location.reload();
   };
 
   return (
     <div className="et-patches">
-      {patches.map((p) => {
-        const ops = (JSON.parse(p.payload) as { ops: BlockOp[] }).ops;
-        const rewrite = ops.find((o) => o.op === "replace_content");
-        return (
-          <div key={p.id} className="et-patch">
-            <div className="et-patch-head">
-              <span className="et-patch-actor">{actorLabel(p.actor)}</span>
-              <span className="et-patch-summary">{p.summary}</span>
-              <button className="et-patch-accept" onClick={() => resolve(p.id, true)}>Accept</button>
-              <button className="et-patch-reject" onClick={() => resolve(p.id, false)}>Reject</button>
-            </div>
-            <details className="et-patch-detail">
-              <summary>See the change</summary>
-              {rewrite && rewrite.op === "replace_content"
-                ? <pre>{rewrite.content}</pre>
-                : <ul>{describeOps(ops).map((d, i) => <li key={i}>{d}</li>)}</ul>}
-            </details>
-          </div>
-        );
-      })}
+      {patches.map((p) => <PatchCard key={p.id} patch={p} onResolve={(accept) => resolve(p.id, accept)} />)}
+    </div>
+  );
+}
+
+function PatchCard({ patch: p, onResolve }: { patch: Proposal; onResolve: (accept: boolean) => void }) {
+  const { data: preview } = useQuery({ queryKey: ["preview", p.id], queryFn: () => api.get<ProposalPreview>(`/proposals/${p.id}/preview`) });
+  const stale = preview && "stale" in preview;
+  return (
+    <div className="et-patch">
+      <div className="et-patch-head">
+        <span className="et-patch-actor">{actorLabel(p.actor)}</span>
+        <span className="et-patch-summary">{p.summary}</span>
+        {!stale && <button className="et-patch-accept" onClick={() => onResolve(true)}>Accept</button>}
+        <button className="et-patch-reject" onClick={() => onResolve(false)}>Reject</button>
+      </div>
+      {preview && "diff" in preview && <details className="et-patch-detail" open><summary>The change</summary><DiffView diff={preview.diff} /></details>}
+      {stale && <div className="et-patch-stale">No longer applies — the note has changed since this was proposed.</div>}
     </div>
   );
 }
@@ -191,8 +179,8 @@ function NoteStyles() {
       .et-patch-accept, .et-patch-reject { background: none; border: 1px solid var(--line-strong); border-radius: 5px; font: inherit; font-size: 0.78rem; padding: 0.2rem 0.55rem; cursor: pointer; color: inherit; }
       .et-patch-accept { border-color: var(--color-iris); color: var(--color-iris); }
       .et-patch-detail summary { cursor: pointer; font-size: 0.78rem; color: var(--ink-faint); margin-top: 0.35rem; }
-      .et-patch-detail pre { white-space: pre-wrap; font-family: var(--font-mono); font-size: 0.78rem; background: var(--paper-raised); border-radius: 6px; padding: 0.6rem; max-height: 18rem; overflow: auto; }
-      .et-patch-detail ul { margin: 0.4rem 0 0; padding-left: 1.1rem; color: var(--ink-soft); }
+      .et-patch-detail .et-diff { margin-top: 0.4rem; max-height: 20rem; overflow: auto; }
+      .et-patch-stale { font-size: 0.8rem; color: var(--ink-faint); margin-top: 0.3rem; }
       .et-note-section { margin-top: 2.5rem; display: flex; flex-direction: column; gap: 0.35rem; }
       .et-note-section .eyebrow { margin-bottom: 0.3rem; }
       .et-note-task { display: flex; gap: 0.55rem; align-items: center; font-size: 0.92rem; cursor: pointer; }
