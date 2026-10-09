@@ -49,7 +49,9 @@ api.delete("/tasks/:id", async (c) => { await store.deleteTask(ctx(c), c.req.par
 
 // ---- sources ----------------------------------------------------------------
 api.get("/inbox", async (c) => c.json(await store.listInbox(ctx(c))));
-api.post("/capture", async (c) => c.json(await store.capture(ctx(c), await c.req.json())));
+// An Idempotency-Key header makes a retried capture return the first one.
+const captureKey = (c: { req: { header: (name: string) => string | undefined } }) => c.req.header("idempotency-key") || null;
+api.post("/capture", async (c) => c.json(await store.capture(ctx(c), await c.req.json(), captureKey(c))));
 
 // Share-sheet front door. `/capture` is strict — `url` must be a real URL. A
 // share sheet can't promise that: iOS hands over a URL, sometimes a page title,
@@ -82,10 +84,11 @@ api.post("/share", async (c) => {
 
   if (!url && !note && !title) return c.json({ error: "nothing to capture" }, 400);
 
-  return c.json(await store.capture(ctx(c), { title, url, text: note, note_id: str(raw.note_id) }));
+  return c.json(await store.capture(ctx(c), { title, url, text: note, note_id: str(raw.note_id) }, captureKey(c)));
 });
 api.get("/sources/:id", async (c) => c.json(await store.requireSource(ctx(c), c.req.param("id"))));
 api.patch("/sources/:id", async (c) => c.json(await store.fileSource(ctx(c), c.req.param("id"), await c.req.json())));
+api.post("/sources/:id/retry", async (c) => c.json(await store.retryFetch(ctx(c), c.req.param("id"))));
 api.delete("/sources/:id", async (c) => { await store.deleteSource(ctx(c), c.req.param("id")); return c.json(ok); });
 
 // ---- search, context, activity ---------------------------------------------

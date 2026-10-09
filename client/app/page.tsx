@@ -17,14 +17,19 @@ export default function HomePage() {
   const activity = useQuery({ queryKey: ["agent-activity"], queryFn: () => api.get<RecentEvent[]>("/agent-activity") });
   const inbox = useQuery({ queryKey: ["inbox"], queryFn: () => api.get<Source[]>("/inbox") });
   const [capture, setCapture] = useState("");
+  const [saved, setSaved] = useState<string | null>(null);
 
   const captureMut = useMutation({
     // /share rather than /capture: it pulls any link out of the pasted text into
     // the `url` column, which is what triggers enrichment (title, description,
     // site). /capture is the strict typed API and would file the link as opaque
     // `raw` text, leaving the inbox row showing a bare URL forever.
-    mutationFn: (text: string) => api.post("/share", { text }),
-    onSuccess: () => { setCapture(""); qc.invalidateQueries({ queryKey: ["inbox"] }); },
+    mutationFn: (text: string) => api.post<Source & { already_captured?: boolean }>("/share", { text }),
+    onSuccess: (s) => {
+      setCapture("");
+      setSaved(s.already_captured ? "Already in your inbox." : "Saved to your inbox.");
+      qc.invalidateQueries({ queryKey: ["inbox"] });
+    },
   });
 
   const error = activity.error ?? inbox.error;
@@ -51,6 +56,7 @@ export default function HomePage() {
             {captureMut.isPending ? "Saving…" : "Capture"}
           </button>
         </form>
+        {saved && <span className="et-capture-saved" role="status">{saved}</span>}
       </section>
 
       {/* What agents have written — every agent write is attributed, so this is
@@ -108,6 +114,7 @@ function HomeStyles() {
         padding: 0 1.3rem; font: inherit; font-weight: 500; cursor: pointer; transition: opacity 0.12s;
       }
       .et-capture button:disabled { opacity: 0.4; cursor: default; }
+      .et-capture-saved { font-size: 0.82rem; color: var(--ink-faint); }
 
       .et-activity { display: flex; flex-direction: column; }
       .et-act-row { display: grid; grid-template-columns: 4.5rem 1fr auto; align-items: baseline; gap: 0.6rem; padding: 0.4rem 0; border-bottom: 1px solid var(--line); font-size: 0.88rem; }

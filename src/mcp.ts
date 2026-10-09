@@ -86,7 +86,12 @@ const TOOLS: Tool[] = [
   { name: "delete_task", description: "Delete a task and its subtasks. Destructive: confirm with the user first.", inputSchema: obj({ id: str }, ["id"]), handler: async (c, a) => { await store.deleteTask(c, String(a.id)); return { ok: true }; } },
 
   // ---- capture ----
-  { name: "capture", description: "Save something to the inbox now: a url, some text, or both. A link is fetched in the background, and may produce proposed insights.", inputSchema: obj({ url: str, text: str, title: str, note_id: str }), handler: (c, a) => store.capture(c, a as never) },
+  {
+    name: "capture",
+    description: "Save something to the inbox now: a url, some text, or both. A link is fetched in the background, and may produce proposed insights. Pass a `key` to make retries safe: the same key returns the same source. Saving a link already waiting in the inbox returns that one (already_captured: true).",
+    inputSchema: obj({ url: str, text: str, title: str, note_id: str, key: str }),
+    handler: (c, a) => { const { key, ...input } = a; return store.capture(c, input as never, opt(key)); },
+  },
   { name: "list_inbox", description: "Captured sources not yet dealt with, newest first.", inputSchema: obj({}), handler: (c) => store.listInbox(c) },
   { name: "file_source", description: "File a source into a note (which also clears it from the inbox), retitle it, or set status done.", inputSchema: obj({ id: str, note_id: str, title: str, status: str }, ["id"]), handler: (c, a) => { const { id, ...patch } = a; return store.fileSource(c, String(id), patch as never); } },
   // Read-only on purpose: an agent that could accept would be approving

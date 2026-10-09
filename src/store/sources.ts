@@ -18,10 +18,14 @@ export interface Source {
   site: string | null;
   description: string | null;
   image: string | null;
+  capture_key: string | null;
   actor: string;
   created_at: number;
   updated_at: number;
 }
+
+/** A capture, and whether it was already there. */
+export type Captured = Source & { already_captured?: true };
 
 export function getSource(c: Ctx, sid: string): Promise<Source | null> {
   return first<Source>(c, `SELECT * FROM source WHERE id = ?`, sid);
@@ -39,21 +43,59 @@ export async function reindexSource(c: Ctx, sid: string, fetched = ""): Promise<
   if (s) await ftsUpsert(c, "source", sid, s.title || s.url || "", [s.text, s.description, s.url, fetched].filter(Boolean).join("\n"));
 }
 
-/** Save something immediately. Organising it is a separate, later step. */
-export async function capture(c: Ctx, input: z.input<typeof captureInput>): Promise<Source> {
+/** Save something immediately. Organising it is a separate, later step.
+ *
+ *  Capturing is idempotent two ways. A caller that passes a `key` (the
+ *  Idempotency-Key header over REST) gets the same source back however many
+ *  times it retries. And saving a link that is already waiting in the inbox
+ *  returns the one already there: the second save is almost always the first
+ *  one repeated, and two copies of a link is a mess to triage. */
+export async function capture(c: Ctx, input: z.input<typeof captureInput>, key?: string | null): Promise<Captured> {
   const data = captureInput.parse(input);
+  if (key) {
+    const prior = await first<Source>(c, `SELECT * FROM source WHERE capture_key = ?`, key);
+    if (prior) return { ...prior, already_captured: true };
+  }
+  if (data.url) {
+    const waiting = await first<Source>(c, `SELECT * FROM source WHERE url = ? AND status = 'inbox' ORDER BY created_at DESC LIMIT 1`, data.url);
+    if (waiting) return { ...waiting, already_captured: true };
+  }
   if (data.note_id) await requireNote(c, data.note_id);
   const sid = id("src");
   const t = now();
   const title = data.title?.trim() || data.url || data.text!.trim().slice(0, 80);
-  await c.db
-    .prepare(`INSERT INTO source (id, title, url, text, status, note_id, fetch_status, actor, created_at, updated_at) VALUES (?, ?, ?, ?, 'inbox', ?, ?, ?, ?, ?)`)
-    .bind(sid, title, data.url ?? null, data.text?.trim() || null, data.note_id ?? null, data.url ? "pending" : null, c.actor, t, t)
-    .run();
+  try {
+    await c.db
+      .prepare(`INSERT INTO source (id, title, url, text, status, note_id, fetch_status, capture_key, actor, created_at, updated_at) VALUES (?, ?, ?, ?, 'inbox', ?, ?, ?, ?, ?, ?)`)
+      .bind(sid, title, data.url ?? null, data.text?.trim() || null, data.note_id ?? null, data.url ? "pending" : null, key ?? null, c.actor, t, t)
+      .run();
+  } catch (e) {
+    // Two requests with the same key raced past the check above; the unique
+    // index let exactly one in. The loser returns the winner's source.
+    const winner = key ? await first<Source>(c, `SELECT * FROM source WHERE capture_key = ?`, key) : null;
+    if (winner) return { ...winner, already_captured: true };
+    throw e;
+  }
   await reindexSource(c, sid);
   await logEvent(c, "capture", "source", sid, { title, url: data.url ?? null });
   if (data.url && c.env.JOBS) await c.env.JOBS.send({ type: "ingest_source", source_id: sid });
   return (await getSource(c, sid))!;
+}
+
+/** Fetch a link again after a failure. */
+export async function retryFetch(c: Ctx, sid: string): Promise<Source> {
+  const src = await requireSource(c, sid);
+  if (!src.url) throw new RuleError("this source has no link to fetch", 400);
+  if (src.fetch_status === "pending") return src;
+  await c.db.prepare(`UPDATE source SET fetch_status = 'pending', fetch_error = NULL, updated_at = ? WHERE id = ?`).bind(now(), sid).run();
+  if (c.env.JOBS) await c.env.JOBS.send({ type: "ingest_source", source_id: sid });
+  await logEvent(c, "retry_fetch", "source", sid);
+  return (await getSource(c, sid))!;
+}
+
+/** Record that a fetch failed, and why, so the inbox can say so and offer a retry. */
+export async function markFetchFailed(c: Ctx, sid: string, reason: string): Promise<void> {
+  await c.db.prepare(`UPDATE source SET fetch_status = 'failed', fetch_error = ?, updated_at = ? WHERE id = ?`).bind(reason, now(), sid).run();
 }
 
 /** Everything not yet dealt with, newest first. */

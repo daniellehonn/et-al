@@ -18,13 +18,14 @@ export function InboxView() {
   const { data: tree } = useQuery({ queryKey: ["tree"], queryFn: () => api.get<NoteNode[]>("/notes/tree") });
   const notes = flattenTree(tree ?? []);
   const [capture, setCapture] = useState("");
+  const [note, setNote] = useState<string | null>(null);
   const refresh = () => { qc.invalidateQueries({ queryKey: ["inbox"] }); qc.invalidateQueries({ queryKey: ["proposals"] }); };
 
   const captureMut = useMutation({
     // /share rather than /capture: it pulls a link out of pasted text into `url`,
     // which is what gets it fetched.
-    mutationFn: (text: string) => api.post("/share", { text }),
-    onSuccess: () => { setCapture(""); refresh(); },
+    mutationFn: (text: string) => api.post<Source & { already_captured?: boolean }>("/share", { text }),
+    onSuccess: (s) => { setCapture(""); setNote(s.already_captured ? "That link is already in your inbox." : null); refresh(); },
   });
   const update = useMutation({
     mutationFn: ({ id, patch }: { id: string; patch: Record<string, unknown> }) => api.patch(`/sources/${id}`, patch),
@@ -45,6 +46,7 @@ export function InboxView() {
         <button type="submit" disabled={!capture.trim() || captureMut.isPending}>{captureMut.isPending ? "Saving…" : "Capture"}</button>
       </form>
 
+      {note && <div className="et-inbox-note">{note}</div>}
       <InsightQueue />
 
       <div className="eyebrow et-inbox-label">Captured</div>
@@ -59,7 +61,12 @@ export function InboxView() {
                 {s.text && s.text !== s.title && <div className="et-inbox-desc">{s.text}</div>}
                 {s.url && <a className="et-inbox-link" href={s.url} target="_blank" rel="noopener noreferrer">{s.site ?? s.url}</a>}
                 {s.fetch_status === "pending" && <div className="et-inbox-status">Reading the link…</div>}
-                {s.fetch_status === "failed" && <div className="et-inbox-status" data-bad>Couldn&rsquo;t read the link: {s.fetch_error}</div>}
+                {s.fetch_status === "failed" && (
+                  <div className="et-inbox-status" data-bad>
+                    Couldn&rsquo;t read the link: {s.fetch_error}.{" "}
+                    <button className="et-inbox-retry" onClick={async () => { await api.post(`/sources/${s.id}/retry`); refresh(); }}>Try again</button>
+                  </div>
+                )}
               </div>
             </div>
             <div className="et-inbox-actions">
@@ -118,6 +125,8 @@ function InboxStyles() {
       .et-inbox-link { font-family: var(--font-mono); font-size: 0.72rem; color: var(--color-iris); text-decoration: none; display: inline-block; margin-top: 0.25rem; overflow-wrap: anywhere; }
       .et-inbox-status { font-size: 0.78rem; color: var(--ink-faint); font-style: italic; margin-top: 0.2rem; }
       .et-inbox-status[data-bad] { color: var(--color-amber); font-style: normal; }
+      .et-inbox-retry { background: none; border: none; padding: 0; font: inherit; color: var(--color-iris); cursor: pointer; text-decoration: underline; }
+      .et-inbox-note { margin-top: 0.8rem; font-size: 0.85rem; color: var(--ink-soft); }
       .et-inbox-actions { display: flex; gap: 0.5rem; align-items: center; flex: none; }
       .et-inbox-actions select { background: var(--paper-raised); border: 1px solid var(--line-strong); border-radius: 7px; padding: 0.35rem 0.5rem; font: inherit; font-size: 0.82rem; color: var(--ink-soft); max-width: 11rem; }
       .et-clear { background: none; border: none; color: var(--ink-faint); font: inherit; font-size: 0.82rem; cursor: pointer; padding: 0.35rem 0.4rem; }

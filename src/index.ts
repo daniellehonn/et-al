@@ -5,10 +5,13 @@
 import { Hono } from "hono";
 import { ZodError } from "zod";
 import type { Env, Job } from "./schema";
-import { RuleError, ctx } from "./store";
+import { RuleError, ctx, markFetchFailed } from "./store";
 import { api } from "./api";
 import { embedNote, ingestSource } from "./ingest";
 import { handleMcp } from "./mcp";
+
+// Matches max_retries = 2 in wrangler.toml: the first try plus two retries.
+const MAX_ATTEMPTS = 3;
 
 const app = new Hono<{ Bindings: Env; Variables: { actor: string } }>();
 
@@ -126,17 +129,24 @@ app.all("/mcp", async (c) => {
 export default {
   fetch: app.fetch,
 
-  // Background work. Each job is best-effort and records its own failures, so
-  // a throw here means something unexpected: retry it, up to max_retries.
-  async queue(batch: MessageBatch<Job>, env: Env): Promise<void> {
+  // Background work. Each job is best-effort and records its own expected
+  // failures, so a throw here is something unexpected: retry it. On the last
+  // attempt, give up visibly — a source left "pending" forever would sit in the
+  // inbox saying it is being read when nothing is reading it.
+  async queue(batch: MessageBatch<Job>, env: Env, _ctx?: ExecutionContext): Promise<void> {
     const c = ctx(env, "system");
     for (const msg of batch.messages) {
       try {
         if (msg.body.type === "ingest_source") await ingestSource(c, env, msg.body.source_id);
         else if (msg.body.type === "embed_note") await embedNote(c, env, msg.body.note_id);
         msg.ack();
-      } catch {
-        msg.retry();
+      } catch (e) {
+        if (msg.attempts < MAX_ATTEMPTS) { msg.retry(); continue; }
+        console.log(`[queue] giving up on ${msg.body.type} after ${msg.attempts} attempts:`, e instanceof Error ? e.message : String(e));
+        if (msg.body.type === "ingest_source") {
+          await markFetchFailed(c, msg.body.source_id, "something went wrong reading it").catch(() => {});
+        }
+        msg.ack();
       }
     }
   },

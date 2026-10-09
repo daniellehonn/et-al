@@ -16,7 +16,7 @@ import { api, type Source } from "@/lib/api";
 export default function SharePage() {
   const [state, setState] = useState<"working" | "done" | "error">("working");
   const [message, setMessage] = useState("");
-  const [source, setSource] = useState<Source | null>(null);
+  const [source, setSource] = useState<(Source & { already_captured?: boolean }) | null>(null);
   // React 18 StrictMode double-invokes effects in dev; without this guard a
   // single share would capture twice.
   const fired = useRef(false);
@@ -33,7 +33,7 @@ export default function SharePage() {
       return;
     }
 
-    api.post<Source>("/share", payload)
+    api.post<Source & { already_captured?: boolean }>("/share", payload)
       .then((s) => { setSource(s); setState("done"); })
       .catch((e: Error & { status?: number }) => {
         setState("error");
@@ -50,7 +50,7 @@ export default function SharePage() {
       {state === "done" && (
         <>
           <div className="et-share-tick">✓</div>
-          <h1 className="serif et-share-h">Captured</h1>
+          <h1 className="serif et-share-h">{source?.already_captured ? "Already saved" : "Captured"}</h1>
           <p className="et-share-detail">{source ? source.title || source.url : ""}</p>
           <p className="et-share-msg">It&rsquo;s in your inbox, waiting to be filed.</p>
           <div className="et-share-actions">

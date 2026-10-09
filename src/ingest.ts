@@ -15,8 +15,7 @@ const MAX_BYTES = 100_000;
 export async function ingestSource(c: store.Ctx, env: Env, sourceId: string): Promise<void> {
   const src = await store.getSource(c, sourceId);
   if (!src?.url) return;
-  const fail = (error: string) =>
-    c.db.prepare(`UPDATE source SET fetch_status = 'failed', fetch_error = ?, updated_at = ? WHERE id = ?`).bind(error, Date.now(), sourceId).run();
+  const fail = (reason: string) => store.markFetchFailed(c, sourceId, reason);
 
   let target: URL;
   try { target = new URL(src.url); } catch { await fail("not a valid URL"); return; }
