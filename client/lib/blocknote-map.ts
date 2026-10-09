@@ -46,9 +46,6 @@ const TO_ETAL: Record<string, string> = Object.fromEntries(
   Object.entries(TO_BN).map(([k, v]) => [v, k]),
 );
 
-/** Types BlockNote renders itself. Everything else becomes an `etAlBlock`. */
-export const NATIVE_TYPES = new Set(Object.keys(TO_BN));
-
 const parse = (json: string): Record<string, unknown> => {
   try { return JSON.parse(json) as Record<string, unknown>; } catch { return {}; }
 };

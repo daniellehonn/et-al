@@ -49,10 +49,6 @@ export async function getBlocks(c: Ctx, noteId: string): Promise<Block[]> {
   return out;
 }
 
-export function getBlock(c: Ctx, bid: string): Promise<Block | null> {
-  return first<Block>(c, `SELECT * FROM block WHERE id = ?`, bid);
-}
-
 /** A note's body as plain text, in document order. */
 export async function noteText(c: Ctx, noteId: string): Promise<string> {
   return (await getBlocks(c, noteId)).map(blockText).filter(Boolean).join("\n");

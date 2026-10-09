@@ -102,24 +102,16 @@ body {
   * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
 
-/* ── Shared component primitives (were duplicated across views) ─────────────── */
+/* ── Shared ────────────────────────────────────────────────────────────────── */
 .et-empty { color: var(--ink-faint); font-style: italic; font-size: 0.9rem; padding: 0.5rem 0; }
-
-.et-prio { width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); flex: none; }
-.et-prio[data-p="2"] { background: var(--color-amber); }
-.et-prio[data-p="3"] { background: var(--color-iris); }
-
-.et-seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
-.et-seg button { background: none; border: none; font: inherit; font-size: 0.82rem; color: var(--ink-soft); padding: 0.28rem 0.75rem; cursor: pointer; }
-.et-seg button[data-on="true"] { background: var(--color-iris); color: #fff; }
 
 /* ── Shell ─────────────────────────────────────────────────────────────────── */
 .et-shell { display: grid; grid-template-columns: auto minmax(0, 1fr); min-height: 100vh; }
 .et-shell > main { min-width: 0; }
 
 /* ── Mobile ────────────────────────────────────────────────────────────────────
-   Below 860px the page tree leaves the layout (it becomes a fixed drawer — see
-   PageTree.tsx), so the shell collapses to ordinary block flow. */
+   Below 860px the note tree leaves the layout (it becomes a fixed drawer — see
+   NoteTree.tsx), so the shell collapses to ordinary block flow. */
 @media (max-width: 860px) {
   .et-shell { display: block; }
 
@@ -129,32 +121,22 @@ body {
 
   /* Every page shares the same reading-column padding; reclaim the horizontal
      inches on a phone but keep the generous bottom run-off. */
-  .et-home, .et-ws-page, .et-inbox-page, .et-know-page, .et-search-page {
+  .et-home, .et-inbox-page, .et-search-page {
     padding: 1.5rem 1.1rem 5rem;
   }
 
   /* Hover is unavailable on touch, so anything gated behind :hover would be
-     permanently unreachable. Reveal the affordances that create or edit.
-     `.et-del` is the shared DeleteButton — without it there is no way to delete
-     anything at all on a phone.
+     permanently unreachable: the tree's "add a note inside" and its ··· menu.
 
-     The `body` prefix is load-bearing, not decoration. Every component ships its
-     own <style> block, which React injects into the DOM *after* this stylesheet,
-     so at equal specificity the component's `opacity: 0` wins and this whole
-     rule silently does nothing. `body .x` (0,1,1) outranks `.x` (0,1,0) and wins
-     regardless of order. Any future override of a component-owned class from
-     this file needs the same treatment. */
-  body .et-ws-add, body .et-task-obj, body .et-task-due, body .et-cover-remove,
-  body .et-embed-edit-btn, body .et-col-menu summary, body .et-del,
-  /* Task rows: every one of these is opacity:0 until :hover, which on touch
-     means never. Without this, a phone cannot delete a task, set a repeat,
-     add a subtask, or open a task's notes. */
-  body .et-tv-sub, body .et-tv-date, body .et-tv-del, body .et-tv-open,
-  body .et-tv-rep-sel, body .et-tv-section-del { opacity: 1; }
+     The `body` prefix is load-bearing. Every component ships its own <style>
+     block, which React injects into the DOM *after* this stylesheet, so at equal
+     specificity the component's `opacity: 0` wins and this rule silently does
+     nothing. `body .x` (0,1,1) outranks `.x` (0,1,0) regardless of order. */
+  body .et-tree-add, body .et-tree-menu { opacity: 1; }
 
   /* iOS zooms the viewport on focus for any control under 16px. */
   input, select, textarea { font-size: 16px; }
 
   /* Wide-by-nature surfaces scroll themselves rather than the page. */
-  .et-doctable-wrap, .et-table-wrap, .et-board { -webkit-overflow-scrolling: touch; }
+  .et-diff, .et-bn-table-wrap { -webkit-overflow-scrolling: touch; }
 }

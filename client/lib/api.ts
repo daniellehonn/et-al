@@ -133,7 +133,3 @@ export type BlockOp =
   | { op: "delete"; id: string }
   | { op: "move"; id: string; after?: string | null; parent?: string | null }
   | { op: "replace_content"; content: string };
-
-export function blockContent(b: { content_json: string }): Record<string, unknown> {
-  try { return JSON.parse(b.content_json) as Record<string, unknown>; } catch { return {}; }
-}
