@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            client/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck the Worker and tests
+        run: npm run typecheck
+
+      # Runs inside workerd against a real D1 with every migration applied.
+      # The test environment has no Workers AI or Vectorize binding, so CI
+      # needs no Cloudflare credentials and never reaches production.
+      - name: Test
+        run: npm test
+
+      - name: Typecheck the web app
+        working-directory: client
+        run: npm ci && npx tsc --noEmit

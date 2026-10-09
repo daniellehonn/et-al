@@ -58,3 +58,23 @@ directory = "client/out"
 # the SPA shell for every image URL and nothing in R2 is ever reachable.
 run_worker_first = ["/api/*", "/mcp", "/mcp/*", "/health", "/files/*"]
 not_found_handling = "single-page-application"
+
+# Used only by the test suite (vitest.config.ts). Bindings are not inherited by
+# environments, so this one deliberately declares no Workers AI and no
+# Vectorize: both are remote-only, and a test must never spend money or reach
+# production. Tests that need a model pass a fake one in.
+[env.test]
+vars = { APP_NAME = "et al." }
+
+[[env.test.d1_databases]]
+binding = "DB"
+database_name = "et-al"
+database_id = "2ff89323-c48e-4c15-809a-7187b1bde9dc"
+
+[[env.test.r2_buckets]]
+binding = "VAULT"
+bucket_name = "et-al-vault"
+
+[[env.test.queues.producers]]
+binding = "JOBS"
+queue = "et-al-jobs"
