@@ -40,6 +40,11 @@ max_batch_size = 10
 max_batch_timeout = 5
 max_retries = 2
 
+# No scheduled work. Declared empty rather than omitted: leaving [triggers] out
+# keeps whatever crons are already deployed, and nothing handles them any more.
+[triggers]
+crons = []
+
 [vars]
 APP_NAME = "et al."
 
