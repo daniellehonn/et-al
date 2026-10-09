@@ -103,10 +103,19 @@ export async function search(
   const limit = opts.limit ?? 30;
   const wanted = opts.types?.length ? new Set<string>(opts.types) : null;
 
+  // A proposed insight is indexed the moment its body is written, but it is a
+  // suggestion, not knowledge: it must not surface here (or, through search, in
+  // build_context) until a human accepts it. Filtered in the query so no caller
+  // can forget to.
   const keyword = all<Omit<SearchHit, "workspace_id">>(
     c,
-    `SELECT entity_type, entity_id, title, snippet(search_fts, 3, '[', ']', '…', 12) AS snippet
-       FROM search_fts WHERE search_fts MATCH ? ORDER BY rank LIMIT ?`,
+    `SELECT search_fts.entity_type, search_fts.entity_id, search_fts.title,
+            snippet(search_fts, 3, '[', ']', '…', 12) AS snippet
+       FROM search_fts
+       LEFT JOIN page p ON search_fts.entity_type = 'page' AND p.id = search_fts.entity_id
+      WHERE search_fts MATCH ?
+        AND (p.id IS NULL OR json_extract(p.properties_json, '$.proposed') IS NOT 1)
+      ORDER BY rank LIMIT ?`,
     match,
     limit,
   );
