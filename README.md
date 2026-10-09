@@ -100,7 +100,8 @@ and the queue marks a source failed on its last attempt rather than leaving it
 "pending" forever.
 
 **Tests against the real runtime.** 93 tests run inside `workerd` with a real
-D1 and every migration applied — no mocks of the runtime or the database. They
+D1 and every migration applied — no mocks of the runtime or the database —
+covering 92% of the server's lines (89% of statements, 77% of branches). They
 call `/api` and `/mcp` the way the app and agents do, so they survived a
 rewrite of the whole data model. CI runs them on every push, `npm run deploy`
 refuses to ship if they fail, and the app's `/test-suite` page shows the run
@@ -130,6 +131,7 @@ npm run dev                  # http://localhost:8787, key "dev-key" unless ET_AL
 node scripts/seed.mjs        # optional: sample notes, tasks, links and proposals
 npm test                     # 93 tests in workerd
 npm run test:report          # the same, plus the report the /test-suite page shows
+npm run test:coverage        # line and branch coverage of src/
 npm run eval                 # the extraction eval (calls Workers AI; needs wrangler login)
 ```
 

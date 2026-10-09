@@ -17,8 +17,8 @@ the most useful part of the story.
 | v8 | A Notion clone: pages, collections, typed properties, five view types | Flexible structure, but meaning had to be smuggled back in (see below). |
 | v9 | Five fixed things: note, task, source, proposal, event | This one. |
 
-From v8 to v9, about 8,600 lines of application code were deleted and 2,600
-written — 6,000 fewer — while the test suite and the eval were added. The rest
+From v8 to today, about 8,200 lines of application code were deleted and 2,800
+written — 5,300 fewer — while the test suite and the eval were added. The rest
 of this log is mostly about what that made possible.
 
 ---
