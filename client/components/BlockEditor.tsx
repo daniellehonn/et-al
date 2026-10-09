@@ -362,12 +362,12 @@ export function BlockEditor({ pageId }: { pageId: string }) {
     });
   }, [editingId]);
 
-  // A failed write is never silent: surface it and re-check auth so the Unlock
-  // banner reappears if the session lapsed (the usual cause of "nothing happens").
+  // A failed write is never silent: surface it and re-check auth so the sign-in
+  // screen appears if the session lapsed (the usual cause of "nothing happens").
   const onWriteError = useCallback((e: unknown) => {
     const msg = e instanceof Error ? e.message : String(e);
     qc.invalidateQueries({ queryKey: ["session"] });
-    alert(/unauthor/i.test(msg) ? "You're in read-only mode — click Unlock at the top and enter your API key, then try again." : `Couldn't save: ${msg}`);
+    alert(/unauthor/i.test(msg) ? "Your session has ended. Sign in again, then retry." : `Couldn't save: ${msg}`);
   }, [qc]);
 
   // Undo/redo. The inverse of each write is computed from the block list as it
@@ -505,7 +505,7 @@ export function BlockEditor({ pageId }: { pageId: string }) {
     recordTextUndo(b);
     clearTimeout(debounce.current[b.id]);
     debounce.current[b.id] = setTimeout(() => {
-      // Per-keystroke: don't alert, but refresh auth so the read-only banner shows.
+      // Per-keystroke: don't alert, but refresh auth so the sign-in screen shows.
       api.post(`/pages/${pageId}/blocks`, {
         ops: [{ op: "update", id: b.id, type: b.type, content: { text: value } }],
       }).catch(() => qc.invalidateQueries({ queryKey: ["session"] }));

@@ -30,27 +30,21 @@ function credential(req: Request): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-// Reads are open; mutations require a valid credential. Actor defaults to
-// 'human'. Login/logout/session manage the cookie and bypass the mutation gate.
+// Every /api call requires a valid credential, reads included: this is one
+// person's notes, tasks and saved links, and an open read would publish all of
+// it to anyone who found the URL. Actor defaults to 'human'. Login/logout/session
+// manage the cookie, so they are the only routes the gate lets through.
 app.use("/api/*", async (c, next) => {
   c.set("actor", "human");
   const path = new URL(c.req.url).pathname;
   if (path === "/api/login" || path === "/api/logout" || path === "/api/session") return next();
-  const method = c.req.method;
-  // Querying a collection is a read that happens to be a POST — its filters and
-  // sorts are structured, and encoding them into a query string would mean a
-  // second parser to keep in step. Treating it as a mutation would make every
-  // inline database fail to load in read-only mode.
-  const isReadPost = method === "POST" && /^\/api\/collections\/[^/]+\/query$/.test(path);
   // The iMessage webhook cannot carry the API key — Sendblue is the caller, not
   // the browser. It authenticates itself against SENDBLUE_WEBHOOK_TOKEN and
   // checks the sender is the owner, so it is exempt from this gate but not
   // unguarded.
-  const isWebhook = path === "/api/imessage";
-  if (method !== "GET" && method !== "HEAD" && !isReadPost && !isWebhook) {
-    if (!validKey(c.env, credential(c.req.raw))) {
-      return c.json({ error: "unauthorized" }, 401);
-    }
+  if (path === "/api/imessage") return next();
+  if (!validKey(c.env, credential(c.req.raw))) {
+    return c.json({ error: "unauthorized" }, 401);
   }
   await next();
 });
@@ -109,9 +103,11 @@ app.post("/api/bootstrap", async (c) => {
 // almost immediately. Uploading them into VAULT and serving from here is what
 // makes an imported note survive leaving Notion.
 
-// Served outside /api so an <img src> is a plain, cacheable URL. Reads are open,
-// which matches the rest of the app — the guard is on writing, not viewing.
+// Served outside /api so an <img src> is a plain URL. It is gated like the API:
+// an <img> on the same origin sends the session cookie, so the app's own images
+// still load, and nobody else's do.
 app.get("/files/*", async (c) => {
+  if (!validKey(c.env, credential(c.req.raw))) return c.text("unauthorized", 401);
   const key = new URL(c.req.url).pathname.replace(/^\/files\//, "");
   if (!key) return c.text("not found", 404);
   const obj = await c.env.VAULT.get(key);
@@ -119,8 +115,9 @@ app.get("/files/*", async (c) => {
   const headers = new Headers();
   obj.writeHttpMetadata(headers);
   headers.set("etag", obj.httpEtag);
-  // Keys are content-addressed by the importer, so a hit can be cached hard.
-  headers.set("cache-control", "public, max-age=31536000, immutable");
+  // Keys are content-addressed by the importer, so a hit can be cached hard —
+  // but only by the browser that was allowed to fetch it, never a shared cache.
+  headers.set("cache-control", "private, max-age=31536000, immutable");
   return new Response(obj.body, { headers });
 });
 

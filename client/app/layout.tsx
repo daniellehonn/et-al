@@ -53,13 +53,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Providers>
           {/* Two columns on desktop; globals.css collapses this to one block-flow
               column under the mobile breakpoint, where the Spine goes off-canvas. */}
-          <div className="et-shell">
-            <PageTree />
-            <main style={{ minWidth: 0 }}>
-              <AuthGate />
-              {children}
-            </main>
-          </div>
+          <AuthGate>
+            <div className="et-shell">
+              <PageTree />
+              <main style={{ minWidth: 0 }}>
+                {children}
+              </main>
+            </div>
+          </AuthGate>
         </Providers>
       </body>
     </html>

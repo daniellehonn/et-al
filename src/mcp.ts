@@ -140,9 +140,10 @@ const TOOLS: Tool[] = [
   { name: "weekly_review", description: "The raw material for a guided weekly review.", inputSchema: obj({}), handler: (c) => store.getWeeklyReview(c) },
   { name: "get_career_blocks", description: "Every career block (accomplishment/STAR, resume bullet, role) across the user's work — the raw material for generating a resume, LinkedIn post, or STAR story. Optionally scope to one page.", inputSchema: obj({ page_id: str }), handler: (c, a) => store.listCareerBlocks(c, a.page_id as string | undefined) },
   // ---- proposals ----
-  { name: "list_proposals", description: "Machine-extracted insights awaiting your review. They are excluded from list_insights, search and build_context until accepted — a proposal is a suggestion, not knowledge.", inputSchema: obj({}), handler: (c) => store.listProposals(c) },
-  { name: "accept_proposal", description: "Accept a proposed insight. It becomes ordinary knowledge and is embedded for semantic search.", inputSchema: obj({ id: str }, ["id"]), handler: (c, a) => store.acceptProposal(c, String(a.id)) },
-  { name: "reject_proposal", description: "Reject a proposed insight and delete it. The source it came from is untouched.", inputSchema: obj({ id: str }, ["id"]), handler: async (c, a) => { await store.rejectProposal(c, String(a.id)); return { ok: true }; } },
+  // Read-only on purpose. Accepting or rejecting is the human's half of the
+  // review, so it happens in the web app; an agent that could accept would be
+  // approving machine-written knowledge on the human's behalf.
+  { name: "list_proposals", description: "Machine-extracted insights awaiting the user's review. They are excluded from list_insights, search and build_context until accepted — a proposal is a suggestion, not knowledge. Only the user can accept or reject them, in the web app's inbox.", inputSchema: obj({}), handler: (c) => store.listProposals(c) },
 
   // ---- automations ----
   { name: "list_automations", description: "Recurring tasks et al. runs on a schedule.", inputSchema: obj({}), handler: (c) => store.listAutomations(c) },

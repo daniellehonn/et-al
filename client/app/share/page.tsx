@@ -38,7 +38,7 @@ export default function SharePage() {
       .catch((e: Error & { status?: number }) => {
         setState("error");
         setMessage(e.status === 401
-          ? "This app isn't unlocked. Open et al., unlock it, then share again."
+          ? "You're not signed in. Open et al., sign in, then share again."
           : e.message);
       });
   }, []);

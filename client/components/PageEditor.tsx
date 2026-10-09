@@ -155,7 +155,7 @@ export function PageEditor({ pageId }: { pageId: string }) {
       const msg = e instanceof Error ? e.message : String(e);
       qc.invalidateQueries({ queryKey: ["session"] });
       alert(/unauthor/i.test(msg)
-        ? "You're in read-only mode — click Unlock at the top and enter your API key."
+        ? "Your session has ended. Sign in again to save."
         : `Couldn't save: ${msg}`);
     }
   }, [editor, pageId, qc]);
