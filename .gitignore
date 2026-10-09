@@ -11,3 +11,4 @@ dist
 # Next static export (built at deploy time)
 client/out
 client/.next
+client/public/test-report.json

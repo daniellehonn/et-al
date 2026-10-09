@@ -65,6 +65,7 @@ export function NoteTree() {
       <a className="et-tree-link" href="/inbox/">Inbox</a>
       <a className="et-tree-link" href="/tasks/">Tasks</a>
       <a className="et-tree-link" href="/search/">Search</a>
+      <a className="et-tree-link" href="/test-suite/">Tests</a>
       <button className="et-tree-new" onClick={() => setShowTrash((v) => !v)}>Trash</button>
       {showTrash && <TrashPanel onDone={() => setShowTrash(false)} />}
       <TreeStyles />

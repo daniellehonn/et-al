@@ -1,3 +1,4 @@
+// Markdown into blocks: what an agent writes in a patch becomes a note's body.
 import { describe, expect, it } from "vitest";
 import { markdownToBlocks } from "../src/store/body";
 

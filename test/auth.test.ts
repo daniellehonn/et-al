@@ -1,3 +1,5 @@
+// Who can reach what: every route needs the API key or the session cookie,
+// except health and the sign-in routes, and the cookie is HttpOnly.
 import { describe, expect, it } from "vitest";
 import { KEY, request } from "./helpers";
 
