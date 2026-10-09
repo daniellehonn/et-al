@@ -1,122 +1,98 @@
-# et al. — MCP Tool Surface
+# MCP tools
 
-> Companion to [`DESIGN.md`](./DESIGN.md). Two layers: **data** tools (granular,
-> CRUD-ish) and **intent** tools (high-level, compose the data tools). Both are
-> exposed. Streamable HTTP, Bearer auth, sharing the same store functions as REST.
-> `[SPINE]` = first pass · `[DEFER]` = designed, not built.
+```
+URL:            https://<your-worker>/mcp        (Streamable HTTP, JSON-RPC 2.0)
+Authorization:  Bearer <ET_AL_API_KEY>
+x-mcp-client:   <your client's name>              (becomes the actor: ai:<name>)
+```
 
-## Rules that hold for every tool
+Eighteen tools. What is *not* here is as deliberate as what is: there is no tool
+that writes a note's body, accepts or rejects a proposal, or deletes a note.
+Those belong to the user and exist only in the web app's REST API. A test fails
+if a tool is added here without a section below.
 
-- Read tools are always safe.
-- Write tools execute immediately and are stamped `actor:'ai:<name>'` by the
-  handler — a store function can't forget to attribute itself.
-- **Documents are the exception**: agents never write blocks directly; they call
-  `propose_document_patch` and the human accepts/rejects in the web app.
-- **Delete tools** exist for tasks, objectives, sources, insights, and decisions
-  — immediate but attributed; skills tell agents to confirm before destructive
-  changes. `delete_document` and `delete_workspace` are **not** exposed to agents:
-  a document is co-owned (patch-gated) and a workspace delete is a tree-wide
-  cascade, so both stay human-only in the web app.
-- Agents `capture` rather than invent structure when the destination is unclear.
+Bad input comes back as an error naming the field, e.g. `title: Too small`.
 
----
+## Orient
 
-## Orientation `[SPINE]`
+### `get_schema`
+How et al. is organised and what an agent may do in it. Read first.
 
-| tool | does |
+### `search`
+`{ query }` — notes, tasks and sources. Keyword (FTS5) and meaning (Vectorize)
+results fused by rank. Proposals are never indexed, so never returned.
+
+### `build_context`
+`{ note_id, query? }` — everything needed to work on a note in one call: the
+note, its ancestors, its body, child notes, open tasks, filed sources, and
+related material for the query (or the note's title).
+
+### `get_note_tree`
+Every note, nested. Titles and ids only.
+
+### `get_note`
+`{ id }` — the note, its ancestors, its body as markdown (to read), and its
+blocks with ids (to target with granular patch ops).
+
+### `get_agent_activity`
+Recent writes by agents and the extractor, newest first, with what each was.
+
+## Notes
+
+### `create_note`
+`{ title, parent_id? }` — an empty note. Its body arrives by proposal.
+
+### `update_note`
+`{ id, title }` — rename.
+
+### `move_note`
+`{ id, parent_id? }` — re-parent; omit `parent_id` for the root. Cycle-checked.
+
+### `propose_note_patch`
+`{ note_id, ops, summary }` — propose a change to a note's body. Ops:
+
+| op | shape |
 |---|---|
-| `get_schema` | the object model, per-type vocabularies, and the product's rules |
-| `open_workspace(path)` | resolve `Life → Build → et al.` to a workspace + its summary, and set it as primary context |
-| `get_home` | Daily 3, workspace health, inbox count, recent activity |
+| `replace_content` | `{ content: "<markdown>" }` — headings, nested bullets, numbered, `- [ ]` todos, quotes, fenced code, pipe tables |
+| `insert` | `{ type, content: { text }, after?, parent? }` |
+| `update` | `{ id, content: { text }, type? }` |
+| `delete` | `{ id }` — and everything nested under it |
+| `move` | `{ id, after?, parent? }` |
 
-## Context engine `[SPINE]`
+The patch is dry-run against the note when proposed, so an op naming a block
+that isn't there fails for the agent, not the reviewer. When accepted it is
+written under the agent's name, all of it or none of it.
 
-| tool | does |
-|---|---|
-| `build_context(workspace_id, query?, depth?)` | assemble the context package: Layer 1 (workspace + inherited ancestors, objectives, open tasks, documents, recent decisions) + Layer 2 (1-hop relationships + top-k vector matches). `[DEFER]` Layer 3 global recall. |
+## Tasks
 
-## Workspaces `[SPINE]`
+### `list_tasks`
+`{ note_id?, open? }` — next to do first: in progress, then by due date.
 
-`list_workspaces` · `get_workspace` · `create_workspace(parent_id, type, title)` ·
-`update_workspace` · `move_workspace(id, new_parent_id)` (cycle-checked).
+### `create_task`
+`{ title, parent_id?, note_id?, due_at? }` — `due_at` is unix ms; `parent_id`
+makes a subtask.
 
-## Objectives `[SPINE]`
+### `update_task`
+`{ id, title?, status?, due_at?, note_id? }` — status is `todo | doing | done`.
 
-`list_objectives(workspace_id)` · `create_objective` · `update_objective` ·
-**`plan_objective(objective_id)`** *(intent)* — propose a task tree from an
-objective for the user to confirm.
+### `delete_task`
+`{ id }` — with its subtasks. Confirm with the user first.
 
-## Tasks `[SPINE]`
+## Capture
 
-`list_tasks(workspace_id, filters)` · `create_task` · `update_task` ·
-`complete_task`.
+### `capture`
+`{ url?, text?, title?, note_id?, key? }` — save to the inbox now. A link is
+fetched in the background and may produce proposed insights. `key` makes
+retries safe; a link already waiting in the inbox is returned as
+`already_captured: true` rather than saved twice.
 
-## Daily 3 `[SPINE]`
+### `list_inbox`
+Captured sources not yet dealt with, newest first.
 
-| tool | does |
-|---|---|
-| `get_daily3(date?)` | the three slots + status/streak |
-| `set_daily3([task_id,task_id,task_id])` | set/replace the slots (before lock) |
-| `confirm_daily3(date?)` | lock the day |
-| `suggest_daily3()` *(intent)* | propose 3 tasks using priorities, deadlines, dependencies, momentum, and workspace health; returns proposals for the user to review/swap/confirm — never auto-confirms |
+### `file_source`
+`{ id, note_id?, title?, status? }` — file into a note (which clears it from the
+inbox), retitle, or mark `done`.
 
-## Inbox, Sources, Insights `[SPINE]`
-
-| tool | does |
-|---|---|
-| `capture(kind, payload)` | save a raw input to the inbox immediately (Source, `raw` immutable) |
-| `list_inbox()` | unprocessed sources |
-| `get_source(id)` | source + parsed text/metadata |
-| `create_insight(...)` / `list_insights` / `get_insight` | knowledge nodes |
-| `process_inbox(source_id)` *(intent)* | read a source and **propose** insights, a workspace placement, and relationships for approval |
-
-## Documents `[SPINE]`
-
-| tool | does |
-|---|---|
-| `get_document(id)` / `list_documents(workspace_id)` | |
-| `get_blocks(document_id)` | ordered blocks |
-| `propose_document_patch(document_id, ops, summary)` *(intent)* | submit a git-style patch → surfaces as Accept/Reject in the web app. **The only way an agent changes a document.** |
-| `get_document_patches(document_id)` | pending/resolved patches |
-
-Direct block writes (`write_blocks`) exist in the store for the **human** web app
-and REST, but are **not exposed to MCP** — agents must go through patches.
-
-## Decisions `[SPINE]`
-
-`list_decisions(workspace_id)` · `record_decision(...)` (immutable once written).
-
-## Knowledge graph `[SPINE]`
-
-`relate(source, target, type)` · `get_backlinks(type, id)` ·
-`list_relationships(id)`.
-
-## Search `[SPINE]`
-
-`search(query, {types?, workspace_id?})` — FTS now, hybrid `[DEFER]`.
-
-## Health & review
-
-| tool | does |
-|---|---|
-| `get_workspace_health(workspace_id?)` `[SPINE]` | the dumb activity/flow score |
-| `weekly_review()` *(intent)* `[SPINE]` | returns raw material — stalled projects, untriaged inbox, completed work, health — for the agent to walk through |
-| `get_agent_activity()` `[SPINE]` | everything written by `actor:'ai:*'` |
-
-## Deferred intent tools
-
-- `generate_resume(scope)` `[DEFER]` — pull real tasks/decisions/insights → bullets, provenance preserved.
-- `review_architecture(workspace_id)` `[DEFER]`.
-- Layer-3 global recall inside `build_context` `[DEFER]`.
-
----
-
-## A canonical agent loop
-
-1. `open_workspace("Life → Build → et al.")` to orient and set context.
-2. `build_context(workspace_id, query)` before reasoning about anything.
-3. `capture` new inputs immediately; `process_inbox` proposes structure for approval.
-4. Propose typed records with the `create_*` tools; `propose_document_patch` for docs.
-5. `relate` results so applied knowledge becomes visible.
-6. `suggest_daily3` / `weekly_review` for planning and reflection — always
-   proposing, never auto-confirming.
+### `list_proposals`
+`{ note_id? }` — what is waiting for the user: patches and extracted insights.
+Read-only: only the user can resolve them.

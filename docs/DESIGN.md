@@ -1,294 +1,190 @@
-# et al. — Personal Operating System
+# Design log
 
-> **Version:** v7 (constitution) · **Status:** design locked, pre-build
->
-> The prior sketch and the consolidation conversation live in `docs/convo.md`.
-> This document supersedes both. Companion specs: [`DATA-MODEL.md`](./DATA-MODEL.md),
-> [`MCP.md`](./MCP.md).
+The decisions that shaped et al., newest model first. Each says what the
+problem was, what was decided, and what it cost. The code is the reference for
+*what*; this is the record of *why*.
 
-## One sentence
+## How it got here
 
-> **et al. is an MCP-native personal operating system that is the source of truth
-> for a person's life, letting any AI agent understand, reason about, and help
-> execute their goals through a continuously evolving knowledge, project, and
-> action graph.**
+et al. was rebuilt five times in its first three weeks, and the rebuilds are
+the most useful part of the story.
 
-## The one architectural decision everything follows from
+| Version | Model | What it taught |
+|---|---|---|
+| v2–v5 | Markdown files in R2, with D1 as a derived index | A file tree is a poor database: every query was a rebuild. |
+| v6 | D1 canonical; AI moved *out* of the platform | The platform should hold the data, not the reasoning. |
+| v7 | Seven typed entities (workspace, objective, task, document, source, insight, decision) | Typed is right; seven types, each with its own UI tab, was too many. |
+| v8 | A Notion clone: pages, collections, typed properties, five view types | Flexible structure, but meaning had to be smuggled back in (see below). |
+| v9 | Five fixed things: note, task, source, proposal, event | This one. |
 
-**et al. is not an AI app. et al. owns the data; AI clients connect to it.**
-
-```
-     Claude Desktop · Claude Code · Cowork · Cursor · future agents
-                              │
-                             MCP
-                              │
-                        et al. runtime
-              ┌───────────────┼───────────────┐
-          Knowledge        Planning         Context
-           engine           engine           engine
-              └───────────────┼───────────────┘
-                        personal-OS data
-                     D1 · R2 · Vectorize · KV
-                              │
-                          web app  ← just one more client
-```
-
-The web app is where a **human** browses, edits, and visualizes. It is *not*
-where AI happens. Claude, Cursor, and every other agent reach the exact same
-runtime through MCP. There is no LLM key inside the Worker; the Worker is
-deterministic (fetch, parse, embed, store, search). All reasoning, summarizing,
-and generation happen in the agent, outside the platform, and every write an
-agent makes is attributed `actor: 'ai'`.
-
-## The lifecycle
-
-```
-Capture → Understand → Organize → Execute → Reflect → Create → Grow
-```
-
-The goal is not to collect notes. The goal is:
-
-> "Never lose important information, never forget important commitments, and
-> always know what to do next."
-
-## Scope: spine vs deferred
-
-This constitution is complete, but we build the **spine** first and defer the
-rest. Every section below is tagged.
-
-- **`[SPINE]`** — built in the first pass; the system is useful without anything else.
-- **`[DEFER]`** — designed here so the spine doesn't paint us into a corner, but not built yet.
+From v8 to v9, about 8,600 lines of application code were deleted and 2,600
+written — 6,000 fewer — while the test suite and the eval were added. The rest
+of this log is mostly about what that made possible.
 
 ---
 
-# The object model
+## Agents reason outside; the platform holds the data
 
-Everything lives inside a **Workspace**. A workspace contains Objectives, Tasks,
-Documents, Sources, Insights, and Decisions, all connected by Relationships.
+**Problem.** An app with an LLM inside it owns your data *and* decides what to
+do with it. Every new model or agent means changing the app.
 
-```
-Workspace  (strict tree)
-   ├── Objectives   — why this work matters (planning layer)
-   ├── Tasks        — what specific action happens (execution unit)
-   ├── Documents    — living, block-editable artifacts
-   ├── Sources      — raw inputs (pdf, url, video, …)
-   ├── Insights     — atomic extracted knowledge (graph nodes)
-   ├── Decisions    — immutable "we chose X because Y" events
-   └── Relationships — typed edges across everything
-```
+**Decision.** et al. is not an agent. It is the store and the rules; agents
+connect from outside over MCP and do their reasoning there. Every agent write
+runs under a context whose actor is `ai:<client>`, set by the transport from
+the `x-mcp-client` header, so a write cannot forget to attribute itself.
 
-Full column-level schema is in [`DATA-MODEL.md`](./DATA-MODEL.md).
+**The one exception** is extraction: when a link is saved, Workers AI reads it
+and suggests facts. It is allowed because it can only *propose* — the same gate
+as an agent — and because it runs on a Cloudflare binding, so no model vendor
+key lives in the Worker.
 
-## 1. Workspace `[SPINE]`
+## Facts are written; prose is proposed
 
-A **context boundary** — an area of life, a project, a course, an organization.
-Everything happens inside one.
+**Problem.** An agent that can rewrite your notes will, eventually, rewrite one
+you cared about. An agent that can do nothing is useless.
 
-**Strict tree, one parent only.** The hierarchy doubles as the default AI
-context: entering `Life → Build → et al.` gives an agent **primary context**
-(et al.) plus **inherited context** (Build, Life). This inheritance is the whole
-reason the hierarchy is strict rather than a free tag graph.
+**Decision.** Split by what a write *is*. A task's status, a note's title or
+place in the tree, filing a saved link: these are facts, cheap to change back,
+and agents write them directly. A note's body is the user's prose, so an agent
+can only propose a change to it. Resolving a proposal, and deleting a note, are
+not in the MCP surface at all.
 
-**Types** (`area` · `project` · `course` · `organization`) share one underlying
-object but split on one axis — **finite vs ongoing**:
+**Consequence.** The trust model is enforced by omission in
+[`src/mcp.ts`](../src/mcp.ts), and tested: a test fails if any tool that touches
+a body, a block or a proposal is anything other than a read or a proposal.
 
-- **Finite** (`project`, `course`) — have an outcome and can be **completed**
-  (a `completed` status distinct from archived). A `project` is seeded with a
-  Roadmap document (Outcome / Milestones); its Overview shows **progress toward
-  done** and a *Mark complete* action.
-- **Ongoing** (`area`, `organization`) — maintained, never completed. Their
-  Overview surfaces **what's inside** (their child projects) rather than a
-  progress bar.
+## Proposals get their own table
 
-The rule of thumb: an area is a responsibility you maintain; a project is an
-outcome you finish. Areas sit near the top of the tree; projects nest inside them.
+**Problem.** In v8 an extracted insight was a page with `proposed: true`, kept
+out of search by a filter. Writing the first test suite showed the filter
+wasn't there: the insight's body was indexed on write, and unreviewed
+machine-written text came back from search and from the context agents were
+given. A rule that depends on every query remembering a filter will be broken
+by the next query someone writes.
 
-## 2. Objectives `[SPINE]`
+**Decision.** A proposal is a row in `proposal`, with a `kind` (`patch` or
+`insight`) and a payload. It is not a note, it is never indexed, and it becomes
+real only when accepted — a patch is applied, an insight becomes a note.
 
-The planning layer between a workspace and its tasks. Answers *"why does this
-work matter?"* Objectives nest (objective → sub-objective) and tasks hang off
-them. An agent can expand an objective into a proposed task tree (`plan_objective`).
+**Consequence.** The invariant moved from the queries into the schema. There is
+no filter to forget.
 
-## 3. Tasks `[SPINE]`
+## Cutting the Notion clone
 
-Execution units. Created manually, generated by an agent, or expanded from an
-objective. Status, priority, due date, estimate. A task may belong to an
-objective or float directly in the workspace.
+**Problem.** v8's pages-and-collections model let the user shape anything. But
+agents need to know what a task list *is*, so every collection carried a `role`,
+and the typed surface agents relied on was rebuilt on top of property keys the
+user was told not to rename. Structure was the user's; meaning was smuggled
+back in. Around it grew five view types, filter and sort editors, nine widget
+blocks, career blocks, iMessage, a Daily 3 ritual with streaks and automations
+with a hand-written cron parser.
 
-## 4. Daily 3 `[SPINE]`
+**Decision.** Keep the part that is the idea — a store agents work in under a
+trust model — and cut the rest. Three content types with fixed shapes (notes,
+tasks, sources), plus proposals and the event log. The schema is one migration.
 
-A defining feature. **Low volume, high commitment** — exactly 3 meaningful tasks
-per day, not a giant todo list.
+**Consequence.** The MCP surface went from 57 tools to 18, block types from 30
+to 11, tables from 13 (plus 11 legacy) to 7. Everything cut is in git history
+under the `v8-final` tag.
 
-- **Set by you** in the web app (drag a task into a slot) **or proposed by an
-  agent** (`suggest_daily3`), which you review, swap, and confirm.
-- **Locked once confirmed.** Finishing all 3 at noon does *not* grant 3 more —
-  the point is commitment, not throughput. Tomorrow is a fresh set.
-- Tracks **completion, streak, consistency**, and a short end-of-day reflection.
+## One body engine for preview and apply
 
-The web app *renders* whatever is in the three slots; it never computes them
-live. An agent proposing a Daily 3 is where balance-awareness enters (see
-Workspace Health).
+**Problem.** A review queue is only as trustworthy as its preview. If the diff
+is computed one way and the patch applied another, the two can disagree, and
+the reviewer approves something other than what lands.
 
-## 5. Workspace Health `[SPINE = dumb version] · [DEFER = AI life-balancer]`
+**Decision.** Block ops are a pure function from one body to the next
+([`src/store/body.ts`](../src/store/body.ts)). Previewing a proposal runs it and
+diffs the result against the current body — as markdown, with an LCS line
+diff. Accepting runs the same function and reconciles the stored blocks to its
+output by id. The function throws before anything is written if any op names
+a block that isn't there, so a patch applies whole or not at all, and one the
+note has moved on from is reported as stale.
 
-The OS should maintain balance, not only optimize tasks.
+**Consequence.** A test proposes edits, takes the preview's "after", accepts,
+and checks the stored body equals it. Breaking the preview on purpose makes it
+fail. The editor's whole-body save goes through the same reconcile, so there is
+one write path for bodies.
 
-- **`[SPINE]`** — a **dumb, honest** signal: health is a function of *recent
-  activity* and *task flow* per workspace (last touched, open vs. completed
-  tasks, staleness). Rendered as a simple bar. No AI, no judgment.
-- **`[DEFER]`** — the **planning engine that rebalances your life** ("you've done
-  9 Build tasks and 0 Health tasks this week, so today's Daily 3 is 1 Build / 1
-  Health / 1 Personal"). Designed, not built. The spine's health numbers are the
-  input it will eventually consume.
+**Why LCS and not Myers.** Note bodies are hundreds of lines. The quadratic
+table is simple, obviously correct, and gives the minimal diff; Myers' algorithm
+earns its complexity on large, similar files.
 
-## 6. Sources `[SPINE]`
+## Blocks record who wrote them
 
-Raw inputs — pdf, url, youtube, book, image, voice, github, email, document.
-Answer *"where did this come from?"* The **raw captured payload is immutable**;
-processing never edits the original. Deterministic ingest (fetch, oEmbed, parse,
-embed) is the Worker's job; interpretation is the agent's.
+**Problem.** In v8 an accepted patch was applied under the reviewer's identity,
+so text an agent wrote was recorded as the user's. The patch row knew better;
+the blocks did not.
 
-## 7. Insights `[SPINE]`
+**Decision.** Every block stores its `actor`. Accepting writes changed blocks
+under the proposer's name. Moving a block is not writing it, so a move keeps
+the author. Every content change keeps the replaced version in
+`block_revision`, attributed to whoever wrote *that* version, and any revision
+can be restored.
 
-Atomic extracted knowledge — the nodes of the knowledge graph. An agent
-transforms a Source into one or more Insights, links them to related Insights,
-and links back to the Source. The knowledge base is **a graph of understanding,
-not a folder of summaries**. Every insight carries an embedding for semantic
-recall.
+## Hybrid search, fused by rank
 
-## 8. Documents `[SPINE]`
+**Decision.** FTS5 for keywords over notes, tasks and sources; Vectorize for
+meaning over notes. The two ranked lists are combined with Reciprocal Rank
+Fusion (k = 60). Rank-based on purpose: BM25 is unbounded and cosine similarity
+isn't on the same scale, so blending raw scores would just weight one arm
+arbitrarily. The vector arm is additive — without the binding, or on any error,
+search returns keyword results.
 
-Living artifacts — DESIGN.md, ARCHITECTURE.md, ROADMAP.md, meeting notes.
-Notion-style block editing in the web app; **AI-editable through MCP**.
+**Found on the way.** In v8 the vector arm read from a table the v8 migration had
+renamed. The query threw, the error was swallowed by the "additive" guard, and
+production search had silently been keyword-only. The guard is still right;
+it now has a test that fails if the vector arm stops contributing.
 
-**AI editing is git-style, not silent.** An agent calls `propose_document_patch`;
-the change surfaces in the web app as a diff with **Accept / Reject**. Documents
-are the one object type a human co-owns closely enough to warrant a review gate
-(everything else is immediate-but-attributed — see AI Write Model). Prior block
-versions are retained so a patch is reversible.
+## Extraction is measured, not assumed
 
-## 9. Decisions `[SPINE]`
+**Decision.** At most three facts per source, as proposals: the ceiling on what
+reaches the user is what they accept, not what a model produces. And an eval
+([`eval/`](../eval/)) runs the real extractor over 20 fixtures — 15 with
+expected facts, 5 (a cookie wall, a promo, a nav page…) with nothing durable —
+and reports recall, precision and noise.
 
-Project history should not be a transcript of chats — chats are noise. Important
-changes become **Decisions**: title, rationale, alternatives considered, impact,
-date. **Immutable** once recorded. This is the durable "why we are where we are."
+**What it found.** The first run scored 62% recall, with five clearly
+substantive texts producing no facts. A guess (the output token limit) was
+tested and was wrong. Making the extractor report *how* each call went — facts,
+none, unparsable, error — instead of collapsing failures into "nothing found"
+showed every empty result was unparsable: a stray brace, a stray quote, an
+unescaped quote copied from the page. About a third of real captures had been
+silently losing every suggestion. Extraction now uses schema-constrained
+decoding, so the reply is valid by construction. Recall: 79–85% over two runs;
+precision 84%; no facts invented from the pages with nothing in them.
 
-## 10. Inbox `[SPINE]`
+## A capture pipeline that fails visibly
 
-Information not yet processed. Everything enters here — pasted URL, PDF, idea,
-screenshot, voice memo. A capture creates a Source with status `inbox`. An agent
-processes it (proposes Insights, workspace placement, relationships); you approve;
-it graduates out of the inbox. When the destination is unclear, the rule is
-**capture, don't invent structure**.
+**Decision.** Saving is cheap and idempotent: an `Idempotency-Key` returns the
+first capture on retry (a unique index settles a race), and a link already
+waiting in the inbox is returned rather than saved twice. Fetching happens on a
+queue, once per link, and that one response gives the source its preview, its
+index entry and its extraction. A failed fetch records why and can be retried;
+on its last attempt the queue marks the source failed instead of leaving it
+"pending" forever.
 
----
+## Tests run in the real runtime, at the edge
 
-# The Context Engine
+**Decision.** Vitest with `@cloudflare/vitest-plugin` runs inside `workerd` with
+a real D1 and every migration applied. Tests call `/api` and `/mcp` the way the
+app and agents do, rather than store functions. A dedicated `test` environment
+declares no Workers AI or Vectorize binding, so tests never spend money or
+reach production; tests that need a model pass a fake one in.
 
-The likely technical moat. The mistake is *"give the AI everything."* Instead the
-runtime **assembles the right context** and hands the agent a package.
+**Consequence.** The suite was written against v8, before the rewrite. The auth
+tests carried over with only their routes changed; the trust and proposal tests
+were rewritten for the new model but check the same rules, and their failures
+during the rewrite were how gaps in it were found (a patch that could half-apply,
+an accepted edit recorded under the wrong author).
 
-- **Layer 1 — Explicit `[SPINE]`**: the selected workspace + its inherited
-  ancestors, their objectives, open tasks, documents, and recent decisions.
-- **Layer 2 — Graph expansion `[SPINE]`**: one hop out along relationships +
-  top-k vector matches for the current query (related insights, sources,
-  dependencies).
-- **Layer 3 — Global recall `[DEFER]`**: optional cross-workspace search ("have I
-  solved authentication before?" → surfaces the LEXI workspace). Designed, not
-  built.
+## Every read needs a key
 
-`build_context` returns the assembled package. The Worker *assembles*
-deterministically (SQL + vector search); the agent *interprets*.
+**Problem.** Until v9, reads were open and only writes needed the API key — so
+anyone with the URL could read everything.
 
----
-
-# The AI write model `[SPINE]`
-
-Because AI is **outside** the platform, the human is already in the loop at the
-conversation. So instead of an in-app approval queue for everything:
-
-- **Read tools are free.**
-- **Write tools execute immediately, are attributed `actor:'ai'`, and are
-  reversible.** The Worker wraps the MCP handler so a store function cannot forget
-  to attribute itself; the agent name lands in the audit detail.
-- **Documents are the exception**: agent edits arrive as **proposed patches**
-  (Accept / Reject in the web app), because a living artifact is co-owned.
-
-The skills the agent runs under also encode limits the platform can't: never
-write the user's own explanation, label generated content, check for duplicates
-before creating an insight, and capture rather than invent when unsure.
-
----
-
-# MCP: two layers `[SPINE]`
-
-The tool surface has **both** granular data tools and high-level intent tools;
-the intent tools compose the granular ones. Full list in [`MCP.md`](./MCP.md).
-
-- **Data layer** — `list_tasks`, `create_task`, `update_task`, `get_document`,
-  `write_blocks`, `relate`, `search`, …
-- **Intent layer** — `open_workspace`, `build_context`, `suggest_daily3`,
-  `plan_objective`, `process_inbox`, `propose_document_patch`, `generate_resume`,
-  `weekly_review`.
-
-Streamable HTTP, Bearer-authenticated, sharing the exact store functions the REST
-API uses.
-
----
-
-# The web app `[SPINE]`
-
-The visual interface — where humans browse, edit, visualize, organize, inspect.
-Not where AI happens.
-
-## Home — "what should I do today?"
-
-Daily 3 · Workspace Health bars · Active Workspaces · Inbox · Recent Activity ·
-Quick Capture.
-
-## Workspace page
-
-Tabs: **Overview · Tasks · Documents · Decisions · Timeline**. Objectives are not
-a separate tab — an objective is a label a task carries, and the Tasks tab has a
-**group-by-objective** toggle that turns the flat list into planning sections
-(each objective + its tasks, plus an "unassigned" bucket). The **Documents** tab
-is the Notion-style block editor — the same blocks an agent writes through MCP.
-`[DEFER]` a per-workspace in-app "AI" chat tab; the agent lives outside for now.
-
----
-
-# Technical stack
-
-- **Frontend** — Next.js · React · Tailwind · TanStack Query
-- **Backend** — Cloudflare Workers + Hono
-- **Storage** — D1 (structured truth) · R2 (files + markdown snapshots) ·
-  Vectorize (semantic search) · KV (cache, e.g. health) · Queues (background
-  ingest) · `[DEFER]` Durable Objects (realtime/sessions)
-
----
-
-# Build order (the spine)
-
-1. **Schema + store** — D1 tables, one migration, store modules with rules
-   (immutable sources, immutable decisions, attributed writes, audit trail).
-2. **REST + MCP** — Hono router, auth, the data-layer tools.
-3. **Ingest** — deterministic capture: sync for notes/ideas, queued for
-   url/pdf/video; embeddings via Workers AI into Vectorize.
-4. **Context engine** — Layers 1–2; `build_context`.
-5. **Intent tools** — `open_workspace`, `suggest_daily3`, `plan_objective`,
-   `process_inbox`, `propose_document_patch`, `weekly_review`.
-6. **Web app** — Home (Daily 3, health, inbox, capture), Workspace tabs, the
-   block editor, search, knowledge graph view.
-
-Deferred, in order of likely pickup: AI life-balancer · Context Layer 3 · full
-document diff-history UI · in-app AI tab · Durable Objects realtime ·
-`generate_resume` / career surface.
-
-# North star
-
-> et al. is the operating system for your life. It organizes your goals,
-> projects, knowledge, and actions into a continuously evolving system any AI
-> agent can understand and operate. The web app lets you visualize and edit your
-> life; external AI agents help you learn, build, and execute through the same
-> underlying context.
+**Decision.** Every `/api` route and `/files/*` requires the key or the session
+cookie. The web app exchanges the key once for an `HttpOnly`, `SameSite=Lax`
+cookie, so the browser never holds the key in script. Files are served
+`Cache-Control: private` so no shared cache can hand them to someone else. The
+app and API share one origin, which is what lets the cookie work without CORS.

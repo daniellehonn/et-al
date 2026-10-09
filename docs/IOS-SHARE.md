@@ -36,7 +36,7 @@ two minutes to build, once.
 
    - **Method**: `POST`
    - **Headers**: add `x-api-key` → *your API key* (the value in `.dev.vars`,
-     the same one you type to unlock the web app)
+     the same one you type to sign in to the web app)
    - **Request Body**: `JSON`
    - Add field **text** (type Text) → value **Shortcut Input**
 
@@ -58,16 +58,14 @@ launching the app.
 
 ## What the endpoint accepts
 
-`POST /api/share` is deliberately more forgiving than `POST /api/capture`,
-because a share sheet can't supply a typed `kind`. It takes JSON or form
-encoding and any of:
+`POST /api/share` is deliberately more forgiving than `POST /api/capture`. It
+takes JSON or form encoding and any of:
 
 | field   | meaning                                                       |
 | ------- | ------------------------------------------------------------- |
 | `text`  | free text; any link inside it becomes the `url`               |
 | `url`   | the shared link — demoted to text if it isn't actually a link |
 | `title` | page title, if the sharing app provides one                   |
-| `kind`  | optional, see below — omit it in normal use                   |
 
 `url` is treated as a candidate rather than a promise because share sheets
 routinely put prose in it (share a text selection from Safari and you get the
@@ -76,45 +74,25 @@ selection, not a link). Sending only `text` is the simplest correct thing.
 If `text` is only a repeat of the URL it's dropped, so the inbox row doesn't
 show the same link twice.
 
-### Why a shared link is filed as a `note`
+### What happens to a shared link
 
-Captures default to `kind: "note"` **even when a URL is present**. That looks
-wrong, but it's what Quick Capture already does when you paste a link, and it's
-load-bearing:
+It lands in the inbox straight away and stays there until you file it into a
+note or mark it done. In the background, a queue job fetches the page once and
+uses that response three ways: OpenGraph and `<meta>` tags (read with
+`HTMLRewriter`) give the inbox row a title, site, description and image; the
+page text is indexed for search; and the extractor may suggest a few facts from
+it, which wait in **Review** for you to keep or discard. A title you wrote
+yourself is never overwritten.
 
-- `note` and `idea` are *inline* kinds. They need no fetching, so nothing is
-  enqueued and the source sits at `status: inbox` until you or an agent files it.
-- `url`, `youtube`, `pdf`, `github` enqueue an ingest job. The consumer fetches
-  the page and sets `status: processed` — which drops the item **out of the
-  inbox within seconds of sharing it**.
+If the fetch fails — a 404, a timeout, a login wall — the inbox says why and
+offers **Try again**. Nothing about the capture itself is lost.
 
-Since the point of sharing is to capture now and sort later, the link must stay
-in the inbox. The URL is still stored in the `url` column, so the inbox row
-renders it as a real link and `process_inbox` can classify it properly later.
+### Sharing the same thing twice
 
-Pass `kind` explicitly (e.g. `"url"`) only if you want that eager fetch and
-accept that the capture leaves the inbox on its own.
-
-### Link enrichment
-
-Filing a link as a `note` would normally leave the inbox showing a bare URL, so
-any capture that carries a `url` enqueues an **`enrich_source`** job. It fetches
-the page, pulls title / description / site / image out of the OpenGraph and
-`<meta>` tags with `HTMLRewriter`, and writes them to `metadata_json`.
-
-It is strictly decorative — unlike `ingest_source` it **never touches `status`**,
-so the capture stays in the inbox where you put it. It also only claims the
-`title` when you didn't write one (a title equal to the URL counts as unwritten),
-so a note you typed yourself is never overwritten.
-
-Everything about it is best-effort. A page that 404s, times out, blocks the
-fetch, or isn't HTML still records the hostname, so the row is more legible than
-a raw URL and the UI can tell "tried" from "not yet tried". The inbox polls
-while a capture is awaiting enrichment and stops as soon as none is — bounded by
-a two-minute window, so a link that will never enrich can't poll forever.
-
-Quick Capture on Home and Inbox posts here rather than to `/capture`, which is
-what lets a pasted link be recognised as a link at all.
+Sharing a link that is already waiting in the inbox returns the one already
+there instead of adding a copy. A Shortcut that might retry can also send an
+`Idempotency-Key` header with a value unique to that share; a retry with the
+same key returns the first capture.
 
 ## The `/share/` page
 
@@ -123,9 +101,9 @@ screen. It authorises with the `et_al_session` cookie rather than an API key,
 so a Shortcut using **Open URLs** against it needs no key stored.
 
 The catch on iOS: Safari and a home-screen web app keep **separate cookie
-jars**. A Shortcut opening this URL lands in Safari, which is only unlocked if
-you've unlocked et al. *in Safari* — unlocking the home-screen app doesn't
-count. That's why the API-key Shortcut above is the recommended setup, and this
+jars**. A Shortcut opening this URL lands in Safari, which is only signed in if
+you've signed in to et al. *in Safari* — signing in to the home-screen app
+doesn't count. That's why the API-key Shortcut above is the recommended setup, and this
 page is the fallback.
 
 ## Android
